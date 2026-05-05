@@ -1,0 +1,35 @@
+---
+title: "Install"
+description: "Add @isnap/sdk to your project."
+---
+
+```bash
+bun add @isnap/sdk
+# or
+npm install @isnap/sdk
+# or
+pnpm add @isnap/sdk
+# or
+yarn add @isnap/sdk
+```
+
+The package is published as ESM with TypeScript types. Bun, Node 20+,
+Deno, and modern bundlers (Vite, Webpack, esbuild) are supported.
+
+## Distribution channels
+
+| Channel | npm dist-tag | Use for |
+|---|---|---|
+| Stable | `latest` | Production. Released after staging validation. |
+| Pre-release | `next` | Internal validation track. Suffix: `-next.<N>`. |
+
+```bash
+bun add @isnap/sdk@latest    # stable, default
+bun add @isnap/sdk@next      # validation track
+```
+
+<Note>
+**TODO (Phase 2).** Will cover: pinning by major version,
+peer-dependency expectations, the publishing cadence, how to read
+`MIN_API_VERSION` from the package, and the SDK release changelog.
+</Note>

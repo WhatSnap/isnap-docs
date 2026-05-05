@@ -1,0 +1,13 @@
+---
+title: "Trial architecture"
+description: "Per-session state, streak counter, identity-agnostic correlation via opaque tokens."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: why trials are per-session (not
+per-user), the `trials` table model, the streak counter (max 10
+outbound without inbound), self-echo enforcement at `POST /v1/messages`,
+the identity-agnostic correlation pattern (opaque `token`,
+no `partner_id` / `email`), and how `api_keys.trial_pool_limit`
+prevents abuse.
+</Note>

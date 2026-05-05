@@ -1,0 +1,98 @@
+---
+title: "Welcome to iSnap"
+description: "Hardware-as-a-Service telephony — real iPhones and Androids, exposed through a single API."
+---
+
+iSnap is a Hardware-as-a-Service telephony platform. We rent (or pair) physical
+phones — iPhones, Macs, and Androids — to your business through an API, so your
+messages originate from real handsets with real SIMs. That's how iSnap bypasses
+the A2P carrier filters that stop bulk-shaped traffic from generic CPaaS vendors.
+
+If you came here looking for "Twilio with better deliverability," you're in the
+right place. If you need cloud A2P at scale, [Twilio](https://twilio.com),
+[MessageBird](https://messagebird.com), and [Telnyx](https://telnyx.com) are the
+right tools — iSnap is a different product class.
+
+## What you can do with iSnap
+
+<CardGroup cols={2}>
+  <Card title="Send iMessage" icon="apple">
+    Real iPhone + Apple ID + Mac bridge — blue bubbles, end-to-end encrypted,
+    typing indicators, read receipts, reactions.
+  </Card>
+  <Card title="Send SMS / RCS" icon="message">
+    Real Android handsets on real carrier SIMs. RCS comes for free as the
+    default modern channel; SMS is the universal fallback.
+  </Card>
+  <Card title="Receive replies" icon="inbox">
+    Inbound messages stream back through webhooks or Server-Sent Events with
+    a stable iSnap message ID — never a leaked provider ID.
+  </Card>
+  <Card title="Look up handles" icon="magnifying-glass">
+    `POST /v1/lookup` tells you whether `+15551234567` is iMessage-eligible,
+    cached for 7 days. Pick the right channel before you send.
+  </Card>
+</CardGroup>
+
+## Three SKUs
+
+You'll pick one (or mix — they coexist on the same account, same API, same
+billing relationship):
+
+<AccordionGroup>
+  <Accordion title="Rental iMessage line — ~$250 / mo" icon="apple">
+    iSnap provisions a Mac mini and an iPhone, runs them in our farm, and
+    you consume the line via API. The hardware is ours; you never see it.
+    Best for businesses that want zero device management.
+  </Accordion>
+  <Accordion title="Rental Android line — ~$175 / mo" icon="android">
+    iSnap provisions an Android handset on a carrier SIM, in our farm.
+    SMS and RCS native. Same "we own the hardware" model.
+  </Accordion>
+  <Accordion title="BYOD bridge — ~$15 / mo per device" icon="link">
+    You bring your own Mac + iPhone, or your own Android. You install the
+    iSnap bridge app, pair with an activation code, and the line shows up
+    in your account. Same API, same webhooks, much lower cost — at the
+    price of you owning the hardware reliability.
+  </Accordion>
+</AccordionGroup>
+
+## Channels — what's in, what's not
+
+iSnap covers **iMessage**, **SMS**, and **RCS**. The `service` enum on every
+message is one of `iMessage | SMS | RCS`. RCS is a capability of the Android
+line (and the modern fallback target for `iMessage → RCS → SMS`), not a
+separate SKU.
+
+**WhatsApp is not in scope.** It's a separate ecosystem (Meta policies,
+Business API partners, opt-in flows) and would dilute the
+P2P-with-real-devices pitch. If you need WhatsApp, use a Meta BSP.
+
+## What iSnap is *not*
+
+- **Not a CRM.** We retain messages for 72 hours max. Attachments live on
+  short-lived signed URLs. You persist your own conversation history.
+- **Not a marketing blast tool.** Real-device delivery is high-trust by
+  design; the warming and quota model exists to keep it that way. If you
+  need 100k SMS/hour, this isn't the platform.
+- **Not vendor-locked to one partner.** WhatSnap was the first iSnap
+  consumer, but the SDK and API are neutral — wholesale (one master
+  account) and reseller (per-end-user accounts via OAuth) are both
+  first-class.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Sign up, mint an API key, send your first message in under 5 minutes.
+  </Card>
+  <Card title="Send a message" icon="paper-plane" href="/guides/sending-messages">
+    The full request / response walkthrough — fields, errors, idempotency.
+  </Card>
+  <Card title="Set up webhooks" icon="webhook" href="/guides/webhooks">
+    Receive inbound messages, status events, and webhook signature verification.
+  </Card>
+  <Card title="Pair a BYOD device" icon="link" href="/guides/byod-pairing">
+    Connect your own Mac+iPhone or Android in 4 steps.
+  </Card>
+</CardGroup>

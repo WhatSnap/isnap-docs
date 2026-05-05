@@ -1,0 +1,13 @@
+---
+title: "Handling Apple flag events"
+description: "What line.apple_id_flagged means, recovery via Apple ID re-auth, customer-facing messaging."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: what triggers Apple's iMessage flag,
+why it lands as a `line.apple_id_flagged` webhook (rental + BYOD both),
+the mandatory re-auth flow (rental: iSnap ops handles it; BYOD: the
+customer re-auths via the bridge UI), how long flags typically last,
+and the messaging template for telling your end-user that iMessage is
+temporarily unavailable for that line.
+</Note>

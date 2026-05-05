@@ -1,0 +1,149 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "iSnap",
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg",
+    "href": "https://isnap.ai"
+  },
+  "favicon": "/images/favicon.svg",
+  "colors": {
+    "primary": "#09090b",
+    "light": "#fafafa",
+    "dark": "#09090b",
+    "anchors": {
+      "from": "#09090b",
+      "to": "#71717a"
+    },
+    "background": {
+      "light": "#ffffff",
+      "dark": "#09090b"
+    }
+  },
+  "font": {
+    "headings": { "family": "Inter" },
+    "body": { "family": "Inter" }
+  },
+  "topbarLinks": [
+    {
+      "name": "Dashboard",
+      "url": "https://platform.isnap.ai"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Sign up",
+    "url": "https://platform.isnap.ai/signup"
+  },
+  "tabs": [
+    { "name": "Guides", "url": "/" },
+    { "name": "API Reference", "url": "api-reference" },
+    { "name": "SDK", "url": "sdk" },
+    { "name": "Changelog", "url": "changelog" }
+  ],
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/WhatSnap"
+    },
+    {
+      "name": "Status",
+      "icon": "signal-stream",
+      "url": "https://status.isnap.ai"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Get started",
+      "pages": [
+        "introduction",
+        "quickstart"
+      ]
+    },
+    {
+      "group": "Guides",
+      "pages": [
+        "guides/sending-messages",
+        "guides/webhooks",
+        "guides/byod-pairing",
+        "guides/trial-onboarding",
+        "guides/apple-flag-events",
+        "guides/best-practices"
+      ]
+    },
+    {
+      "group": "Concepts",
+      "pages": [
+        "concepts/byod-vs-rental",
+        "concepts/channels",
+        "concepts/trials",
+        "concepts/quotas-and-warming",
+        "concepts/deprecation-lifecycle"
+      ]
+    },
+    {
+      "group": "Versioning",
+      "pages": [
+        "versioning"
+      ]
+    },
+    {
+      "group": "API Reference",
+      "pages": [
+        "api-reference/introduction"
+      ]
+    },
+    {
+      "group": "Endpoints",
+      "pages": [
+        {
+          "group": "Generated from OpenAPI",
+          "icon": "code",
+          "openapi": "api-reference/openapi.json"
+        }
+      ]
+    },
+    {
+      "group": "SDK",
+      "pages": [
+        "sdk/install",
+        "sdk/auth",
+        "sdk/errors",
+        "sdk/pagination",
+        "sdk/idempotency",
+        "sdk/webhooks-verification",
+        {
+          "group": "Examples",
+          "pages": [
+            "sdk/examples/send-message",
+            "sdk/examples/lookup-handle",
+            "sdk/examples/handle-webhooks"
+          ]
+        }
+      ]
+    },
+    {
+      "group": "Changelog",
+      "pages": [
+        "changelog"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "x": "https://x.com/isnap_ai",
+    "github": "https://github.com/WhatSnap",
+    "linkedin": "https://www.linkedin.com/company/isnap"
+  },
+  "feedback": {
+    "thumbsRating": true,
+    "suggestEdit": true,
+    "raiseIssue": true
+  },
+  "search": {
+    "prompt": "Search the iSnap docs..."
+  },
+  "modeToggle": {
+    "default": "light",
+    "isHidden": false
+  }
+}

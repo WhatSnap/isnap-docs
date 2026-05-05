@@ -1,0 +1,295 @@
+---
+title: "Webhooks"
+description: "Receive inbound messages and status events. Verify signatures, deduplicate, retry."
+---
+
+Webhooks are how iSnap pushes events to your service: an inbound message
+arriving on one of your lines, a delivery confirmation, a quota warning,
+a line going offline. Every change of state your integration cares about
+is a webhook event.
+
+This page covers the four things every production integration needs:
+**registering a subscription**, **verifying the signature**, **handling
+the event**, and **dealing with retries / deduplication**.
+
+## Register a subscription
+
+In the dashboard: **Developers → Webhooks → New subscription**, or via
+the API:
+
+<Tabs>
+  <Tab title="TypeScript SDK">
+    ```ts
+    import { ISnapClient } from '@isnap/sdk'
+
+    const isnap = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY! })
+
+    const subscription = await isnap.webhooks.create({
+      url: 'https://your-app.com/iSnap/events',
+      events: ['message.received', 'message.delivered', 'message.failed'],
+      // Optional: scope to specific lines. Default = all lines on the account.
+      line_ids: ['line_aBc…']
+    })
+
+    console.log(subscription.secret)
+    // sec_… — store this. iSnap shows the secret ONCE.
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X POST https://api.isnap.ai/v1/webhooks \
+      -H "Authorization: Bearer $ISNAP_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "url": "https://your-app.com/iSnap/events",
+        "events": ["message.received", "message.delivered", "message.failed"]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+The response includes a **secret** (`sec_…`). Store it — iSnap displays it
+once at creation, then only ever shows the last 4 characters. You'll need
+this string to verify signatures.
+
+### What events to subscribe to
+
+Pick from the [full event catalog](/concepts/deprecation-lifecycle#events). The
+common ones:
+
+| Event | When it fires | Typical action |
+|---|---|---|
+| `message.received` | An inbound message arrives on one of your lines. | Persist to your CRM. Maybe trigger an autoresponder. |
+| `message.delivered` | An outbound message confirmed delivered by the carrier / Apple. | Update conversation status in your UI. |
+| `message.failed` | Outbound delivery failed permanently. | Surface the error to the user; retry through a different channel. |
+| `line.apple_id_flagged` | Apple flagged the iMessage line. The line cannot send iMessage until you re-auth. | Email your ops team. Suspend iMessage routing for that line. |
+| `line.quota_warning` | Line approached a quota bucket (minute / hourly / daily / new contacts / known contacts). | Throttle sends from your side. |
+
+You only get events for the lines and tiers you have access to — see
+[Concepts → Rental vs BYOD visibility](/concepts/byod-vs-rental#what-events-you-receive).
+
+## Verify the signature — every time
+
+iSnap signs every webhook with HMAC-SHA256 over the raw request body.
+Your endpoint **must** verify the signature before trusting any field
+in the payload. This is what stops a third party from forging events
+into your account.
+
+<Warning>
+Verify the signature against the **raw** request body bytes, before any
+JSON parsing or middleware unrolling. If your framework parses the body
+into an object first, re-serializing it will not match — many JSON
+serializers reorder keys.
+</Warning>
+
+### With the SDK (recommended)
+
+```ts
+import { verifyWebhook } from '@isnap/sdk'
+import express from 'express'
+
+const app = express()
+
+// Use express.raw() so req.body is a Buffer, NOT a parsed object.
+app.post(
+  '/iSnap/events',
+  express.raw({ type: 'application/json' }),
+  (req, res) => {
+    try {
+      const event = verifyWebhook({
+        payload: req.body.toString('utf8'),
+        signature: req.headers['x-isnap-signature'] as string,
+        secret: process.env.ISNAP_WEBHOOK_SECRET!,
+        // Optional: reject events older than this many seconds.
+        // Default 300 (5 min). Set to 0 to disable replay protection.
+        toleranceSeconds: 300
+      })
+
+      // event is now the typed, verified event object.
+      // Branch on event.type — full catalog is exhaustively typed.
+      switch (event.type) {
+        case 'message.received':
+          handleInbound(event.data.message)
+          break
+        case 'message.delivered':
+          handleDelivered(event.data.message)
+          break
+        // ...
+      }
+
+      res.status(200).end()
+    } catch (err) {
+      // verifyWebhook throws on invalid signature OR stale timestamp.
+      // Return 401 — iSnap will retry with backoff.
+      res.status(401).end()
+    }
+  }
+)
+```
+
+### Manual verification
+
+If you're not on TypeScript, here's the algorithm. Implement it once and
+you're set:
+
+1. Read the raw request body as bytes.
+2. Read the `X-iSnap-Signature` header. Format: `t=<unix_seconds>,v1=<hex_hmac>`.
+3. Reject if `now - t > toleranceSeconds` (replay protection).
+4. Compute `HMAC-SHA256(secret, "${t}.${rawBody}")` as lowercase hex.
+5. Compare in constant time against the `v1` hex value. If they don't
+   match, return 401.
+
+```python
+import hmac, hashlib, time
+
+def verify(payload: bytes, header: str, secret: str, tolerance: int = 300) -> bool:
+    parts = dict(p.split('=', 1) for p in header.split(','))
+    t, v1 = int(parts['t']), parts['v1']
+    if abs(int(time.time()) - t) > tolerance:
+        return False
+    signed = f"{t}.{payload.decode('utf-8')}".encode()
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
+```
+
+## Handle the event
+
+Verified events arrive with a stable shape:
+
+```json
+{
+  "id": "evt_01HX...",
+  "type": "message.received",
+  "api_version": "1.1.0",
+  "created_at": "2026-05-05T14:32:00Z",
+  "data": {
+    "message": {
+      "id": "msg_01HX...",
+      "line_id": "line_...",
+      "from": "+15551234567",
+      "to": "+15559998888",
+      "service": "iMessage",
+      "text": "Yes, that works for me.",
+      "received_at": "2026-05-05T14:31:58Z"
+    }
+  }
+}
+```
+
+Three fields you should always pay attention to:
+
+- **`id`** — the event ID. Use it for **deduplication** (see below).
+- **`type`** — the event type discriminator. Branch on this. The catalog
+  is closed; new event types ship in additive minor versions and never
+  rename existing ones (see [Versioning](/versioning)).
+- **`api_version`** — the API contract version that produced this event.
+  Pin against this if you depend on a specific schema. iSnap keeps
+  payload shapes backward-compatible within a major (1.x).
+
+## Retries, deduplication, replay
+
+iSnap retries failed deliveries (anything that doesn't return 2xx within
+30 seconds) with **exponential backoff**: 30s, 1min, 5min, 30min, 2h, 12h.
+After 10 consecutive failures, the subscription is auto-suspended and a
+`webhook.suspended` event fires (delivered to *other* subscriptions on
+the same account, since this one is disabled).
+
+This means **the same event ID can arrive multiple times**. Treat your
+handler as at-least-once delivery:
+
+```ts
+async function handleEvent(event: WebhookEvent) {
+  // Idempotent insert — primary key on event.id, ON CONFLICT DO NOTHING.
+  const inserted = await db.events.insertIfNew({
+    id: event.id,
+    type: event.type,
+    received_at: new Date()
+  })
+
+  if (!inserted) {
+    // Already processed. Acknowledge and move on.
+    return
+  }
+
+  // First time we've seen this event — do the side effect.
+  await processEvent(event)
+}
+```
+
+### The 24-hour replay window
+
+If your endpoint is down for hours, iSnap will keep retrying through the
+backoff schedule. You can also **manually replay** any event from the
+last 24 hours via the dashboard, or:
+
+```ts
+await isnap.webhooks.replay(eventId)
+```
+
+After 24 hours, events drop off the replay buffer. Don't rely on replay
+as a primary recovery path — design your handler to be idempotent and
+your endpoint to be highly available.
+
+## Local development
+
+You don't want a public URL for local testing. Two options:
+
+<Tabs>
+  <Tab title="Cloudflare Tunnel (recommended)">
+    ```bash
+    bunx cloudflared tunnel --url http://localhost:3000
+    ```
+
+    Copy the `https://*.trycloudflare.com` URL, register it as a
+    webhook subscription on a **test** API key, iterate. Tunnel
+    auto-rotates the URL on each run — re-register the subscription
+    when it changes, or persist it to a stable named tunnel.
+  </Tab>
+  <Tab title="ngrok">
+    ```bash
+    ngrok http 3000
+    ```
+
+    Same flow as Cloudflare Tunnel. Free tier rotates URLs; paid tier
+    gives you a stable subdomain.
+  </Tab>
+</Tabs>
+
+When you graduate from local to staging, swap the URL on the
+subscription via `PATCH /v1/webhooks/{id}` — the secret stays the same
+unless you rotate it explicitly.
+
+## Production checklist
+
+Before you flip the production switch:
+
+<Steps>
+  <Step title="Verify the signature on every event">
+    Log a metric for "events received" vs "events verified." They
+    should match. A non-zero gap means either a key mismatch or someone
+    is probing your endpoint.
+  </Step>
+  <Step title="Deduplicate on event.id">
+    Persist event IDs you've processed. Same `id` arriving twice = no-op.
+  </Step>
+  <Step title="Return 200 fast">
+    Acknowledge in &lt;1 second. Do the actual work asynchronously. If your
+    handler takes 10 seconds and a retry lands during it, you're now
+    processing the event twice in parallel.
+  </Step>
+  <Step title="Monitor delivery health">
+    The dashboard shows per-subscription success rate, p50/p95 latency,
+    suspension reason. Alert when success rate drops below 95%.
+  </Step>
+  <Step title="Pin api_version in your handler">
+    If you switch the SDK on a future MINOR bump, your handler should
+    fail loudly when it sees an unfamiliar event type — not silently
+    drop events it doesn't understand.
+  </Step>
+</Steps>
+
+## Related
+
+- [SDK → Webhook signature verification](/sdk/webhooks-verification) — deep dive on the helper.
+- [Concepts → Deprecation lifecycle](/concepts/deprecation-lifecycle) — how event-type evolution works without breaking integrations.
+- [API Reference → Webhooks](/api-reference) — list / get / update / delete subscriptions, replay events.

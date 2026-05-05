@@ -1,0 +1,13 @@
+---
+title: "Idempotency"
+description: "Auto-generated keys, the 24h replay window, when to override."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: how `idempotencyKey: 'auto'` (default)
+works, when to override with an explicit key (e.g. you want to dedupe
+across process restarts), the 24h replay window, the
+`idempotency_replayed: true` flag in responses, and what happens when
+the key collides with a different request body (409
+`idempotency_key_conflict`).
+</Note>

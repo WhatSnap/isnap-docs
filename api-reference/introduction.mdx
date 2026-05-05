@@ -1,0 +1,123 @@
+---
+title: "API Reference"
+description: "Conventions used across every endpoint — base URLs, envelopes, errors, idempotency, pagination, IDs."
+---
+
+Everything below applies to **every** endpoint in the API. The
+per-endpoint reference is generated from the
+[OpenAPI spec](/api-reference/openapi.json) — use the sidebar to navigate.
+
+## Base URLs
+
+| Environment | Base URL |
+|---|---|
+| Production | `https://api.isnap.ai` |
+| Staging | `https://api-staging.isnap.ai` |
+
+Test API keys (`isnap_test_*`) work against either environment but never
+hit a real device. Live keys (`isnap_live_*`) are production-only.
+
+## Envelope
+
+Every successful 2xx response wraps the payload:
+
+```json
+{
+  "success": true,
+  "data": { /* endpoint-specific payload */ },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+`trace_id` correlates a request across iSnap's internal services;
+include it when reporting a bug. `request_id` is a stable per-request
+identifier — pass it back via the `X-Request-Id` header on retries
+to help iSnap correlate the original and the retry.
+
+`204 No Content` responses have no body (no envelope).
+
+## Errors
+
+Failures use the same envelope shape, with `success: false` and a
+structured `error`:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 422,
+    "code": "validation_error",
+    "message": "to: must be E.164 format",
+    "issues": [
+      { "path": "to", "code": "invalid_format" }
+    ]
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+The `code` field is a stable string — branch on it. The `message` field
+is human-readable and may change between releases. The
+[full error catalog](#) lists every code the API can return.
+
+## Authentication
+
+All `/v1/*` endpoints (except `/v1/health` and `/v1/version`) require
+an API key in the `Authorization` header:
+
+```http
+Authorization: Bearer isnap_live_aBcD...
+```
+
+See [SDK → Auth](/sdk/auth) for key minting, scoping, and rotation.
+
+## Idempotency
+
+Every mutating request (`POST`, `PATCH`, `PUT`, `DELETE`) accepts an
+`Idempotency-Key` header. If you send the same key twice within 24h,
+iSnap returns the original response — no duplicate side effects.
+
+The TypeScript SDK auto-generates a key per request. If you're rolling
+your own client, generate a UUIDv4 per attempt and include it on every
+retry of the same logical operation.
+
+## Pagination
+
+List endpoints return cursor-paginated results:
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [ /* ... */ ],
+    "has_more": true,
+    "next_cursor": "cur_..."
+  }
+}
+```
+
+Pass `?cursor=cur_...` on the next request. Cursors are opaque — don't
+parse them, don't store them long-term (they're stable for ~24h).
+
+## ID prefixes
+
+iSnap IDs are prefixed by resource type for unambiguous routing in your
+code:
+
+| Prefix | Resource |
+|---|---|
+| `usr_` | User |
+| `line_` | Line |
+| `msg_` | Message |
+| `evt_` | Webhook event |
+| `wh_` | Webhook subscription |
+| `sub_` | Billing subscription |
+| `tr_` | Trace |
+| `req_` | Request |
+| `cur_` | Pagination cursor |
+
+All IDs are base62-encoded after the prefix. They are URL-safe, opaque,
+and never reused.

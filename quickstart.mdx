@@ -1,0 +1,184 @@
+---
+title: "Quickstart"
+description: "Sign up, mint an API key, send your first message — in under 5 minutes."
+---
+
+This walkthrough takes you from zero to a delivered message. Pick the SDK
+flow if you're integrating from a Node / Bun / Deno service, or the cURL
+flow if you're exploring or wiring from a non-TS environment.
+
+## 1. Create an account
+
+Sign up at [platform.isnap.ai/signup](https://platform.isnap.ai/signup).
+Verify your email, complete the onboarding form (company name, expected
+volume, primary use case), and you'll land on the dashboard.
+
+<Note>
+You don't need a paid plan for this quickstart. Every new account gets a
+**trial line** — a shared pool number you can send up to 10 outbound
+messages from before the receiver replies. Useful to validate your
+integration end-to-end before committing to a rental or BYOD line.
+</Note>
+
+## 2. Mint an API key
+
+In the dashboard, go to **Developers → API keys → Create key**.
+
+- **Environment:** pick `test` for sandboxing, `live` for production.
+  Test keys produce real-looking responses but never hit a real device.
+- **Scope:** leave unscoped for the quickstart. Scoped keys (limited to
+  specific lines) are how you give per-customer credentials in a reseller
+  model — see [Auth](/sdk/auth).
+
+Copy the key. It looks like `isnap_test_aBcD…` or `isnap_live_xYz…`.
+**This is the only time iSnap shows you the full string** — store it in
+your secret manager now.
+
+<Warning>
+API keys grant the ability to send messages billed to your account.
+Treat them like passwords: never commit them to git, never log them in
+plaintext, never put them in a frontend bundle. iSnap rotates keys on
+demand from the dashboard if a key leaks.
+</Warning>
+
+## 3. Send a message
+
+<Tabs>
+  <Tab title="TypeScript SDK">
+    Install:
+
+    ```bash
+    bun add @isnap/sdk
+    # or: npm install @isnap/sdk
+    ```
+
+    Send:
+
+    ```ts
+    import { ISnapClient } from '@isnap/sdk'
+
+    const isnap = new ISnapClient({
+      apiKey: process.env.ISNAP_API_KEY!
+    })
+
+    const message = await isnap.messages.send({
+      to: '+15551234567',
+      service: 'SMS',
+      text: 'Hello from iSnap.'
+    })
+
+    console.log(message.id)         // 'msg_01HX…'
+    console.log(message.status)     // 'queued'
+    console.log(message.line_id)    // 'line_…'
+    ```
+
+    The SDK auto-generates an `Idempotency-Key` for every mutating
+    request, so retrying after a network blip never double-sends.
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X POST https://api.isnap.ai/v1/messages \
+      -H "Authorization: Bearer $ISNAP_API_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: $(uuidgen)" \
+      -d '{
+        "to": "+15551234567",
+        "service": "SMS",
+        "text": "Hello from iSnap."
+      }'
+    ```
+
+    Response:
+
+    ```json
+    {
+      "success": true,
+      "data": {
+        "id": "msg_01HX...",
+        "status": "queued",
+        "line_id": "line_...",
+        "to": "+15551234567",
+        "service": "SMS",
+        "text": "Hello from iSnap.",
+        "created_at": "2026-05-05T14:32:00Z"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Tab>
+</Tabs>
+
+The response is wrapped in a standard envelope (`success`, `data`,
+`trace_id`, `request_id`) — this shape is identical for every successful
+response on the API. See [API Reference → Conventions](/api-reference/introduction)
+for the full envelope spec.
+
+## 4. Watch it deliver
+
+The `status` field on the response is `queued`. The message progresses
+through `queued → sent → delivered` (or `failed`) over the next few
+seconds. Two ways to track it:
+
+<Tabs>
+  <Tab title="Webhook (recommended for production)">
+    Register a webhook subscription in **Developers → Webhooks → New
+    subscription**. Point it at an endpoint you control (e.g.
+    `https://your-app.com/iSnap/events`). Subscribe to the
+    `message.sent` and `message.delivered` events.
+
+    Every event POSTs to your URL with an HMAC-SHA256 signature in the
+    `X-iSnap-Signature` header. **Verify it** before trusting the
+    payload — see [Webhooks → Signature verification](/guides/webhooks#signature-verification).
+
+    The SDK ships a one-liner for this:
+
+    ```ts
+    import { verifyWebhook } from '@isnap/sdk'
+
+    const event = verifyWebhook({
+      payload: rawBody,                // string, NOT parsed JSON
+      signature: req.headers['x-isnap-signature'],
+      secret: process.env.ISNAP_WEBHOOK_SECRET
+    })
+    ```
+  </Tab>
+  <Tab title="Polling (for the quickstart only)">
+    ```ts
+    let m = await isnap.messages.get(message.id)
+    while (m.status === 'queued' || m.status === 'sent') {
+      await new Promise((r) => setTimeout(r, 1000))
+      m = await isnap.messages.get(message.id)
+    }
+    console.log(m.status)  // 'delivered' or 'failed'
+    ```
+
+    <Warning>
+    Polling is fine for exploration. **Never poll in production** — it
+    burns rate limit and adds delivery latency. Use webhooks.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## You're integrated
+
+That's the whole loop: API key → send → receive event. Everything else
+in these docs is depth on the same primitives.
+
+<CardGroup cols={2}>
+  <Card title="Send messages — full reference" icon="paper-plane" href="/guides/sending-messages">
+    Attachments, idempotency edge cases, error catalog, the
+    `iMessage → RCS → SMS` fallback chain.
+  </Card>
+  <Card title="Set up production webhooks" icon="webhook" href="/guides/webhooks">
+    Signature verification, event catalog, retries, replay window,
+    deduplication via `event_id`.
+  </Card>
+  <Card title="Concepts — channels" icon="signal-stream" href="/concepts/channels">
+    Why iMessage / SMS / RCS exist as separate `service` values, when to
+    pick which, what the fallback chain does.
+  </Card>
+  <Card title="Concepts — quotas + warming" icon="gauge" href="/concepts/quotas-and-warming">
+    How iSnap protects line health, the 5-bucket gate, the warming model.
+  </Card>
+</CardGroup>

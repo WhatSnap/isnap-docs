@@ -1,0 +1,11 @@
+---
+title: "Handle webhooks end-to-end"
+description: "A drop-in webhook receiver: verify, dedupe, dispatch."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: a complete Express + PostgreSQL
+example showing signature verification, event-ID deduplication via an
+`ON CONFLICT DO NOTHING` insert, async dispatch (return 200 fast,
+process via a job queue), and error reporting via `webhook.suspended`.
+</Note>

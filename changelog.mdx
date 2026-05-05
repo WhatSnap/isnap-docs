@@ -1,0 +1,42 @@
+---
+title: "Changelog"
+description: "Every change to the iSnap API contract, dated and versioned."
+---
+
+This page mirrors §8 of the canonical [API contract](https://github.com/WhatSnap/iSnap-App/blob/main/docs/api-contract.md).
+Changes ship to this page as soon as the contract version is bumped on
+the backend.
+
+## 1.1.0 — 2026-05-05
+
+§2.1 amendment + first post-freeze MINOR bump.
+
+- Added **`GET /v1/version`** — unauthenticated probe returning
+  `API_SCHEMA_VERSION` so SDKs and frontends can pre-flight a
+  compatibility check at startup against their pinned `MIN_API_VERSION`.
+- Introduced the deprecation lifecycle:
+  backend now emits `Deprecation` / `Sunset` /
+  `Link rel="successor-version"` headers (RFC 9745 / RFC 8594 /
+  RFC 8288) on routes flagged in the registry, and removed routes
+  return `410 Gone` with `removed_at` + `successor` payload fields.
+- TypeScript SDK warns once per (method × path × sunset) on first
+  encounter of a `Deprecation` header.
+- SDK and API versions are decoupled — the SDK reads `/v1/version`
+  instead of relying on its own `package.json` version.
+
+## 1.0.0 — 2026-04-30
+
+**Freeze ceremony.** Drops the `-draft` suffix on the contract; flips
+status to `Frozen`. From this point forward:
+
+- Breaking changes require a `/v2/*` namespace and a migration window.
+- Additive changes (new fields, endpoints, webhook events) ship as
+  `1.x` minor bumps and are backward-compatible.
+- Every contract change lands with a dated entry on this page.
+
+<Note>
+**TODO (Phase 2).** Backfill the `1.0.0-draft` through `1.0.10-draft`
+pre-freeze entries from the canonical contract `§8 Changelog`, formatted
+for partner readability (drop internal-implementation notes; keep the
+"what changed for you" angle).
+</Note>

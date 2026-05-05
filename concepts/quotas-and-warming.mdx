@@ -1,0 +1,14 @@
+---
+title: "Quotas and warming"
+description: "5-bucket gate, rolling windows, the 5-stage warming progression."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: per-billing-tier system defaults
+(iMessage / Android), the 5 quota buckets (minute, hourly, daily, new
+contacts, known contacts), rolling-window semantics (sorted sets vs
+calendar buckets), reply-history-based new/known classification, the
+warming model (5 stages over 22 days), warming reset/skip rules
+(BYOD: customer; rental: admin-only), and the `bucket` discriminator
+on `line.quota_warning` / `line.quota_exceeded`.
+</Note>

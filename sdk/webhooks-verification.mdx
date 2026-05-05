@@ -1,0 +1,100 @@
+---
+title: "Webhook signature verification"
+description: "verifyWebhook() — typed events, replay protection, raw-body requirement."
+---
+
+The SDK ships a one-liner for the algorithm covered in
+[Guides → Webhooks → Verify the signature](/guides/webhooks#verify-the-signature--every-time):
+
+```ts
+import { verifyWebhook } from '@isnap/sdk'
+
+const event = verifyWebhook({
+  payload: rawBody,                                    // string, NOT parsed JSON
+  signature: req.headers['x-isnap-signature'] as string,
+  secret: process.env.ISNAP_WEBHOOK_SECRET!,
+  toleranceSeconds: 300                                // optional, default 300
+})
+```
+
+`event` is the **typed, verified, parsed** event object. The return
+type is the union of every webhook event type — `switch (event.type)`
+gives you exhaustive type narrowing.
+
+`verifyWebhook()` throws when:
+
+- The signature doesn't match (forged event, wrong secret, body got parsed before reaching verify).
+- The timestamp is outside `toleranceSeconds` (replay protection — set to 0 to disable, never recommended).
+- The payload isn't valid JSON, or doesn't match an event type the SDK knows about.
+
+Catch the exception and return **401** so iSnap retries. Don't return
+2xx on a verification failure — that drops a real event silently if you
+ever rotate secrets and forget to update one side.
+
+## Raw body — read this twice
+
+The signature is computed over the **raw bytes** of the request body.
+If your framework parses JSON before your handler runs, the
+`JSON.stringify` you'd do to recover the bytes will not match — most
+JSON serializers reorder keys, change number formatting, or strip
+whitespace differently than iSnap's serializer.
+
+The right shape per framework:
+
+<CodeGroup>
+```ts express
+import express from 'express'
+const app = express()
+
+app.post(
+  '/iSnap/events',
+  express.raw({ type: 'application/json' }),  // body is a Buffer
+  (req, res) => {
+    const event = verifyWebhook({
+      payload: req.body.toString('utf8'),
+      signature: req.headers['x-isnap-signature'] as string,
+      secret: process.env.ISNAP_WEBHOOK_SECRET!
+    })
+    // ...
+  }
+)
+```
+
+```ts hono
+import { Hono } from 'hono'
+const app = new Hono()
+
+app.post('/iSnap/events', async (c) => {
+  const rawBody = await c.req.text()  // raw string, not c.req.json()
+  const event = verifyWebhook({
+    payload: rawBody,
+    signature: c.req.header('x-isnap-signature')!,
+    secret: process.env.ISNAP_WEBHOOK_SECRET!
+  })
+  // ...
+})
+```
+
+```ts next-app-router
+// app/api/isnap/events/route.ts
+import { verifyWebhook } from '@isnap/sdk'
+
+export async function POST(req: Request) {
+  const rawBody = await req.text()  // raw string, not req.json()
+  const event = verifyWebhook({
+    payload: rawBody,
+    signature: req.headers.get('x-isnap-signature')!,
+    secret: process.env.ISNAP_WEBHOOK_SECRET!
+  })
+  // ...
+  return new Response(null, { status: 200 })
+}
+```
+</CodeGroup>
+
+## Related
+
+- [Guides → Webhooks](/guides/webhooks) — full setup walkthrough,
+  retries, deduplication, replay.
+- [SDK → Examples → Handle webhooks](/sdk/examples/handle-webhooks) —
+  end-to-end working example with framework boilerplate.

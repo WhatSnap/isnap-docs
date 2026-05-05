@@ -1,0 +1,104 @@
+---
+title: "Deprecation lifecycle"
+description: "How iSnap deprecates and removes endpoints without breaking your integration."
+---
+
+iSnap evolves the API surface in three stages, each with explicit
+machine-readable signals so your integration can react before anything
+breaks.
+
+## Stage 1 — Live and supported
+
+The endpoint is in the [API reference](/api-reference) with no
+deprecation flags. Use it freely.
+
+## Stage 2 — Deprecated (minimum 30 days)
+
+When iSnap decides to remove an endpoint, it stays live but starts
+emitting deprecation signals on every response. Three headers per
+[RFC 9745](https://www.rfc-editor.org/rfc/rfc9745) /
+[RFC 8594](https://www.rfc-editor.org/rfc/rfc8594) /
+[RFC 8288](https://www.rfc-editor.org/rfc/rfc8288):
+
+```http
+Deprecation: true
+Sunset: Sat, 31 Dec 2026 23:59:59 GMT
+Link: </v1/successor-endpoint>; rel="successor-version"
+```
+
+The OpenAPI spec also flags the operation with `"deprecated": true`.
+
+The minimum deprecation window is **30 days**, enforced in CI by
+[oasdiff](https://oasdiff.com)'s `--deprecation-days-stable 30`. iSnap
+typically gives longer for partner-facing surfaces — the
+`Sunset` date in the response is authoritative.
+
+### What the SDK does for you
+
+The TypeScript SDK reads the `Deprecation` and `Sunset` headers and
+emits a one-time `console.warn` per (method × path × sunset):
+
+```
+[@isnap/sdk] WARNING: GET /v1/legacy-endpoint is deprecated and will
+be removed on Sat, 31 Dec 2026 23:59:59 GMT. Use /v1/new-endpoint
+instead. (RFC 9745)
+```
+
+The warning de-duplicates per process, so you don't drown your logs.
+If you don't use the SDK, watch for the `Deprecation: true` header in
+your HTTP client middleware and act on it.
+
+## Stage 3 — Removed (HTTP 410 Gone)
+
+After the sunset date, the endpoint stops being served. Requests to it
+return **410 Gone** with a structured payload:
+
+```json
+{
+  "error": "endpoint_removed",
+  "message": "GET /v1/legacy-endpoint was removed on 2026-12-31. Use /v1/new-endpoint.",
+  "removed_at": "2026-12-31",
+  "successor": "/v1/new-endpoint",
+  "reason": "Replaced by the v1 chats API"
+}
+```
+
+iSnap keeps removed endpoints in the registry so you get the
+`successor` pointer instead of a generic 404. The registry covers both
+static paths and template paths (`GET /v1/lines/{id}` matches real
+requests like `GET /v1/lines/abc`).
+
+## Versioning policy
+
+The contract version (visible at `GET /v1/version` and in every
+webhook's `api_version` field) follows the bump rules:
+
+| Change type | Bump |
+|---|---|
+| Breaking — removed endpoint, type change, removed field | MAJOR (`1.x.x → 2.0.0`) |
+| Additive — new endpoint, new optional field, `deprecated: true` flag added | MINOR (`1.0.x → 1.1.0`) |
+| No surface change — internal refactor, doc fix | PATCH (`1.0.0 → 1.0.1`) |
+
+Within a major version (1.x), iSnap stays additive — your integration
+written against 1.0.0 keeps working against any 1.x backend without
+code changes. The 30-day deprecation window plus 410-Gone-with-successor
+is how iSnap signals upcoming MAJOR-bump changes ahead of time.
+
+See [Versioning](/versioning) for how to read `GET /v1/version` and pin
+your integration's expected floor.
+
+## Events
+
+Webhook event types follow the same lifecycle. New event types ship in
+MINOR bumps and never change shape; deprecated event types stop firing
+after their sunset date. Your handler's `switch (event.type)` should
+default to "log + no-op" rather than throwing — that way an additive
+new event doesn't break you when iSnap rolls it out.
+
+## TODO (Phase 2)
+
+<Note>
+Phase 2 will add: a worked example walking from a deprecated `POST /v1/foo`
+through the 30-day window into the 410 Gone response, plus a screenshot
+of the dashboard's "deprecated endpoints in use" health panel.
+</Note>

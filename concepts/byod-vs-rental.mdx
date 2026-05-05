@@ -1,0 +1,25 @@
+---
+title: "BYOD vs Rental"
+description: "Which SKU fits your case, what events you receive, what iSnap shields you from."
+---
+
+<Note>
+**TODO (Phase 2).** Will cover: the cost-vs-control trade-off, who
+owns the hardware, what happens when a device goes offline (rental:
+silent retry; BYOD: webhook fires), the per-tier event visibility rule
+(rental gets durable events only; BYOD gets the full health surface),
+when to mix tiers under one account.
+</Note>
+
+## What events you receive
+
+Behavior differs by tier — see [Webhooks → registering](/guides/webhooks#what-events-to-subscribe-to)
+for the full matrix. Short version:
+
+- **Rental** lines emit only **durable, actionable** events
+  (`line.apple_id_flagged`, `line.permanently_blocked`,
+  `line.quota_warning`, `line.quota_exceeded`). Transient blips are
+  handled inside iSnap ops and never reach your webhooks.
+- **BYOD** lines emit the full set including transient state
+  (`line.offline`, `line.degraded`, `line.online`) because you own the
+  hardware and can act on it.

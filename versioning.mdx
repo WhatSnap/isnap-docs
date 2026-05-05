@@ -1,0 +1,90 @@
+---
+title: "Versioning"
+description: "How iSnap versions the API, what GET /v1/version returns, how to pin your integration."
+---
+
+iSnap versions the API contract with semver. The current version is at
+[`GET /v1/version`](https://api.isnap.ai/v1/version):
+
+```json
+{
+  "success": true,
+  "data": { "version": "1.1.0" },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+The endpoint is **unauthenticated** — you can call it before bootstrapping
+auth. Use it at integration startup to compare against a `MIN_API_VERSION`
+floor your code requires.
+
+## Bump policy
+
+| Change | Bump | Example |
+|---|---|---|
+| Breaking — removed endpoint, type change, removed field, required field added | MAJOR | `1.x.x → 2.0.0` |
+| Additive — new endpoint, new optional field, `deprecated: true` flag added | MINOR | `1.0.x → 1.1.0` |
+| No contract change — internal refactor, doc clarification | PATCH | `1.0.0 → 1.0.1` |
+
+Enforced in CI: every backend PR runs
+[oasdiff](https://oasdiff.com) against `develop`, blocks merges that
+introduce changes without the matching version bump, and requires a
+30-day deprecation window before any endpoint can be removed.
+
+## Within a major version
+
+Within `1.x`, the contract stays **backward-compatible**. Your
+integration written against 1.0.0 keeps working against 1.5.0 — the
+30-day deprecation window plus 410 Gone signals (see
+[Deprecation lifecycle](/concepts/deprecation-lifecycle)) give you ample
+notice before any actual removal.
+
+This means:
+
+- **You don't need to bump your SDK in lockstep with backend MINOR bumps.**
+  An older SDK on a newer backend is a supported configuration.
+- **Webhook events carry an `api_version` field.** Pin against it if
+  your handler depends on a specific schema.
+- **A new endpoint or field never breaks you.** Your code branches on
+  what it knows; unknown fields are ignored.
+
+## When to bump your `MIN_API_VERSION`
+
+Only when your code uses a feature that requires a specific backend
+version. Example: if iSnap ships `POST /v1/groups` in 1.3.0 and your
+integration starts using it, set `MIN_API_VERSION = '1.3.0'` in your
+code so a deployment against an older 1.2.x backend fails fast at
+startup instead of producing 404s in production.
+
+## SDK version vs API version
+
+The `@isnap/sdk` version is **decoupled** from the API version, per
+industry standard (Stripe, Twilio, OpenAI all do this). SDK semver
+tracks SDK changes — new methods, retry logic, type fixes — and API
+semver tracks the contract surface. A 1.5.0 SDK against a 1.2.0 backend
+works as long as the SDK doesn't call endpoints introduced after 1.2.0.
+
+## Future: SDK runtime precheck
+
+The SDK will eventually fetch `GET /v1/version` at first request and
+throw `IncompatibleApiVersionError` if the backend reports a version
+below the SDK's `MIN_API_VERSION`. This is **not yet implemented** —
+the constant ships as reference-only documentation today. Until the
+runtime check lands, you can call `/v1/version` yourself at boot:
+
+```ts
+import { ISnapClient, MIN_API_VERSION } from '@isnap/sdk'
+
+const isnap = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY! })
+
+const { version } = await isnap.lookup.apiVersion()  // GET /v1/version
+if (compareSemver(version, MIN_API_VERSION) < 0) {
+  throw new Error(`iSnap backend at ${version} is below SDK floor ${MIN_API_VERSION}`)
+}
+```
+
+## Changelog
+
+Every contract change is logged in the [Changelog](/changelog), with
+the date, the new version, and a description.

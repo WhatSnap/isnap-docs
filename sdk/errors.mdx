@@ -3,9 +3,204 @@ title: "Errors"
 description: "The error class hierarchy, when to retry, when to surface to the user."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: `APIError`, `APIConnectionError`,
-`ServiceUnavailableError`, `RateLimitError`, `GoneError`, the auto-retry
-behavior on 5xx + `503 Retry-After`, the `error.code` switch pattern,
-and a decision tree for "retry vs fail vs prompt the user."
-</Note>
+The SDK throws typed errors. Branch on the class first, then on
+`error.code` for the specific cause. The class tells you *what*
+category of failure (auth, permission, quota, transport); the `code`
+tells you *which* one inside that category.
+
+## The hierarchy
+
+```
+Error
+├── APIError                          // every backend-returned error
+│   ├── BadRequestError               // 400
+│   ├── AuthenticationError           // 401
+│   ├── PaymentRequiredError          // 402
+│   ├── PermissionDeniedError         // 403
+│   ├── NotFoundError                 // 404
+│   ├── ConflictError                 // 409
+│   ├── GoneError                     // 410
+│   ├── UnprocessableEntityError      // 413, 422
+│   ├── RateLimitError                // 429 (general rate limiting)
+│   ├── QuotaExceededError            // 429 (line-level quota)
+│   ├── InternalServerError           // 500
+│   └── ServiceUnavailableError       // 503
+│
+├── APIConnectionError                // network, timeout, abort
+└── WebhookSignatureError             // verifyWebhook() failures
+```
+
+Every `APIError` carries:
+
+```ts
+class APIError extends Error {
+  status: number          // HTTP status
+  code: string            // stable string code, e.g. 'line_not_owned'
+  message: string         // human-readable
+  traceId: string         // include this when reporting bugs
+  requestId: string       // your-request-id correlation
+  retryAfter?: number     // seconds — only on 429 / 503
+  issues?: ErrorIssue[]   // field-level details on 422 validation
+}
+```
+
+## Pattern: branch on class, then on code
+
+```ts
+import {
+  APIError,
+  AuthenticationError,
+  PermissionDeniedError,
+  NotFoundError,
+  QuotaExceededError,
+  RateLimitError,
+  APIConnectionError
+} from '@isnap/sdk'
+
+try {
+  await isnap.messages.send({ line_id, to, body })
+} catch (err) {
+  if (err instanceof AuthenticationError) {
+    // Key revoked / wrong env. Don't retry; rotate keys.
+    throw err
+  }
+  if (err instanceof PermissionDeniedError) {
+    // Scoped key, line not owned, etc. Surface to caller; they need
+    // to fix the integration, not retry.
+    throw err
+  }
+  if (err instanceof NotFoundError) {
+    // line_id doesn't exist on this account. Don't retry.
+    throw err
+  }
+  if (err instanceof QuotaExceededError) {
+    // err.code: 'new_contact_quota_exceeded' | 'hourly_quota_exceeded' | ...
+    // err.retryAfter: seconds until the bucket frees
+    return queueForLater(err.retryAfter)
+  }
+  if (err instanceof RateLimitError) {
+    // Generic rate limit (not a quota bucket). The SDK auto-retries,
+    // so seeing this means even after retries we still got rate-limited.
+    return queueForLater(err.retryAfter)
+  }
+  if (err instanceof APIConnectionError) {
+    // Network blip, timeout, abort. SDK already retried.
+    return queueForLater(60)
+  }
+  if (err instanceof APIError) {
+    // Catch-all for unhandled API errors. Log + surface.
+    console.error('iSnap API error', err.code, err.traceId)
+    throw err
+  }
+  throw err
+}
+```
+
+## Auto-retry behavior
+
+The SDK retries automatically on:
+
+- **`APIConnectionError`** — network / timeout. Retried with exponential
+  backoff (250ms, 500ms, 1s, 2s, …) plus jitter.
+- **`InternalServerError`** (500) — backend transient.
+- **`ServiceUnavailableError`** (503) — backend degraded. Honours
+  `Retry-After` if present.
+- **`RateLimitError`** (429) — generic rate limit. Honours
+  `Retry-After`.
+
+The SDK does **not** retry on:
+
+- **`QuotaExceededError`** (429 with quota code) — the bucket
+  genuinely doesn't have room. Retrying is wrong; back off and try
+  later.
+- Any 4xx other than 429 — your call is malformed; retrying won't help.
+- Any 5xx other than 500 / 503 — escalation, not a retry case.
+
+Default `maxRetries` is **3** (so 4 attempts total, including the
+initial). Override per-client or per-call:
+
+```ts
+const isnap = new ISnapClient({
+  apiKey,
+  maxRetries: 5,                       // client-wide override
+  onRetry: ({ attempt, nextDelayMs, error }) => {
+    metrics.increment('isnap.retry')
+  }
+})
+
+// Per-call override:
+await isnap.messages.send(body, { maxRetries: 0 })  // disable retry for this call
+```
+
+## `RateLimitError` vs `QuotaExceededError`
+
+Both are HTTP 429. The split is by `error.code`:
+
+| Class | Codes | Origin |
+|---|---|---|
+| `QuotaExceededError` | `new_contact_quota_exceeded`, `known_contact_quota_exceeded`, `total_message_quota_exceeded`, `queue_full`, `lookup_rate_limit_exceeded` | Per-line quota gate (warming, 5-bucket model). Action: back off, audit list. |
+| `RateLimitError` | Everything else 429 | Generic per-API-key rate limit. Action: SDK already retried; if it still fires, you're hammering the API. |
+
+Both carry `retryAfter` when the backend supplies it. Trust it.
+
+## `GoneError` (410)
+
+A 410 response means the endpoint has been **removed**. The SDK throws
+`GoneError` with the structured payload preserved:
+
+```ts
+catch (err) {
+  if (err instanceof GoneError) {
+    console.error(`Endpoint removed on ${err.removed_at}. Use ${err.successor}.`)
+    // Migrate to err.successor, then redeploy.
+    throw err
+  }
+}
+```
+
+This is the post-deprecation-window state — see
+[Concepts → Deprecation lifecycle](/concepts/deprecation-lifecycle).
+
+## `WebhookSignatureError`
+
+Thrown by `verifyWebhook()` when:
+
+- Signature doesn't match.
+- Timestamp is outside the tolerance window (replay protection).
+- Payload isn't valid JSON or doesn't match a known event type.
+
+Catch it and return **401** so iSnap retries:
+
+```ts
+try {
+  const event = verifyWebhook({ payload, signature, secret })
+} catch (err) {
+  if (err instanceof WebhookSignatureError) {
+    res.status(401).end()
+    return
+  }
+  throw err
+}
+```
+
+## Building a `traceId`-correlated bug report
+
+When you file a bug with iSnap support, include `error.traceId` and
+`error.requestId`. Both are echoed on every API response (including
+errors) and let iSnap pinpoint the request in the backend logs.
+
+```ts
+catch (err) {
+  if (err instanceof APIError) {
+    Sentry.captureException(err, {
+      tags: { trace_id: err.traceId, request_id: err.requestId, code: err.code }
+    })
+  }
+}
+```
+
+## Related
+
+- [Sending messages → Errors](/guides/sending-messages#errors) — catalog per endpoint.
+- [Quotas + warming](/concepts/quotas-and-warming) — what triggers `QuotaExceededError`.
+- [Deprecation lifecycle](/concepts/deprecation-lifecycle) — `GoneError` context.

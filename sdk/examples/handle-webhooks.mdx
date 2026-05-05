@@ -1,11 +1,190 @@
 ---
 title: "Handle webhooks end-to-end"
-description: "A drop-in webhook receiver: verify, dedupe, dispatch."
+description: "A drop-in webhook receiver: verify, dedupe, dispatch async."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: a complete Express + PostgreSQL
-example showing signature verification, event-ID deduplication via an
-`ON CONFLICT DO NOTHING` insert, async dispatch (return 200 fast,
-process via a job queue), and error reporting via `webhook.suspended`.
-</Note>
+A working webhook receiver covers four things: signature verification,
+event-ID deduplication, async dispatch (so you can return 200 fast),
+and structured error reporting. Here's the whole thing in one file.
+
+## Express + PostgreSQL
+
+```ts
+import express from 'express'
+import { verifyWebhook, WebhookSignatureError } from '@isnap/sdk'
+import { Pool } from 'pg'
+import { Queue } from 'bullmq'
+
+const app = express()
+const db = new Pool({ connectionString: process.env.DATABASE_URL })
+const jobs = new Queue('isnap-events', { connection: { url: process.env.REDIS_URL } })
+
+// CRITICAL: express.raw() so req.body is a Buffer, not a parsed object.
+app.post(
+  '/iSnap/events',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    let event
+    try {
+      event = verifyWebhook({
+        payload: req.body.toString('utf8'),
+        signature: req.headers['x-isnap-signature'] as string,
+        secret: process.env.ISNAP_WEBHOOK_SECRET!,
+        toleranceSeconds: 300
+      })
+    } catch (err) {
+      if (err instanceof WebhookSignatureError) {
+        // Either a forged event or your secret rotated. Don't 200 on these.
+        return res.status(401).end()
+      }
+      throw err
+    }
+
+    // Dedupe via primary-key insert. ON CONFLICT DO NOTHING means a
+    // replayed event becomes a no-op without DB-side errors.
+    const inserted = await db.query(
+      `INSERT INTO isnap_events (id, type, received_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [event.id, event.type]
+    )
+
+    if (inserted.rowCount === 0) {
+      // Already processed. Acknowledge — iSnap stops retrying.
+      return res.status(200).end()
+    }
+
+    // First time we've seen this event. Queue async work, return 200 fast.
+    await jobs.add(event.type, event, {
+      jobId: event.id,                 // bullmq idempotency too — belt + braces
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 5_000 }
+    })
+
+    res.status(200).end()
+  }
+)
+
+// Worker process — separate from the HTTP server.
+import { Worker } from 'bullmq'
+
+new Worker('isnap-events', async (job) => {
+  const event = job.data as WebhookEvent
+
+  switch (event.type) {
+    case 'message.received':
+      await handleInbound(event.data.message)
+      break
+    case 'message.delivered':
+      await markDelivered(event.data.message)
+      break
+    case 'message.failed':
+      await markFailed(event.data.message)
+      break
+    case 'line.apple_id_flagged':
+      await alertOps(event.data)
+      break
+    case 'line.quota_warning':
+      await throttleSends(event.data.line.id, event.data.bucket)
+      break
+    default:
+      // Unknown event type. Log + skip. NEVER throw — this is what
+      // makes your handler forward-compatible across iSnap MINOR bumps.
+      console.log('unhandled webhook event', event.type, event.id)
+  }
+}, { connection: { url: process.env.REDIS_URL } })
+```
+
+## Why this shape
+
+### Verify before parsing
+
+`req.body` is a `Buffer` because of `express.raw()`. The signature is
+computed over the raw bytes, so we must NOT let any middleware parse
+it first. Most signature failures in the field come from a `bodyParser`
+or `express.json()` mounted earlier in the chain — order matters.
+
+### Dedupe before queuing
+
+`INSERT ... ON CONFLICT DO NOTHING` is the canonical pattern. If
+iSnap retries an event you already processed, the insert no-ops,
+`rowCount === 0`, you return 200 without re-queuing. Same event,
+same outcome — but the side effect happens exactly once.
+
+### Queue + 200 fast
+
+iSnap's webhook timeout is 30 seconds. If your handler takes 25
+seconds, you're racing the timeout. Queue and return 200 in &lt; 1
+second. The actual work happens in the worker, which has its own retry
+budget (BullMQ `attempts: 5`).
+
+### Default to log-and-skip
+
+The `switch` default case does NOT throw. iSnap MINOR bumps add new
+event types; if your handler throws on unknown ones, every backend
+release breaks your integration. Log + skip is the forward-compatible
+default. See [Versioning](/versioning).
+
+## Hono / Next.js variants
+
+For a Hono server (BYOD bridge backend, edge function, etc.):
+
+```ts
+import { Hono } from 'hono'
+import { verifyWebhook } from '@isnap/sdk'
+
+const app = new Hono()
+
+app.post('/iSnap/events', async (c) => {
+  const rawBody = await c.req.text()                  // raw string
+  const event = verifyWebhook({
+    payload: rawBody,
+    signature: c.req.header('x-isnap-signature')!,
+    secret: process.env.ISNAP_WEBHOOK_SECRET!
+  })
+  // ... dedupe + queue, same shape as Express ...
+  return c.body(null, 200)
+})
+```
+
+For Next.js App Router (`app/api/isnap/events/route.ts`):
+
+```ts
+import { verifyWebhook } from '@isnap/sdk'
+
+export async function POST(req: Request) {
+  const rawBody = await req.text()                    // raw string
+  const event = verifyWebhook({
+    payload: rawBody,
+    signature: req.headers.get('x-isnap-signature')!,
+    secret: process.env.ISNAP_WEBHOOK_SECRET!
+  })
+  // ... dedupe + queue ...
+  return new Response(null, { status: 200 })
+}
+```
+
+## Local development
+
+Use a tunnel to expose your local handler to iSnap:
+
+```bash
+bunx cloudflared tunnel --url http://localhost:3000
+```
+
+Register the tunnel URL on a **test** webhook subscription. Iterate.
+Once stable, swap to a stable named tunnel or move to a deployed
+staging endpoint.
+
+## Production checklist
+
+Same as [Webhooks → Production checklist](/guides/webhooks#production-checklist):
+verify every event, dedupe by ID, return 200 fast, monitor delivery
+health, default to log-and-skip on unknown event types.
+
+## Related
+
+- [Webhooks](/guides/webhooks) — full event catalog and retry semantics.
+- [SDK → Webhook signature verification](/sdk/webhooks-verification) — `verifyWebhook` deep dive.
+- [SDK → Errors](/sdk/errors) — `WebhookSignatureError`.

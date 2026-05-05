@@ -1,14 +1,169 @@
 ---
 title: "Quotas and warming"
-description: "5-bucket gate, rolling windows, the 5-stage warming progression."
+description: "5-bucket gate, rolling windows, the 5-stage warming progression, BYOD vs admin override rules."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: per-billing-tier system defaults
-(iMessage / Android), the 5 quota buckets (minute, hourly, daily, new
-contacts, known contacts), rolling-window semantics (sorted sets vs
-calendar buckets), reply-history-based new/known classification, the
-warming model (5 stages over 22 days), warming reset/skip rules
-(BYOD: customer; rental: admin-only), and the `bucket` discriminator
-on `line.quota_warning` / `line.quota_exceeded`.
-</Note>
+iSnap's quota model has one job: keep lines green. Apple's flag
+heuristic and the carriers' A2P filters are both reply-driven and
+pattern-driven — quotas exist to keep your sending shape inside the
+range that those heuristics consider human.
+
+This is the design rationale + data model. For practical "how do I
+not get flagged" advice, see [Best practices](/guides/best-practices).
+
+## The 5-bucket gate
+
+Every send walks through five quota buckets in order. Any bucket that's
+full → 429.
+
+| Bucket | Window | Counts | Why |
+|---|---|---|---|
+| `minute` | rolling 60 sec | All outbounds in the last 60s | Per-second pacing. Burst suppression. |
+| `hourly` | rolling 60 min | All outbounds in the last hour | Hourly pacing. Activity-curve enforcement. |
+| `daily` | rolling 24 h | All outbounds in the last 24h | The headline cap. Bound by warming stage. |
+| `new_contacts` | rolling 24 h | Outbounds to recipients who haven't replied in `staleness_window_days` (default 30) | Cold-outbound suppression. Apple's #1 flag signal. |
+| `known_contacts` | rolling 24 h | Outbounds to recipients who *have* replied in that window | Looser; reply-history earns volume. |
+
+All five are **rolling**, not calendar-aligned. Implementation: Redis
+sorted sets keyed by `(line_id, bucket)`; eviction via periodic
+`ZREMRANGEBYSCORE`. Resetting at midnight UTC was an early model and
+got dropped — calendar buckets create artificial pre-midnight rushes
+that cluster sends and look automated.
+
+## Per-tier defaults
+
+Different platforms have different safe ceilings. iSnap ships
+per-billing-tier defaults:
+
+| Tier | `daily` cap (warm) | `hourly` cap | `minute` cap |
+|---|---|---|---|
+| `rental_iphone` / `byod_imessage` | 400 | 60 | 5 |
+| `rental_android` / `byod_android` | 800 | 120 | 10 |
+
+These are the **`warm` stage** numbers — see warming below for the
+ramp. Every cap is overridable per line via
+`PATCH /v1/lines/{id}/config` within the BYOD / admin rules.
+
+## Reply-history-based new/known classification
+
+A "known contact" is one who has **REPLIED** to this line at least once
+in the last `staleness_window_days`. A "new contact" is everyone else.
+
+Why reply, not send-history:
+
+- Apple's heuristic measures reply ratio, not send history. The "I sent
+  to them last month" relationship doesn't earn trust with Apple if
+  they didn't reply.
+- It maps to the carrier deliverability heuristic too — if recipients
+  ignore you, you're acting like spam, regardless of how often you've
+  hit them before.
+
+`staleness_window_days` is configurable per line (default 30). Shorter
+window = stricter classification.
+
+## Warming model
+
+A new line ships with reduced caps and ramps over ~22 days:
+
+| Stage | Days from anchor | Daily cap (iMessage / Android) |
+|---|---|---|
+| `new` | 1–3 | 50 / 100 |
+| `ramping_1` | 4–7 | 100 / 200 |
+| `ramping_2` | 8–14 | 200 / 400 |
+| `ramping_3` | 15–22 | 300 / 600 |
+| `warm` | 23+ | 400 / 800 |
+
+The progression is **anchored** at `lines.warming_anchor_at`, set
+automatically at the line's first outbound. Days are calendar days
+from the anchor.
+
+### Reset and skip
+
+The warming machinery has two admin / BYOD-customer levers:
+
+- **Reset:** snap the anchor to `now`. Line drops back to `new`. Use
+  when a line behaved badly and needs a re-warm.
+- **Skip:** jump to a specific stage. Use when a line was previously
+  warm on a different identity and the operator is confident it's safe.
+
+Authority:
+
+| Action | Rental | BYOD |
+|---|:---:|:---:|
+| Reset own line | ✗ | ✓ |
+| Skip stage on own line | ✗ | ✓ |
+| Admin reset | ✓ | ✓ |
+| Admin skip | ✓ | ✓ |
+
+Rental customers don't get the levers because most rental customers
+aren't qualified to use them; BYOD customers do because they
+implicitly run their own ops. iSnap admins always can. A 403 with
+`error.code: 'warming_admin_only_for_rental'` fires if a non-admin
+tries to reset a rental line.
+
+After a reset or skip, automatic flow resumes from the new anchor —
+the line still progresses through stages in order from there.
+
+## Hourly red-zone aggregator
+
+A line that hits its hourly cap **3 times in 24h** triggers
+`line.quota_warning` with `bucket: 'hourly_chronic'`, even if the
+daily bucket stays green. This catches the "burst-pause-burst-pause"
+pattern that bot heuristics flag.
+
+The aggregator is per-line. Override the threshold via
+`PATCH /v1/lines/{id}/config`'s `hourly_red_zone_threshold`.
+
+## What the response carries
+
+Every successful `POST /v1/messages` includes a `queue_info`:
+
+```json
+{
+  "data": {
+    "id": "msg_...",
+    "queue_info": {
+      "minute_remaining": 4,
+      "hourly_remaining": 47,
+      "daily_remaining": 312,
+      "new_contacts_remaining": 18,
+      "known_contacts_remaining": 192,
+      "warming_state": "warm",
+      "next_send_at": null
+    }
+  }
+}
+```
+
+And every response carries `X-iSnap-Quota-*-Remaining` headers for the
+4 most relevant buckets, so middleware can throttle without parsing
+JSON. `next_send_at` is non-null when the line is using
+`smart_overflow` mode — it tells you when iSnap will release the queued
+message.
+
+## What the webhook carries
+
+`line.quota_warning` and `line.quota_exceeded` events carry a
+`bucket` discriminator:
+
+```json
+{
+  "type": "line.quota_warning",
+  "data": {
+    "line": { "id": "line_...", "billing_tier": "rental_iphone" },
+    "bucket": "new_contacts",   // or 'minute' | 'hourly' | 'hourly_chronic' | 'known_contacts' | 'daily'
+    "used": 95,
+    "limit": 100,
+    "window_resets_at": "2026-05-05T18:32:00Z"
+  }
+}
+```
+
+Branch on `bucket` to decide whether to throttle (hourly), audit your
+list (new_contacts), or escalate (hourly_chronic).
+
+## Related
+
+- [Best practices](/guides/best-practices) — practical sending advice.
+- [Sending messages](/guides/sending-messages#errors) — what 429 looks like at the SDK level.
+- [BYOD vs Rental](/concepts/byod-vs-rental) — why warming controls differ.

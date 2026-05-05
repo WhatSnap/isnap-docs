@@ -3,10 +3,119 @@ title: "Authentication"
 description: "API keys — minting, scoping, rotation, environment switching."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: minting test vs live keys, scoping
-keys to specific lines (reseller pattern), the `baseUrl` constructor
-override for staging, key rotation procedure, what happens on a
-revoked key (401 + `code: invalid_api_key`), and how scoped keys
-interact with `POST /v1/lines/assign`.
-</Note>
+iSnap authenticates every `/v1/*` request (except `/v1/health` and
+`/v1/version`) with a Bearer API key:
+
+```http
+Authorization: Bearer isnap_live_aBcDeF...
+```
+
+The SDK adds this header for you when you pass `apiKey` to the
+constructor.
+
+## Key formats
+
+| Prefix | Environment | Where it works |
+|---|---|---|
+| `isnap_live_*` | Production | `api.isnap.ai` only |
+| `isnap_test_*` | Test / sandbox | Either env; never hits real devices |
+| `isnap_pub_*` | Publishable (frontend-safe) | Public ops only — trial init, lookup, marketplace browse |
+| `sk_device_*` | Device session (BYOD bridge) | Bridge ↔ iSnap only — not for partners |
+
+You'll mostly use `isnap_live_*` and `isnap_test_*`. The publishable
+key exists for the iSnap-owned `platform.isnap.ai` frontend; partners
+using the SDK from a backend never need one.
+
+## Minting a key
+
+In the dashboard at `platform.isnap.ai`:
+
+1. **Developers → API keys → Create key**.
+2. Pick the **environment** — start with `test` for any new integration.
+3. Pick the **scope** — `unscoped` covers the whole account; `scoped`
+   ties the key to specific lines (see below).
+4. Copy the full key. **iSnap shows the suffix once.** Store it in
+   your secret manager immediately.
+
+After creation, only the prefix + last 4 are visible. Rotate by
+creating a new key and revoking the old one.
+
+## Scoped vs unscoped keys
+
+**Unscoped** keys can act on every line on the account. Default for
+direct-customer flows where one account = one consumer.
+
+**Scoped** keys are tied to a `line_ids` array. They can only:
+
+- Send from the listed lines.
+- List / get / patch the listed lines.
+- Receive webhooks for the listed lines.
+
+They cannot:
+
+- `POST /v1/lines/assign` — granting a brand-new line through a fixed
+  allowlist scope is a privilege escalation. Returns 403
+  `scoped_key_cannot_assign`.
+- See lines outside the scope.
+
+Scoped keys are how a **wholesale partner** gives per-end-user
+credentials: each of the partner's customers gets a scoped key tied to
+their own line(s), and the partner's app proxies through. The end-user
+never sees their iSnap account because there isn't one — they're a
+sub-tenant of the partner.
+
+## Environment switching with `baseUrl`
+
+The SDK has no `environment` enum. Override `baseUrl` instead:
+
+```ts
+const prod = new ISnapClient({
+  apiKey: process.env.ISNAP_LIVE_KEY!,
+  baseUrl: 'https://api.isnap.ai'   // default; can omit
+})
+
+const staging = new ISnapClient({
+  apiKey: process.env.ISNAP_TEST_KEY!,
+  baseUrl: 'https://api-staging.isnap.ai'
+})
+```
+
+`isnap_test_*` keys work against either env; `isnap_live_*` only
+against production. Mismatching them returns 401
+`api_key_environment_mismatch`.
+
+## Revocation and rotation
+
+Revoke a key from **Developers → API keys → ... → Revoke**. Effect is
+immediate; in-flight requests on that key see 401
+`invalid_api_key` from then on.
+
+Rotation procedure (zero-downtime):
+
+1. Mint the new key.
+2. Roll the new key out across your services (env vars / secret
+   manager).
+3. Verify the new key is in use (`api_key_id` shows up in your iSnap
+   audit log).
+4. Revoke the old key.
+
+If you suspect a leak, **revoke first, mint after.** A short outage
+beats a leaked key in the wild.
+
+## Errors
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 401 | `missing_api_key` | No `Authorization` header. |
+| 401 | `invalid_api_key` | Key revoked, malformed, or doesn't exist. |
+| 401 | `api_key_environment_mismatch` | `isnap_live_*` against staging or `isnap_pub_*` against an authed endpoint. |
+| 403 | `line_not_in_scope` | Scoped key tried to act on a line outside its `line_ids`. |
+| 403 | `scoped_key_cannot_assign` | Scoped key called `POST /v1/lines/assign`. |
+
+The SDK throws `AuthenticationError` for 401 and `PermissionDeniedError`
+for 403 — see [Errors](/sdk/errors).
+
+## Related
+
+- [SDK → Errors](/sdk/errors) — handling auth failures.
+- [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) — when to use scoped keys.

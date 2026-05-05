@@ -1,11 +1,150 @@
 ---
 title: "Send a message"
-description: "End-to-end TypeScript example covering the happy path, attachments, and error handling."
+description: "End-to-end TypeScript example: lookup, fallback, attachment, error handling."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: a complete `sendMessage(to, text)`
-helper with retry-safe idempotency, attachment uploads via
-presigned R2 URLs, the `try / catch` over `APIError` to surface user-
-facing failure codes, and how to cancel a queued message before it sends.
-</Note>
+A drop-in `sendMessage` helper that pulls together everything covered
+elsewhere in the SDK docs: lookup-driven channel selection, attachment
+upload, retry-safe idempotency, and the full error catch.
+
+```ts
+import {
+  ISnapClient,
+  APIError,
+  AuthenticationError,
+  PermissionDeniedError,
+  NotFoundError,
+  QuotaExceededError,
+  APIConnectionError
+} from '@isnap/sdk'
+import { readFile } from 'node:fs/promises'
+import { lookup as mimeLookup } from 'mime-types'
+
+const isnap = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY! })
+
+interface SendInput {
+  lineId: string
+  to: string
+  body: string
+  attachmentPath?: string
+}
+
+interface SendResult {
+  ok: true
+  messageId: string
+  status: 'queued' | 'scheduled'
+}
+
+interface SendFailure {
+  ok: false
+  reason: 'quota' | 'auth' | 'permission' | 'not_found' | 'transient' | 'unknown'
+  error: APIError | Error
+  retryAfter?: number
+}
+
+export async function sendMessage(input: SendInput): Promise<SendResult | SendFailure> {
+  try {
+    // 1. Probe the recipient (cached server-side for 7 days, cheap).
+    const probe = await isnap.lookup.check({ handle: input.to })
+
+    // 2. Pick the channel. `auto` is fine 95% of the time, but explicit
+    //    SMS for landlines / VOIP saves a failed iMessage attempt.
+    const channel: 'auto' | 'iMessage' | 'SMS' =
+      probe.imessage === false ? 'SMS' :
+      probe.line_type === 'landline' ? 'SMS' :
+      'auto'
+
+    // 3. Upload attachment if provided.
+    const attachments: string[] = []
+    if (input.attachmentPath) {
+      const bytes = await readFile(input.attachmentPath)
+      const filename = input.attachmentPath.split('/').pop() ?? 'attachment'
+      const contentType = mimeLookup(filename) || 'application/octet-stream'
+
+      const upload = await isnap.attachments.create({
+        filename,
+        content_type: contentType,
+        size_bytes: bytes.byteLength
+      })
+      await isnap.attachments.upload(upload, bytes)
+      attachments.push(upload.attachment_id)
+    }
+
+    // 4. Send. SDK auto-generates Idempotency-Key per call; same key
+    //    survives the SDK's internal retries on APIConnectionError.
+    const message = await isnap.messages.send({
+      line_id: input.lineId,
+      to: input.to,
+      channel,
+      body: input.body,
+      attachments
+    })
+
+    return {
+      ok: true,
+      messageId: message.id,
+      status: message.status as 'queued' | 'scheduled'
+    }
+  } catch (err) {
+    return classifyError(err)
+  }
+}
+
+function classifyError(err: unknown): SendFailure {
+  if (err instanceof QuotaExceededError) {
+    return {
+      ok: false,
+      reason: 'quota',
+      error: err,
+      retryAfter: err.retryAfter
+    }
+  }
+  if (err instanceof AuthenticationError) {
+    return { ok: false, reason: 'auth', error: err }
+  }
+  if (err instanceof PermissionDeniedError) {
+    return { ok: false, reason: 'permission', error: err }
+  }
+  if (err instanceof NotFoundError) {
+    return { ok: false, reason: 'not_found', error: err }
+  }
+  if (err instanceof APIConnectionError) {
+    return { ok: false, reason: 'transient', error: err }
+  }
+  if (err instanceof APIError) {
+    // Catch-all for HTTP-level errors not specialized above.
+    return { ok: false, reason: 'unknown', error: err }
+  }
+  return { ok: false, reason: 'unknown', error: err as Error }
+}
+```
+
+## Cancel a queued message
+
+If you decide not to send before iSnap dispatches:
+
+```ts
+async function cancelIfPossible(messageId: string): Promise<boolean> {
+  try {
+    const cancelled = await isnap.messages.cancel(messageId)
+    return cancelled.status === 'cancelled'
+  } catch (err) {
+    if (err instanceof ConflictError && err.code === 'too_late_to_cancel') {
+      return false   // already on the carrier; can't pull back
+    }
+    throw err
+  }
+}
+```
+
+## Schedule for later
+
+To send at a specific time, set `send_at` on the request (Phase 2 doc
+— TODO; the field is on the OpenAPI spec). The message lands in
+`status: scheduled` and dispatches at the requested time.
+
+## Related
+
+- [Sending messages](/guides/sending-messages) — full request reference.
+- [SDK → Errors](/sdk/errors) — class hierarchy used in `classifyError`.
+- [Best practices](/guides/best-practices) — when to override `auto` channel.

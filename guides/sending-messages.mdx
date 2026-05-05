@@ -1,11 +1,190 @@
 ---
 title: "Sending messages"
-description: "POST /v1/messages — request shape, attachments, idempotency, errors, the iMessage → RCS → SMS fallback chain."
+description: "POST /v1/messages — request fields, channel selection, attachments, idempotency, errors."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: request body fields, the
-`service: 'iMessage' | 'SMS' | 'RCS'` discriminator, attachments via
-presigned R2 URLs, the `Idempotency-Key` contract, the full error code
-catalog, and the per-line fallback chain config (`iMessage → RCS → SMS`).
-</Note>
+`POST /v1/messages` is the workhorse endpoint. Once you've got an API
+key and at least one active line, this is what every outbound message
+goes through.
+
+## Request
+
+<Tabs>
+  <Tab title="TypeScript SDK">
+    ```ts
+    const message = await isnap.messages.send({
+      line_id: 'line_aBcDeF',           // required
+      to: '+15551234567',                // required, E.164 (max 30 chars)
+      channel: 'auto',                   // 'auto' | 'iMessage' | 'SMS' | 'RCS'
+      body: 'Hello from iSnap.',         // up to 5000 chars
+      attachments: ['att_xYz...'],       // 0–10 attachment IDs
+      reply_to_message_id: 'msg_...',    // optional thread anchor
+      use_typing_indicator: true,        // iMessage only — show "..." first
+      effect: { type: 'bubble', name: 'slam' },  // iMessage native effects
+      metadata: { campaign_id: 'q4-launch' }     // free-form, returned on webhooks
+    })
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X POST https://api.isnap.ai/v1/messages \
+      -H "Authorization: Bearer $ISNAP_API_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Idempotency-Key: $(uuidgen)" \
+      -d '{
+        "line_id": "line_aBcDeF",
+        "to": "+15551234567",
+        "channel": "auto",
+        "body": "Hello from iSnap."
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+### Required fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `line_id` | string | The iSnap line that sends. `line_<base62>` or UUID. Caller must own / be scoped to it. |
+| `to` | string | Recipient handle. E.164 phone (`+15551234567`) or email (for iMessage Business). 1–30 chars. |
+
+`body` is optional but you must supply at least one of `body` or
+`attachments` — a message with neither is a 422.
+
+### Optional fields
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `body` | string | — | Text body, max 5000 characters. UTF-8. |
+| `channel` | enum | `auto` | `auto` lets the line's fallback chain decide (`iMessage → RCS → SMS`). Force a specific channel only when you have a reason. |
+| `attachments` | string[] | `[]` | Up to 10 attachment IDs from `POST /v1/attachments`. See [Attachments](#attachments). |
+| `effect` | object | — | iMessage native bubble or screen effects. Silently ignored on SMS / RCS. |
+| `reply_to_message_id` | string | — | Quote-reply to an existing message in the same conversation. |
+| `use_typing_indicator` | boolean | `false` | Show "…" on the recipient's iMessage before the bubble. iMessage only. |
+| `metadata` | object | — | Free-form key/value, max 4 KB total. Echoed back on every webhook event. |
+
+## Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "msg_01HX...",
+    "line_id": "line_aBcDeF",
+    "direction": "outbound",
+    "to": "+15551234567",
+    "from": "+15559998888",
+    "channel": "auto",
+    "service": null,
+    "body": "Hello from iSnap.",
+    "status": "queued",
+    "effect": null,
+    "reply_to_message_id": null,
+    "metadata": {},
+    "created_at": "2026-05-05T14:32:00Z"
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+### `status` lifecycle
+
+```
+queued → sent → delivered
+   ↓       ↓
+scheduled  failed
+   ↓
+cancelled
+```
+
+| Status | Meaning |
+|---|---|
+| `queued` | Accepted by iSnap, waiting for the device. Cancellable. |
+| `scheduled` | Held for the smart-overflow scheduler or a future `send_at`. Cancellable. |
+| `sent` | The device dispatched it. Carriers / Apple have it. |
+| `delivered` | Confirmation received. Final state for delivered messages. |
+| `failed` | Permanent failure. `error.code` carries the reason. Final. |
+| `cancelled` | Caller cancelled before send. Final. |
+
+### `channel` vs `service`
+
+`channel` on the request is your **preference** (`auto` is the right
+default). `service` on the response is what iSnap **actually used** —
+it stays `null` until the line dispatches and commits to one of
+`iMessage`, `SMS`, or `RCS`. See [Concepts → Channels](/concepts/channels)
+for how the fallback chain decides.
+
+## Attachments
+
+Attachments are uploaded **before** the message:
+
+```ts
+// 1. Mint a presigned R2 URL.
+const upload = await isnap.attachments.create({
+  filename: 'receipt.pdf',
+  content_type: 'application/pdf',
+  size_bytes: 124_500
+})
+
+// 2. PUT the bytes directly to R2 (the SDK helper handles this).
+await isnap.attachments.upload(upload, fileBytes)
+
+// 3. Reference the attachment_id on the message send.
+await isnap.messages.send({
+  line_id, to,
+  body: 'Here you go.',
+  attachments: [upload.attachment_id]
+})
+```
+
+iMessage accepts images, video, audio, vCards, and arbitrary files up
+to the 100 MB R2 ceiling (carriers cap MMS lower; iSnap surfaces the
+real cap per line in the line's `config`). RCS supports rich cards
+(image + title + body + suggested replies) — see Phase 2 docs (TODO).
+
+## Idempotency
+
+Every `POST /v1/messages` call accepts an `Idempotency-Key` header. The
+SDK auto-generates one per call (UUIDv4). Two requests with the same
+key within 24h return the same response — no duplicate send.
+
+When in doubt about whether a previous request succeeded (network blip,
+process crash mid-retry), **just retry with the same key**. iSnap will
+return the original response, not duplicate the message.
+
+See [SDK → Idempotency](/sdk/idempotency) for the full contract.
+
+## Errors
+
+| HTTP | `error.code` | What to do |
+|---|---|---|
+| 400 | `validation_error` | Fix the payload. `error.issues[]` lists the offending fields. |
+| 401 | `invalid_api_key` | Key revoked or wrong env. |
+| 403 | `line_not_owned` | API key not scoped to that `line_id`. |
+| 404 | `line_not_found` | `line_id` doesn't exist on the caller's account. |
+| 409 | `idempotency_key_conflict` | Same `Idempotency-Key` reused with a different body. Mint a new key. |
+| 422 | `body_or_attachments_required` | Empty `body` AND empty `attachments`. |
+| 429 | `*_quota_exceeded` | Quota gate fired — see `bucket` and `Retry-After`. Don't retry blindly; back off. |
+| 503 | `service_unavailable` | iSnap is degraded. SDK auto-retries with backoff; you can too. |
+
+The SDK throws a typed error per HTTP status — see
+[SDK → Errors](/sdk/errors) for the class hierarchy.
+
+## Cancelling a queued message
+
+```ts
+const cancelled = await isnap.messages.cancel('msg_01HX...')
+// cancelled.status === 'cancelled'
+```
+
+Cancellable iff `status` is `queued` or `scheduled` AND the device
+hasn't picked it up yet. After `sent` the cancel is a 409
+`too_late_to_cancel` — once it's on the carrier you can't pull it back.
+
+## Related
+
+- [Concepts → Channels](/concepts/channels) — when to force a channel vs let `auto` decide.
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — what triggers 429.
+- [SDK → Idempotency](/sdk/idempotency) — auto-keys, replay window.
+- [Webhooks](/guides/webhooks) — track delivery via `message.delivered` / `message.failed`.

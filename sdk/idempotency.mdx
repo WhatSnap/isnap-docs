@@ -3,11 +3,141 @@ title: "Idempotency"
 description: "Auto-generated keys, the 24h replay window, when to override."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: how `idempotencyKey: 'auto'` (default)
-works, when to override with an explicit key (e.g. you want to dedupe
-across process restarts), the 24h replay window, the
-`idempotency_replayed: true` flag in responses, and what happens when
-the key collides with a different request body (409
-`idempotency_key_conflict`).
-</Note>
+Every mutating request (`POST`, `PATCH`, `PUT`, `DELETE`) accepts an
+`Idempotency-Key` header. Two requests with the same key within 24h
+return the **same response** — no duplicate side effects. The SDK
+auto-generates a key per call by default.
+
+This is what makes "retry on transient failure" safe.
+
+## Default: auto
+
+```ts
+const isnap = new ISnapClient({
+  apiKey,
+  idempotencyKey: 'auto'   // default — can omit
+})
+
+// Each call gets a fresh UUID v4 as Idempotency-Key.
+await isnap.messages.send({ line_id, to, body })
+await isnap.messages.send({ line_id, to, body })   // different message, different key
+```
+
+Auto-mode is the right default. Per-call key generation means a network
+blip during one call can be retried with the same key (the SDK does this
+internally on `APIConnectionError`), but a *new* logical send gets a
+*new* key.
+
+## When to override with `'manual'`
+
+```ts
+const isnap = new ISnapClient({
+  apiKey,
+  idempotencyKey: 'manual'   // SDK never auto-generates
+})
+
+// You MUST supply the key now — calls without one get rejected by your
+// own type system (compile error in strict mode).
+await isnap.messages.send(
+  { line_id, to, body },
+  { idempotencyKey: 'send-newsletter-v1-customer-42' }
+)
+```
+
+Use `'manual'` when:
+
+- **Cross-process retry safety.** A queue worker restarts and replays a
+  job. You want the second attempt to be deduplicated against the first
+  — same key, same response. Auto-mode generates a fresh UUID on
+  restart and doesn't dedupe.
+- **Cross-system deduplication.** Your CRM and your scheduler both
+  decide independently to send. Same logical message → same
+  deterministic key (e.g. hash of `{customer_id, campaign_id, day}`)
+  → iSnap dedupes them.
+
+Per-call override works in `'auto'` mode too:
+
+```ts
+// auto mode, but this one specific call uses a deterministic key:
+await isnap.messages.send(
+  { line_id, to, body },
+  { idempotencyKey: hash({ customer_id, campaign_id, day }) }
+)
+```
+
+## The replay window
+
+iSnap stores `(key, response)` pairs for **24 hours**. Within that
+window:
+
+- **Same key + same body → original response.** Bit-for-bit identical
+  payload returned.
+- **Same key + different body → 409 `idempotency_key_conflict`.** iSnap
+  refuses to mask a different request behind a previously-used key.
+- **Different key → fresh request.**
+
+After 24h the key is GC'd. Sending the same key again with the same
+body would create a new message — which is why "request ID = SHA of
+the logical operation" is fine for retries within minutes, but not for
+"redeliver this email tomorrow if it failed."
+
+## Generating a deterministic key
+
+```ts
+import { createHash } from 'node:crypto'
+
+function idempotencyKey(parts: Record<string, string | number>): string {
+  const sorted = Object.keys(parts).sort().map((k) => `${k}=${parts[k]}`).join('&')
+  return createHash('sha256').update(sorted).digest('hex').slice(0, 32)
+}
+
+const key = idempotencyKey({
+  customer_id: 'cus_123',
+  campaign_id: 'q4-launch',
+  day: '2026-05-05'
+})
+
+await isnap.messages.send({ line_id, to, body }, { idempotencyKey: key })
+```
+
+The key length is up to you (max 255 chars per server). 32 chars of
+SHA-256 is plenty.
+
+## What the response looks like on a replay
+
+iSnap echoes a hint header on replays:
+
+```http
+X-iSnap-Idempotency-Replayed: true
+```
+
+Plus the response body is the **original** body — same `created_at`,
+same `id`, same everything. If you persist iSnap responses keyed by
+your own DB, idempotent replays land cleanly without an `UPSERT`.
+
+## Concurrent requests with the same key
+
+If you fire two requests with the same key simultaneously, iSnap
+serializes:
+
+- The first request hits the handler.
+- The second blocks for up to 30 seconds waiting for the first to
+  complete.
+- The second returns the first's response.
+
+If the first crashes the backend mid-flight (rare), the second gets
+served fresh. iSnap doesn't cache *failures* — only completed
+responses (success or error).
+
+## Errors
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 409 | `idempotency_key_conflict` | Same key reused with a different body. Mint a new key. |
+| 400 | `idempotency_key_too_long` | Key exceeded 255 chars. |
+| 400 | `idempotency_key_format_invalid` | Key contained chars outside `[a-zA-Z0-9_-]`. |
+
+## Related
+
+- [SDK → Errors](/sdk/errors) — `ConflictError` for 409 codes.
+- [Sending messages](/guides/sending-messages) — the most common use case.

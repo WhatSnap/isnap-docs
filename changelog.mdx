@@ -7,6 +7,9 @@ This page mirrors §8 of the canonical [API contract](https://github.com/WhatSna
 Changes ship to this page as soon as the contract version is bumped on
 the backend.
 
+Pre-freeze entries are summarized for partner-facing readability — full
+implementation notes live in the canonical contract.
+
 ## 1.1.0 — 2026-05-05
 
 §2.1 amendment + first post-freeze MINOR bump.
@@ -14,8 +17,8 @@ the backend.
 - Added **`GET /v1/version`** — unauthenticated probe returning
   `API_SCHEMA_VERSION` so SDKs and frontends can pre-flight a
   compatibility check at startup against their pinned `MIN_API_VERSION`.
-- Introduced the deprecation lifecycle:
-  backend now emits `Deprecation` / `Sunset` /
+- Introduced the deprecation lifecycle: backend now emits
+  `Deprecation` / `Sunset` /
   `Link rel="successor-version"` headers (RFC 9745 / RFC 8594 /
   RFC 8288) on routes flagged in the registry, and removed routes
   return `410 Gone` with `removed_at` + `successor` payload fields.
@@ -34,9 +37,150 @@ status to `Frozen`. From this point forward:
   `1.x` minor bumps and are backward-compatible.
 - Every contract change lands with a dated entry on this page.
 
-<Note>
-**TODO (Phase 2).** Backfill the `1.0.0-draft` through `1.0.10-draft`
-pre-freeze entries from the canonical contract `§8 Changelog`, formatted
-for partner readability (drop internal-implementation notes; keep the
-"what changed for you" angle).
-</Note>
+## Pre-freeze drafts
+
+The contract was iterated through 10 named draft revisions before the
+freeze ceremony. Summaries below; the canonical contract carries the
+full implementation notes.
+
+### 1.0.10-draft — 2026-04-29
+
+`§2.2` cancel endpoint + legacy purge. Documented
+**`DELETE /v1/messages/{message_id}`** for cancelling queued or
+scheduled messages (cancellable until carrier hand-off; `409
+too_late_to_cancel` after). Removed the `/v1/messages/conversations*`
+duplicates that pre-dated the `/v1/chats/*` surface in §2.3 — those
+were non-conformant artifacts (UUID params, page/limit pagination, no
+envelope). Pre-launch, no production traffic, clean delete beat
+documenting legacy shapes.
+
+### 1.0.9-draft — 2026-04-29
+
+`§2.12` billing surface. Closed 5 partner-facing entries in
+`KNOWN_UNDOCUMENTED`:
+**`DELETE /v1/billing/subscriptions/{subscription_id}`** (Stripe
+`cancel_at_period_end` semantics; line stays active through current
+period), **`GET / POST / DELETE /v1/billing/payment-methods*`** (full
+saved-card lifecycle via SetupIntent + Elements), and
+`POST /v1/billing/payment-methods/{id}/default`. Ownership verified by
+listing the customer's saved methods, not by trusting the path param —
+prevents leaked-token detach.
+
+### 1.0.8-draft — 2026-04-29
+
+`§2.4` Lines surface amendments. Documented 4 partner-facing endpoints
+that shipped in code without contract coverage:
+**`GET /v1/lines/{id}/config`** (effective config = system defaults +
+overrides + `overridden_keys` array), **`POST /v1/lines/assign`**
+(atomic find + reserve + activate; rejects scoped keys with 403),
+**`POST /v1/lines/{id}/transfer-ownership`** (owner change without
+device re-pair), and **`PATCH /v1/lines/{id}`** (metadata merge with
+null-deletes-key semantics).
+
+### 1.0.7-draft — 2026-04-29
+
+Implementation alignment for the OpenAPI freeze track (PRs 1–6). No
+spec changes; the contract had run ahead of the code. Changes:
+**`/v1/` prefix migration** (rebased `/lines`, `/api-keys`, `/billing`,
+`/pre-orders`); **`line_<base62>` cutover** (every partner-facing
+surface emits and accepts `line_<base62>` publicIds); **`message.*`
+webhook fat shape** (every message event carries the full Message
+object); **cursor pagination** on `GET /v1/messages` and
+`GET /v1/pre-orders`. Introduced the **contract-vs-OpenAPI diff test**
+that asserts every partner-facing endpoint round-trips.
+
+### 1.0.6-draft — 2026-04-28
+
+`§2.11.5` auth wording fix. Tightened
+**`POST /v1/trial/init`** auth from `optional` to `required — Bearer
+isnap_(live\|test)_*`. Both flows are authenticated on the wire: the
+direct-customer signup flow uses an iSnap-owned publishable key; the
+wholesale partner flow uses the partner's own `isnap_live_*` key.
+
+### 1.0.5-draft — 2026-04-17
+
+`§2.7` lookup amendments. Documented the **202 cache-miss response
+shape** for **`POST /v1/lookup`** alongside the existing 200 cache-hit
+shape. The body now carries `cached`, `pending`, and `retry_after`
+explicitly. Documented the 429 contract (`Retry-After` +
+`error.retry_after` aligned to bucket rollover).
+
+### 1.0.4-draft — 2026-04-17
+
+`§1.8` request-headers amendment. Added **`X-Request-Id`** as an
+optional caller-supplied header for cross-service correlation.
+Accepted only when it matches the `req_<base62>` shape iSnap issues;
+malformed values are ignored and a fresh ID is generated.
+
+### 1.0.3-draft — 2026-04-16
+
+Major `§2.13` revision after competitor research:
+
+- **`system_defaults` per billing tier** (5 rows, one per tier).
+  iMessage and Android have meaningfully different safe thresholds.
+- **`daily_total_message_limit` corrected** to 400 (iMessage) / 800
+  (Android) — the previous 10000 was a guess.
+- **Two new caps** — `hourly_message_limit` and
+  `minute_message_limit`. The five-bucket gate (minute / hourly /
+  daily / new / known) replaces the prior three-bucket gate.
+- **New/known classification flipped to reply-history** — Apple's
+  flag heuristic measures reply ratio, not send history.
+- **All quota windows are now rolling** (24h, 60min, 60sec)
+  instead of UTC-midnight calendar buckets.
+- **Warming model** added with anchor-reset semantics. 5-stage
+  progression (`new → ramping_1/2/3 → warm`) over 22 days.
+- **Hourly red-zone aggregator** — chronic hourly hits fire
+  `bucket: hourly_chronic` even when daily stays green.
+- Quota webhook payloads gain `bucket` discriminator.
+
+### 1.0.2-draft — 2026-04-15
+
+Trial architecture rewrite (Option C):
+
+- **`billing_tier` enum** — replaces separate `type`/`byod`/`trial`
+  flags with a single 5-way enum
+  (`rental_iphone | rental_android | byod_imessage | byod_android |
+  shared_pool`).
+- **`trials` table** — per-session state (pool_line_id, paired_handle,
+  token, api_key_hash, streak counter, status). Fixes the
+  mutualization bug where the streak counter on a shared pool line
+  conflated multiple concurrent trial sessions.
+- **Self-echo enforcement** — trial API keys can only send to their
+  own `paired_handle`, server-enforced at `POST /v1/messages`.
+- **Zero identity fields on trials** — no email, no `partner_id`, no
+  `partner_customer_id`. Correlation via opaque `token`.
+- **Per-caller trial pool limit** — `api_keys.trial_pool_limit`
+  enforces per-key caps without needing a `partners` table.
+- `shared_pool` lines never exposed in customer-facing
+  `GET /v1/lines`.
+
+### 1.0.1-draft — 2026-04-15
+
+Major batch update after a second product review:
+
+- Trial model rewritten from time-window to **streak counter** (max
+  10 outbound without inbound).
+- Quota model redesigned to **3 buckets** (50 new + 200 known + 10000
+  total) with per-bucket 429 codes — later refined to 5 buckets in
+  1.0.3-draft.
+- System defaults + per-line overrides admin model (§2.13.1.1).
+- Jitter added everywhere to avoid mechanical patterns.
+- Activity curve implementation with hourly weights + timezone +
+  intra-hour jitter.
+- Outbound attachment size cap dropped (was 100 MB, arbitrary); only
+  R2 5 GB ceiling remains.
+- **SSE transport section (§3.8)** with state machine reconnection +
+  Last-Event-ID replay + atomic UPDATE dispatch.
+- **`POST /v1/chats/{chat_id}/messages`** ergonomic wrapper added.
+- Line acquisition flows section (§2.5) with 3 parcours including
+  billing checkout for non-wholesale.
+- 4-event trial webhook family
+  (`linked / dormant / reactivated / converted`).
+- 23-event catalog total.
+
+### 1.0.0-draft — 2026-04-14
+
+Initial draft — compiled from the competitor benchmark (Sendblue,
+LoopMessage, Linq, Bloo, MyCRMsim + BlueBubbles) and the gap analysis
+after product review locked in the 4 guiding principles. Awaiting
+engineering + product sign-off.

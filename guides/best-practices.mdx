@@ -1,12 +1,185 @@
 ---
 title: "Best practices for sending"
-description: "Quota model, queue overflow modes, smart-overflow scheduler, when to send."
+description: "Stay green: warming, the 5-bucket quota gate, when to send, how to recover."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: the 5-bucket quota gate (minute /
-hourly / daily / new contacts / known contacts), how warming progresses
-over 22 days, queue overflow strategies (`reject` / `delay` /
-`smart-overflow`), the activity curve (when iSnap considers a send
-suspicious), and field-tested heuristics for keeping line health green.
-</Note>
+Real-device messaging is high-trust by design — that's the whole pitch
+versus A2P. The flip side: line health is something you cultivate, not
+something the platform fakes. This page is the field-tested rules for
+keeping lines green.
+
+## 1. Respect the warming model
+
+A new line ships in **5 progressive stages** over ~22 days:
+
+| Stage | Days | Daily cap (iMessage) | Daily cap (Android) |
+|---|---|---|---|
+| `new` | 1–3 | 50 | 100 |
+| `ramping_1` | 4–7 | 100 | 200 |
+| `ramping_2` | 8–14 | 200 | 400 |
+| `ramping_3` | 15–22 | 300 | 600 |
+| `warm` | 23+ | 400 | 800 |
+
+The progression is **anchored** at the line's first send (`warming_anchor_at`).
+You can read the current stage via `GET /v1/lines/{id}/config`.
+Tier-default values; overridable via `PATCH /v1/lines/{id}/config`
+within the BYOD-or-admin rules.
+
+**Do not bypass warming.** Hitting `warm` traffic on day 2 is the most
+reliable way to get an Apple flag. The cap is the cap.
+
+## 2. Watch the 5-bucket gate
+
+Every send goes through five quota buckets, all rolling-window:
+
+| Bucket | Window | What it counts |
+|---|---|---|
+| `minute` | 60 sec | Outbounds in last minute |
+| `hourly` | 60 min | Outbounds in last hour |
+| `daily` | 24 h | Outbounds in last 24h (capped per warming stage) |
+| `new_contacts` | 24 h | Outbounds to recipients who haven't replied in `staleness_window_days` (default 30) |
+| `known_contacts` | 24 h | Outbounds to recipients who *have* replied in that window |
+
+The line's effective limits live at
+`GET /v1/lines/{id}/config` (effective = system defaults overlaid with
+per-line overrides). Live counter snapshots at
+`GET /v1/lines/{id}/quota`.
+
+When a bucket fires, you get **429** with `error.code:
+'<bucket>_quota_exceeded'` and `Retry-After: <seconds>` aligned to
+the next rollover.
+
+```ts
+try {
+  await isnap.messages.send({ line_id, to, body })
+} catch (err) {
+  if (err instanceof QuotaExceededError) {
+    // err.code: 'new_contact_quota_exceeded' (etc.)
+    // err.retryAfter: seconds until the bucket has room
+    console.warn(`Bucket ${err.code} full; retry in ${err.retryAfter}s`)
+    return
+  }
+  throw err
+}
+```
+
+`QuotaExceededError` is **not retryable** by the SDK auto-retry — it
+won't backoff and try again, because the bucket genuinely doesn't have
+room. You handle it.
+
+## 3. Reply rate matters more than raw volume
+
+Apple's flag heuristic is reply-driven. The new/known contact split
+makes this measurable:
+
+- **Healthy:** reply rate &gt; 50% on outbounds in a rolling 30 days.
+- **Yellow:** 30–50% — back off on cold outbound.
+- **Red:** &lt; 30% — Apple is one bad week away from flagging. Stop
+  cold outbound entirely; warm leads only.
+
+Pull the snapshot at `GET /v1/lines/{id}/quota` — `new_contacts.used`
+vs `known_contacts.used` over a 30-day window approximates the ratio.
+
+## 4. Use `auto` channel by default
+
+`channel: 'auto'` tries `iMessage → RCS → SMS` per the line's fallback
+chain. Force a specific channel only when:
+
+- **Force `SMS`** for OTPs / receipts that must hit the SMS inbox
+  (delivery beats UX).
+- **Force `iMessage`** only after you've confirmed reachability via
+  `POST /v1/lookup`. Otherwise you're paying for a failed iMessage send
+  that should have been SMS.
+- **Force `RCS`** only if you're shipping rich cards (image + suggested
+  replies). Plain text doesn't need it.
+
+## 5. Lookup before cold outbound
+
+For any number you've never messaged, `POST /v1/lookup` first:
+
+```ts
+const probe = await isnap.lookup.check({ handle: '+15551234567' })
+if (probe.imessage) {
+  // Send via iMessage; Android lines aren't relevant here.
+} else {
+  // Force SMS. Skip iMessage attempt; saves the round-trip.
+}
+```
+
+Lookups are cached server-side for 7 days. Cheap. Use them.
+
+## 6. Smart-overflow vs reject
+
+Each line's `queue_overflow_strategy` decides what happens when a send
+hits a quota cap:
+
+| Strategy | Behavior | Best for |
+|---|---|---|
+| `reject` | Returns 429 immediately. Caller retries later. | Latency-sensitive (OTPs, alerts). |
+| `delay` | Holds in `scheduled` until the bucket frees. | Batch outreach where a 30-min delay is fine. |
+| `smart_overflow` | Spreads across the warming-allowed activity curve over the next 24h. | Bulk warm-lead outreach. |
+
+The default is `reject`. Switch via
+`PATCH /v1/lines/{id}/config { "queue_overflow_strategy": "smart_overflow" }`.
+`smart_overflow` is BYOD-friendly because it preserves activity curve
+shape; rental lines have it admin-locked because mis-configured smart
+overflow can spam pool-shared resources.
+
+## 7. Pin `api_version` in your webhook handler
+
+When iSnap ships a MINOR bump (1.x → 1.y), webhook payloads add fields
+but never break. Your handler should:
+
+```ts
+function handleEvent(event: WebhookEvent) {
+  if (!event.api_version.startsWith('1.')) {
+    throw new Error(`Unexpected api_version: ${event.api_version}`)
+  }
+  switch (event.type) {
+    case 'message.delivered':
+      // ...
+      break
+    default:
+      // Log and no-op. New event types are additive.
+      console.log('unhandled event type', event.type)
+  }
+}
+```
+
+A `default` that **throws** is brittle; one that **logs and skips** is
+forward-compatible. See [Versioning](/versioning) for the full policy.
+
+## 8. Don't poll, subscribe
+
+Pulling status via `GET /v1/messages/{id}` works for the quickstart and
+nothing else. Production:
+
+- Webhooks for state changes (`message.delivered`, `line.quota_warning`).
+- Server-Sent Events for real-time inbound (Phase 2 doc — TODO).
+- `GET /v1/lines/{id}/quota` for periodic dashboard refresh, not per-send.
+
+Polling burns rate limit and adds unnecessary latency. Webhook
+verification with `verifyWebhook()` is one line of code; pay that cost
+once.
+
+## Recovery checklist
+
+If a line goes red (flag, quota exceeded chronically, customer
+complaints):
+
+1. **Stop cold outbound.** Triage list cleared, only known-contact
+   sends.
+2. **Pull the line config.** `GET /v1/lines/{id}/config` — verify
+   warming stage, check overrides aren't mis-set.
+3. **Audit reply rate.** If &lt; 30%, the list is the problem, not the
+   line.
+4. **For Apple flags:** see [Handling Apple flag events](/guides/apple-flag-events).
+5. **Talk to iSnap support** if the line behaves anomalously despite
+   clean usage. Support has visibility into provider-side state your
+   API surface doesn't expose.
+
+## Related
+
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — the data model + algorithms.
+- [Concepts → Channels](/concepts/channels) — when to force a channel.
+- [Apple flag events](/guides/apple-flag-events) — what to do when Apple says no.

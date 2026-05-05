@@ -59,10 +59,11 @@ billing relationship):
 
 ## Channels — what's in, what's not
 
-iSnap covers **iMessage**, **SMS**, and **RCS**. The `service` enum on every
-message is one of `iMessage | SMS | RCS`. RCS is a capability of the Android
-line (and the modern fallback target for `iMessage → RCS → SMS`), not a
-separate SKU.
+iSnap covers **iMessage**, **SMS**, and **RCS**. On a send request you
+pick a `channel` (`auto | iMessage | SMS | RCS`); on the response and on
+inbound webhooks the `service` field reports which one was actually used.
+RCS is a capability of the Android line (and the modern fallback target
+for `iMessage → RCS → SMS`), not a separate SKU.
 
 **WhatsApp is not in scope.** It's a separate ecosystem (Meta policies,
 Business API partners, opt-in flows) and would dilute the

@@ -3,23 +3,118 @@ title: "BYOD vs Rental"
 description: "Which SKU fits your case, what events you receive, what iSnap shields you from."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: the cost-vs-control trade-off, who
-owns the hardware, what happens when a device goes offline (rental:
-silent retry; BYOD: webhook fires), the per-tier event visibility rule
-(rental gets durable events only; BYOD gets the full health surface),
-when to mix tiers under one account.
-</Note>
+iSnap ships three SKUs (`rental_iphone`, `rental_android`, `byod_imessage`,
+`byod_android`) — or really, two postures: **rental** and **BYOD**. The
+choice between them is about who owns the hardware and, downstream, who
+sees the noise when something goes sideways.
+
+## The headline trade-off
+
+| | Rental | BYOD |
+|---|---|---|
+| Hardware ownership | iSnap | You / your customer |
+| Monthly price | ~$175 (Android) / ~$250 (iMessage) | ~$15 / device |
+| Setup time | iSnap operator picks a line off the shelf | 4-step bridge install |
+| Failure recovery | iSnap ops handles it | You / customer handles it |
+| Health visibility | Durable events only | Full health surface |
+| Best for | Hands-off integrators, businesses scaling fast | Cost-sensitive, customers comfortable with hardware |
+
+Both share one API, one billing relationship, one customer account.
+Mix freely.
+
+## What iSnap shields rental from
+
+Rental customers have **no access to the hardware**. Surfacing
+transient state (`line.offline` for 30 seconds during a Mac restart,
+`line.degraded` for missed heartbeats) creates support-ticket floods
+with no actionable resolution — the customer can't fix anything because
+the device is in iSnap's farm.
+
+So rental lines emit only **durable, actionable** events:
+
+- `line.apple_id_flagged` — Apple flagged the iMessage line (real
+  problem, real recovery time, you should know).
+- `line.permanently_blocked` — the line has been removed from rotation
+  due to compliance / abuse (rare).
+- `line.quota_warning` / `line.quota_exceeded` — bucket fired.
+- `line.released` — the line is no longer attached to your account
+  (cancellation, transfer).
+
+`GET /v1/lines/{id}/health` returns `403 rental_health_not_exposed`
+for rental tiers.
+
+## What BYOD exposes
+
+Customer owns the hardware → customer can act on issues → iSnap exposes
+the full state machine:
+
+- `line.offline` — bridge lost connectivity.
+- `line.online` — bridge regained connectivity.
+- `line.degraded` — bridge online but missing heartbeats.
+- `line.apple_id_flagged` — same as rental, BUT the recovery path
+  differs (customer re-auths via the bridge).
+- `line.quota_warning` / `line.quota_exceeded` — same as rental.
+- `GET /v1/lines/{id}/health` returns the current state, last-seen-at,
+  recent error history.
+
+The model: same data, different projection. The data model
+(`line_health` table, `device_sessions` heartbeats) is identical;
+the API gates `/health` and the rental-suppressed events on
+`line.byod === true`.
 
 ## What events you receive
 
-Behavior differs by tier — see [Webhooks → registering](/guides/webhooks#what-events-to-subscribe-to)
-for the full matrix. Short version:
+| Event | Rental | BYOD |
+|---|:---:|:---:|
+| `line.apple_id_flagged` | ✓ | ✓ |
+| `line.permanently_blocked` | ✓ | ✓ |
+| `line.quota_warning` | ✓ | ✓ |
+| `line.quota_exceeded` | ✓ | ✓ |
+| `line.offline` | ✗ | ✓ |
+| `line.online` | ✗ | ✓ |
+| `line.degraded` | ✗ | ✓ |
+| `message.received` | ✓ | ✓ |
+| `message.sent` / `delivered` / `failed` | ✓ | ✓ |
 
-- **Rental** lines emit only **durable, actionable** events
-  (`line.apple_id_flagged`, `line.permanently_blocked`,
-  `line.quota_warning`, `line.quota_exceeded`). Transient blips are
-  handled inside iSnap ops and never reach your webhooks.
-- **BYOD** lines emit the full set including transient state
-  (`line.offline`, `line.degraded`, `line.online`) because you own the
-  hardware and can act on it.
+A line spanning both surfaces (you have rental and BYOD lines on the
+same account) gets the union of events scoped per `line_id`. Branch on
+`event.data.line.byod` if your handler differs.
+
+## Mixing tiers
+
+There's no penalty for mixing. Common patterns:
+
+- **Rental for production, BYOD for dev.** Rental lines for the live
+  customer; a BYOD Mac in the office paired to a test API key for
+  integration work.
+- **BYOD for high-touch accounts, rental for the rest.** Big-customer
+  account managers get a BYOD line they own; everyone else uses rental.
+- **Trial → BYOD → rental.** Prospects start on a trial, convert into
+  BYOD (low monthly), upgrade to rental once volume justifies the
+  hardware-management hand-off.
+
+Billing aggregates across tiers; one Stripe customer, one invoice.
+
+## When to switch a customer
+
+Triggers to recommend rental over BYOD:
+
+- The customer is shipping &gt; the BYOD line's effective warming-stage
+  cap consistently (saturating the daily bucket).
+- The customer is calling support every other day about offline state
+  on their Mac (hardware reliability is the wrong abstraction for
+  them).
+- The customer's BYOD line keeps catching Apple flags despite clean
+  sending patterns (a managed iSnap pool of Apple IDs has more rotation
+  options than a single customer-owned ID).
+
+The migration is "release the BYOD line, assign a rental line, transfer
+ownership of any conversation history." iSnap doesn't auto-migrate
+conversation state because the underlying number changes — surface it
+to the end-user.
+
+## Related
+
+- [Guides → BYOD pairing](/guides/byod-pairing) — the activation flow.
+- [Webhooks](/guides/webhooks) — register subscriptions for the events listed above.
+- [Apple flag events](/guides/apple-flag-events) — recovery diverges by tier.

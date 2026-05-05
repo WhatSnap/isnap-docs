@@ -3,9 +3,154 @@ title: "Pagination"
 description: "Cursor-based, async iterators, when to set page size."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: the `for await ... of` async iterator
-pattern, `next_cursor` lifecycle, how the SDK auto-paginates a
-`.list()` call, when to set explicit `limit`, and the 24h cursor
-stability guarantee.
-</Note>
+Every list endpoint in `/v1/*` is cursor-paginated. The SDK exposes
+each as an `AsyncIterable` so you can `for await` over the whole
+result set without thinking about cursor mechanics.
+
+## Basic pattern
+
+```ts
+// `list()` returns AsyncIterable<Message>, not Promise<Message[]>.
+for await (const message of isnap.messages.list({ line_id: 'line_aBc...' })) {
+  console.log(message.id, message.body)
+}
+```
+
+The SDK threads `next_cursor` across pages internally — your loop
+keeps yielding items until the server says `has_more: false`.
+
+## Server response shape
+
+Underneath, every list endpoint returns:
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [ /* ... */ ],
+    "has_more": true,
+    "next_cursor": "cur_eyJpZCI6Im1zZ18..."
+  }
+}
+```
+
+`next_cursor` is opaque base64 — don't parse it. Stable for ~24h. After
+that the cursor expires and you'll need to restart the iteration.
+
+## Filtering
+
+Pass filters as the first argument; they apply to every page:
+
+```ts
+for await (const m of isnap.messages.list({
+  line_id: 'line_aBc...',
+  status: 'delivered',
+  since: '2026-05-01T00:00:00Z'
+})) {
+  // ...
+}
+```
+
+Filters are server-side. The cursor encodes them — if you change a
+filter mid-iteration, you'll get an error. Restart the iteration
+instead.
+
+## Stop early
+
+Standard `break` works:
+
+```ts
+let count = 0
+for await (const m of isnap.messages.list({ line_id })) {
+  if (++count >= 100) break
+  process(m)
+}
+```
+
+The SDK doesn't fetch the next page once you've broken out.
+
+## Abort signals
+
+For long iterations that need to be cancellable, pass an `AbortSignal`:
+
+```ts
+const controller = new AbortController()
+setTimeout(() => controller.abort(), 30_000)   // 30s ceiling
+
+try {
+  for await (const m of isnap.messages.list({ line_id }, { signal: controller.signal })) {
+    process(m)
+  }
+} catch (err) {
+  if (err.name === 'APIConnectionError') {
+    console.warn('Pagination aborted')
+  }
+}
+```
+
+The SDK throws `APIConnectionError` with the abort reason as `cause`.
+In-flight pages are not partially yielded — abort happens between page
+fetches.
+
+## Manual cursor handling
+
+If you need to persist cursors between processes (resumable batch
+jobs), bypass the iterator and call the underlying request directly:
+
+```ts
+let cursor: string | undefined
+do {
+  const page = await isnap.request('GET', '/v1/messages', undefined, {
+    query: { line_id, cursor }
+  })
+  await persistBatch(page.items)
+  cursor = page.has_more ? page.next_cursor : undefined
+  await persistCheckpoint(cursor)   // resume here on restart
+} while (cursor)
+```
+
+`request()` is the low-level escape hatch — typed `as Promise<T>`,
+no auto-pagination.
+
+## Pagination caveats
+
+### `has_more` and `next_cursor` are independent
+
+`has_more: true` with `next_cursor: null` means "more pages exist but
+the cursor expired" — restart from the beginning with the same filters.
+The SDK iterator catches this and stops cleanly; manual users should
+guard for it.
+
+### List endpoints carry the `Message` shape, not `MessageV1`
+
+`GET /v1/messages` returns the older `Message` shape (different field
+names — `from_number` / `to_number` instead of `from` / `to`, fewer
+fields). Single-resource gets (`GET /v1/messages/{id}`) return the
+modern `MessageV1` shape used everywhere else.
+
+This is a known mismatch — backend follow-up will harmonize. Until
+then, the SDK exposes both as separate types: `ListedMessage` for the
+list shape, `Message` for the singular.
+
+### Marketplace lines use page/limit, not cursors
+
+`GET /v1/lines` (the marketplace browse endpoint) uses page/limit
+pagination because the marketplace UI shows real "page X of Y"
+controls. Everything else is cursor-based.
+
+```ts
+// Marketplace lines:
+const page = await isnap.lines.list({ page: 2, limit: 50, billing_tier: 'rental_iphone' })
+// page.lines, page.total, page.page, page.limit
+```
+
+## Page size
+
+You generally don't pick a page size — the server picks it (typically
+50, sometimes 100 for lightweight resources). The cursor encodes
+position regardless of size, so consumers don't care.
+
+## Related
+
+- [SDK → Errors](/sdk/errors) — `APIConnectionError` on abort.
+- [Sending messages](/guides/sending-messages) — list / get the messages you sent.

@@ -61,10 +61,14 @@ demand from the dashboard if a key leaks.
       apiKey: process.env.ISNAP_API_KEY!
     })
 
+    // Pick the line you want to send from (`isnap.lines.listMine()`).
+    // `channel: 'auto'` lets iSnap pick iMessage → RCS → SMS based on
+    // the recipient's reachability.
     const message = await isnap.messages.send({
+      line_id: 'line_aBcDeF',
       to: '+15551234567',
-      service: 'SMS',
-      text: 'Hello from iSnap.'
+      channel: 'auto',
+      body: 'Hello from iSnap.'
     })
 
     console.log(message.id)         // 'msg_01HX…'
@@ -82,9 +86,10 @@ demand from the dashboard if a key leaks.
       -H "Content-Type: application/json" \
       -H "Idempotency-Key: $(uuidgen)" \
       -d '{
+        "line_id": "line_aBcDeF",
         "to": "+15551234567",
-        "service": "SMS",
-        "text": "Hello from iSnap."
+        "channel": "auto",
+        "body": "Hello from iSnap."
       }'
     ```
 
@@ -95,17 +100,24 @@ demand from the dashboard if a key leaks.
       "success": true,
       "data": {
         "id": "msg_01HX...",
-        "status": "queued",
-        "line_id": "line_...",
+        "line_id": "line_aBcDeF",
+        "direction": "outbound",
         "to": "+15551234567",
-        "service": "SMS",
-        "text": "Hello from iSnap.",
+        "from": "+15559998888",
+        "channel": "auto",
+        "service": null,
+        "body": "Hello from iSnap.",
+        "status": "queued",
         "created_at": "2026-05-05T14:32:00Z"
       },
       "trace_id": "tr_...",
       "request_id": "req_..."
     }
     ```
+
+    `service` is null until iSnap actually dispatches: it commits to
+    `iMessage`, `SMS`, or `RCS` at send time based on recipient
+    reachability and the line's fallback chain.
   </Tab>
 </Tabs>
 

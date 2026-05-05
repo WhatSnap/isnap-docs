@@ -1,12 +1,175 @@
 ---
 title: "Channels"
-description: "iMessage, SMS, RCS — what they are, when to pick which, the fallback chain."
+description: "iMessage, SMS, RCS — what they are, when to pick each, the fallback chain, why no WhatsApp."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: the `service: 'iMessage' | 'SMS' |
-'RCS'` enum, why WhatsApp is intentionally not in scope, how RCS comes
-"for free" on Android lines, the per-line fallback chain config
-(`iMessage → RCS → SMS` is the default; configurable per line), and
-how `POST /v1/lookup` informs channel selection.
-</Note>
+iSnap ships three channels: **iMessage**, **SMS**, **RCS**. Every send
+picks one (or lets `auto` pick); every received message reports which
+one was used. WhatsApp is intentionally out of scope.
+
+## The three channels
+
+### iMessage
+
+Apple-native, blue bubbles, end-to-end encrypted. Available only on
+iSnap's Mac+iPhone hardware (rental: in our farm; BYOD: customer-owned).
+
+- **Capabilities:** rich text, large attachments, native effects
+  (bubble + screen), reactions, typing indicators, read receipts.
+- **Limitations:** recipient must be on iMessage. Apple decides
+  reachability — we expose that signal via [`POST /v1/lookup`](/sdk/examples/lookup-handle).
+- **Risk surface:** Apple flagging. Mitigated by the warming model
+  and the new/known-contact ratio gate. See
+  [Best practices](/guides/best-practices).
+
+### SMS
+
+Universal carrier-routed text. Available only on iSnap's Android
+hardware (rental: in our farm; BYOD: customer-owned Android).
+
+- **Capabilities:** plain text up to 160 chars per segment (long
+  messages get auto-split), MMS for attachments (carrier caps vary,
+  typically 1 MB).
+- **Limitations:** no read receipts (carrier-dependent), no typing
+  indicators, no reactions.
+- **Risk surface:** A2P filtering — *the thing iSnap exists to bypass*.
+  Real device + real SIM = looks like a person to the carrier
+  heuristics.
+
+### RCS
+
+The modern carrier-side iMessage equivalent. Comes "for free" on every
+Android line — it's not a separate SKU, it's a capability of the
+Android line.
+
+- **Capabilities:** rich cards (image + title + body + suggested
+  replies), large attachments, read receipts, typing indicators.
+- **Limitations:** recipient must have RCS enabled (Google Messages
+  default on most Androids; falls back to SMS if not).
+- **Risk surface:** lower than SMS for cold outbound; carriers treat
+  RCS more like a brand channel.
+
+### Why no WhatsApp
+
+WhatsApp is a separate ecosystem with a separate compliance regime
+(Meta WABA verification, opt-in templates, BSP partnerships). Mixing
+WhatsApp into iSnap's "real-device P2P" model would dilute the
+positioning and pull iSnap into a different competitive category
+(Twilio / MessageBird / Sinch's WhatsApp BSP business).
+
+If you need WhatsApp, use a Meta BSP. iSnap stays focused on iMessage,
+SMS, and RCS.
+
+## The `channel` request field
+
+When you `POST /v1/messages`, you pick a channel:
+
+```json
+{
+  "line_id": "line_aBc...",
+  "to": "+15551234567",
+  "channel": "auto",
+  "body": "Hi."
+}
+```
+
+| Value | Behavior |
+|---|---|
+| `auto` | Try the line's fallback chain. Default. |
+| `iMessage` | Force iMessage. Fails if the line isn't an iMessage line, or if `lookup` says recipient isn't on iMessage. |
+| `SMS` | Force SMS. Fails if the line is an iMessage-only Mac+iPhone with no carrier SIM. |
+| `RCS` | Force RCS. Fails if recipient isn't RCS-capable. |
+
+`auto` is the right default 95% of the time. Force a channel only when
+you have a reason — see [Best practices §4](/guides/best-practices#4-use-auto-channel-by-default).
+
+## The `service` response field
+
+`channel` is what you **asked for**. `service` is what iSnap **actually
+used** — which it commits to at dispatch time, not at queue time.
+
+```json
+{
+  "id": "msg_...",
+  "channel": "auto",
+  "service": null,        // still queued, no commit yet
+  "status": "queued"
+}
+```
+
+After dispatch:
+
+```json
+{
+  "id": "msg_...",
+  "channel": "auto",
+  "service": "iMessage",  // line went iMessage, recipient was reachable
+  "status": "delivered"
+}
+```
+
+`service` values: `iMessage`, `SMS`, `RCS`. Only those three.
+
+## The fallback chain
+
+Each line has a `fallback_chain` config (visible at
+`GET /v1/lines/{id}/config`). Default by tier:
+
+| Line type | Default fallback chain |
+|---|---|
+| `rental_iphone` | `iMessage → SMS` (Mac+iPhone has no RCS — its SIM is the iPhone's) |
+| `rental_android` | `RCS → SMS` (Android's native default) |
+| `byod_imessage` | `iMessage → SMS` |
+| `byod_android` | `RCS → SMS` |
+
+`auto` walks the chain top-to-bottom: try the first; if the recipient
+is unreachable on it, drop to the next. The chain is **per-line**, not
+per-message. Override via
+`PATCH /v1/lines/{id}/config { "fallback_chain": [...] }`.
+
+iMessage lines never have RCS in the chain — RCS is an Android-network
+thing, not Apple's. Cross-channel `iMessage → RCS → SMS` requires
+sending from an Android line; the iMessage line falls direct to SMS.
+
+## Lookup informs channel selection
+
+Before cold outbound, `POST /v1/lookup` tells you what's reachable:
+
+```ts
+const probe = await isnap.lookup.check({ handle: '+15551234567' })
+// probe.imessage: boolean | null  (null = lookup pending, retry)
+// probe.line_type: 'mobile' | 'landline' | 'voip' | null
+// probe.carrier: 'AT&T' | ... | null
+```
+
+A landline `line_type` means SMS / RCS will fail — flag the lead before
+you waste a send.
+
+## Inbound: the `service` field on received messages
+
+Every webhook event for an inbound message includes `service`:
+
+```json
+{
+  "type": "message.received",
+  "data": {
+    "message": {
+      "channel": "auto",
+      "service": "iMessage",
+      "body": "Yes, that works.",
+      ...
+    }
+  }
+}
+```
+
+This tells you what the recipient sent **from**, which is sometimes
+different from what you sent **to**. (Send via iMessage, recipient
+replies from a different device that's only on SMS — you receive
+`service: "SMS"`.)
+
+## Related
+
+- [Guides → Sending messages](/guides/sending-messages) — the full request reference.
+- [Best practices](/guides/best-practices) — when to override `auto`.
+- [SDK → Lookup](/sdk/examples/lookup-handle) — the lookup workflow.

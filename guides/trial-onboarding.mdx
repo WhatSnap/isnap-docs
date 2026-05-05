@@ -1,12 +1,173 @@
 ---
 title: "Trial onboarding"
-description: "POST /v1/trial/init — the streak + dormancy model, conversion to paid."
+description: "POST /v1/trial/init — pair a prospect to a shared pool number, watch the streak counter, convert to paid."
 ---
 
-<Note>
-**TODO (Phase 2).** Will cover: how to mint trial sessions for
-prospects, the per-key `trial_pool_limit`, the streak counter (max 10
-outbound without inbound), the dormancy / reactivation flow, the
-4-event trial webhook family (`trial.linked / dormant / reactivated /
-converted`), and how to upsell into a rental or BYOD line.
-</Note>
+Trials let a prospect test iSnap end-to-end without buying a line. They
+get a real iMessage / SMS conversation against an iSnap-owned **shared
+pool number**, capped by a streak counter to prevent abuse.
+
+This page covers how to mint a trial, what the prospect goes through,
+and how to convert a successful trial into a paid line.
+
+## What a trial actually is
+
+A trial is a **per-session pairing** between a prospect's phone number
+and an iSnap pool line. The prospect texts the pool number from their
+device; iSnap pairs that number to a fresh trial session and mints a
+**trial API key** scoped to send only back to the prospect. After they
+reply, they can keep the conversation going up to the streak limit.
+
+Three things to internalise:
+
+- **No identity is stored.** No email, no `partner_id`, no `customer_id` —
+  iSnap has only an opaque `token` your code uses to fetch status and
+  the prospect's phone number used for self-echo enforcement.
+- **Self-echo only.** The trial API key can only send to the
+  `paired_handle`. Sending to any other recipient is a 403.
+- **The streak counter is per-session.** It counts outbound messages
+  without an inbound reply. Hit `max_outbound_without_inbound`
+  consecutive sends and the line refuses further outbound until the
+  prospect replies, which resets the counter.
+
+## 1. Mint a trial session
+
+<Tabs>
+  <Tab title="TypeScript SDK">
+    ```ts
+    const trial = await isnap.trial.init({
+      // Optional. Server picks a per-key default if omitted (typically 3-5).
+      // Range: 1–100. Hard cap on outbound without an inbound reply.
+      max_outbound_without_inbound: 5
+    })
+
+    console.log(trial.trial_id)            // 'tri_aBc...'
+    console.log(trial.token)               // opaque, used to fetch status
+    console.log(trial.pool_line_number)    // '+15555550199' — the prospect texts this
+    console.log(trial.pairing_expires_at)  // ISO, +15 min from now
+    console.log(trial.instructions_url)    // deep link for the prospect
+    ```
+  </Tab>
+  <Tab title="cURL">
+    ```bash
+    curl -X POST https://api.isnap.ai/v1/trial/init \
+      -H "Authorization: Bearer $ISNAP_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{ "max_outbound_without_inbound": 5 }'
+    ```
+  </Tab>
+</Tabs>
+
+The `token` is what your backend stores against the prospect's record
+in your CRM. It's the only correlation iSnap gives you back.
+
+The `pool_line_number` is what you display in your UI: "Text +1 555…
+from your phone to start the trial."
+
+### Per-key cap
+
+`api_keys.trial_pool_limit` (configurable in the dashboard, also read
+from `GET /v1/api-keys/{id}`) is the maximum number of **active** trial
+sessions a single API key can hold open. Hit the cap and `POST
+/v1/trial/init` returns `429 trial_pool_exhausted`. Either wait for
+existing trials to expire / convert, or raise the limit.
+
+## 2. The pairing window
+
+The prospect has 15 minutes (`pairing_expires_at`) to text the pool
+number. If they don't, the session is GC'd and the slot frees up.
+
+While waiting, poll status with the `token`:
+
+```ts
+const status = await isnap.trial.status(trial.token)
+// status.state: 'pairing_pending' | 'paired' | 'dormant' | 'expired'
+// status.api_key: only populated once state === 'paired'
+```
+
+Or subscribe to `trial.linked` webhooks (cleaner — no polling):
+
+```json
+{
+  "type": "trial.linked",
+  "data": {
+    "trial_id": "tri_aBc...",
+    "token": "tok_xYz...",
+    "pool_line_id": "line_pool_aBc",
+    "paired_handle": "+15551234567",
+    "api_key_prefix": "isnap_test_dEf..."
+  }
+}
+```
+
+The full **trial API key** (suffix included) is returned only once via
+`GET /v1/trial/status` after pairing. Store it server-side; never
+expose it to the browser.
+
+## 3. The conversation
+
+Use the trial API key to send back, scoped to the paired handle:
+
+```ts
+const trialClient = new ISnapClient({ apiKey: trialApiKey })
+
+await trialClient.messages.send({
+  line_id: trial.pool_line_id,
+  to: trial.paired_handle,           // MUST match — anything else is 403
+  channel: 'auto',
+  body: 'Welcome to iSnap! Reply to keep this trial going.'
+})
+```
+
+Counters update in real time:
+
+```ts
+const activity = await trialClient.trial.activity()
+// activity.outbound_count, activity.inbound_count
+// activity.streak — outbounds since last inbound (caps at max_outbound_without_inbound)
+// activity.dormancy_remaining_hours — drops to 0 → 'dormant'
+```
+
+## 4. Dormancy and reactivation
+
+If neither side messages for 24h (configurable per key, see
+`dormancy_window_hours`), the trial enters `dormant` state and
+`trial.dormant` fires. The trial API key still works — but every
+outbound is gated behind the streak counter, which now sits at its
+ceiling. Practically: dormant trials need an inbound to do anything
+useful.
+
+A dormant prospect texting the pool number again triggers
+`trial.reactivated` and resets the streak.
+
+## 5. Conversion to paid
+
+When you decide a trial is ready to upgrade:
+
+```ts
+// Create a real billing subscription. The trial token correlates the
+// prospect across iSnap's records (without iSnap knowing who they are).
+const subscription = await isnap.billing.checkout({
+  product: 'rental_iphone_monthly',
+  trial_token: trial.token             // tags the conversion in Stripe metadata
+})
+```
+
+`trial.converted` fires once payment clears. iSnap auto-releases the
+pool line slot and provisions a real line for the prospect (rental:
+operator picks one off the shelf; BYOD: you trigger the BYOD pair flow
+next).
+
+## Errors
+
+| HTTP | `error.code` | What |
+|---|---|---|
+| 401 | `invalid_api_key` | Missing / revoked key. |
+| 403 | `trial_self_echo_only` | Trial key tried to send to a non-paired handle. |
+| 422 | `max_outbound_without_inbound_out_of_range` | Value not in 1–100. |
+| 429 | `trial_pool_exhausted` | API key has too many open trials. |
+
+## Related
+
+- [Concepts → Trial architecture](/concepts/trials) — the design rationale (per-session state, identity-agnostic correlation).
+- [Webhooks → trial.* events](/guides/webhooks#what-events-to-subscribe-to) — the 4-event family (`linked / dormant / reactivated / converted`).

@@ -95,13 +95,7 @@
     },
     {
       "group": "Endpoints",
-      "pages": [
-        {
-          "group": "Generated from OpenAPI",
-          "icon": "code",
-          "openapi": "api-reference/openapi.json"
-        }
-      ]
+      "openapi": "api-reference/openapi.json"
     },
     {
       "group": "SDK",

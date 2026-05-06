@@ -3,32 +3,24 @@ title: "Quickstart"
 description: "Sign up, mint an API key, send your first message — in under 5 minutes."
 ---
 
-This walkthrough takes you from zero to a delivered message. Pick the SDK
-flow if you're integrating from a Node / Bun / Deno service, or the cURL
-flow if you're exploring or wiring from a non-TS environment.
+This walkthrough takes you from zero to a delivered message. Pick the
+SDK flow if you're integrating from a Node, Bun, or Deno service; pick
+the cURL flow if you're exploring or wiring from a non-TypeScript
+environment.
 
 ## 1. Create an account
 
-Sign up at [platform.isnap.ai/signup](https://platform.isnap.ai/signup).
-Verify your email, complete the onboarding form (company name, expected
-volume, primary use case), and you'll land on the dashboard.
-
-<Note>
-You don't need a paid plan for this quickstart. Every new account gets a
-**trial line** — a shared pool number you can send up to 10 outbound
-messages from before the receiver replies. Useful to validate your
-integration end-to-end before committing to a rental or BYOD line.
-</Note>
+Sign up at [platform.isnap.ai/signup](https://platform.isnap.ai/signup),
+verify your email, and complete the onboarding form. You'll land on the
+dashboard with a default test environment ready to use.
 
 ## 2. Mint an API key
 
-In the dashboard, go to **Developers → API keys → Create key**.
+In the dashboard: **Developers → API keys → Create key**.
 
 - **Environment:** pick `test` for sandboxing, `live` for production.
   Test keys produce real-looking responses but never hit a real device.
-- **Scope:** leave unscoped for the quickstart. Scoped keys (limited to
-  specific lines) are how you give per-customer credentials in a reseller
-  model — see [Auth](/sdk/auth).
+- **Scope:** leave unscoped for the quickstart.
 
 Copy the key. It looks like `isnap_test_aBcD…` or `isnap_live_xYz…`.
 **This is the only time iSnap shows you the full string** — store it in
@@ -37,8 +29,7 @@ your secret manager now.
 <Warning>
 API keys grant the ability to send messages billed to your account.
 Treat them like passwords: never commit them to git, never log them in
-plaintext, never put them in a frontend bundle. iSnap rotates keys on
-demand from the dashboard if a key leaks.
+plaintext, never put them in a frontend bundle.
 </Warning>
 
 ## 3. Send a message
@@ -61,9 +52,9 @@ demand from the dashboard if a key leaks.
       apiKey: process.env.ISNAP_API_KEY!
     })
 
-    // Pick the line you want to send from (`isnap.lines.listMine()`).
-    // `channel: 'auto'` lets iSnap pick iMessage → RCS → SMS based on
-    // the recipient's reachability.
+    // Pick one of your active lines (`isnap.lines.listMine()`).
+    // `channel: 'auto'` lets the line pick iMessage → RCS → SMS based
+    // on what reaches the recipient.
     const message = await isnap.messages.send({
       line_id: 'line_aBcDeF',
       to: '+15551234567',
@@ -73,11 +64,7 @@ demand from the dashboard if a key leaks.
 
     console.log(message.id)         // 'msg_01HX…'
     console.log(message.status)     // 'queued'
-    console.log(message.line_id)    // 'line_…'
     ```
-
-    The SDK auto-generates an `Idempotency-Key` for every mutating
-    request, so retrying after a network blip never double-sends.
   </Tab>
   <Tab title="cURL">
     ```bash
@@ -115,45 +102,31 @@ demand from the dashboard if a key leaks.
     }
     ```
 
-    `service` is null until iSnap actually dispatches: it commits to
+    `service` is `null` until iSnap dispatches: it commits to
     `iMessage`, `SMS`, or `RCS` at send time based on recipient
     reachability and the line's fallback chain.
   </Tab>
 </Tabs>
 
-The response is wrapped in a standard envelope (`success`, `data`,
-`trace_id`, `request_id`) — this shape is identical for every successful
-response on the API. See [API Reference → Conventions](/api-reference/introduction)
-for the full envelope spec.
+The response wraps the payload in a standard envelope (`success`,
+`data`, `trace_id`, `request_id`). This shape is identical for every
+successful response — see [API Reference → Conventions](/api-reference/introduction).
 
 ## 4. Watch it deliver
 
-The `status` field on the response is `queued`. The message progresses
-through `queued → sent → delivered` (or `failed`) over the next few
-seconds. Two ways to track it:
+The `status` field starts as `queued` and progresses through
+`sent → delivered` (or `failed`) over the next few seconds. Two ways
+to track it:
 
 <Tabs>
-  <Tab title="Webhook (recommended for production)">
+  <Tab title="Webhook (recommended)">
     Register a webhook subscription in **Developers → Webhooks → New
-    subscription**. Point it at an endpoint you control (e.g.
-    `https://your-app.com/iSnap/events`). Subscribe to the
-    `message.sent` and `message.delivered` events.
+    subscription**. Point it at an endpoint you control, subscribe to
+    `message.sent` and `message.delivered`.
 
     Every event POSTs to your URL with an HMAC-SHA256 signature in the
     `X-iSnap-Signature` header. **Verify it** before trusting the
-    payload — see [Webhooks → Signature verification](/guides/webhooks#signature-verification).
-
-    The SDK ships a one-liner for this:
-
-    ```ts
-    import { verifyWebhook } from '@isnap/sdk'
-
-    const event = verifyWebhook({
-      payload: rawBody,                // string, NOT parsed JSON
-      signature: req.headers['x-isnap-signature'],
-      secret: process.env.ISNAP_WEBHOOK_SECRET
-    })
-    ```
+    payload — see [Set up webhooks](/guides/webhooks).
   </Tab>
   <Tab title="Polling (for the quickstart only)">
     ```ts
@@ -162,7 +135,7 @@ seconds. Two ways to track it:
       await new Promise((r) => setTimeout(r, 1000))
       m = await isnap.messages.get(message.id)
     }
-    console.log(m.status)  // 'delivered' or 'failed'
+    console.log(m.status)
     ```
 
     <Warning>
@@ -179,18 +152,15 @@ in these docs is depth on the same primitives.
 
 <CardGroup cols={2}>
   <Card title="Send messages — full reference" icon="paper-plane" href="/guides/sending-messages">
-    Attachments, idempotency edge cases, error catalog, the
-    `iMessage → RCS → SMS` fallback chain.
+    Channels, attachments, idempotency, the error catalog.
   </Card>
   <Card title="Set up production webhooks" icon="webhook" href="/guides/webhooks">
-    Signature verification, event catalog, retries, replay window,
-    deduplication via `event_id`.
+    Signature verification, event catalog, retries, deduplication.
   </Card>
-  <Card title="Concepts — channels" icon="signal-stream" href="/concepts/channels">
-    Why iMessage / SMS / RCS exist as separate `service` values, when to
-    pick which, what the fallback chain does.
+  <Card title="Channels" icon="signal-stream" href="/concepts/channels">
+    When `auto` is the right pick, when to force a channel.
   </Card>
-  <Card title="Concepts — quotas + warming" icon="gauge" href="/concepts/quotas-and-warming">
+  <Card title="Quotas + warming" icon="gauge" href="/concepts/quotas-and-warming">
     How iSnap protects line health, the 5-bucket gate, the warming model.
   </Card>
 </CardGroup>

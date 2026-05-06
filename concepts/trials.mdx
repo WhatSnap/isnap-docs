@@ -1,47 +1,40 @@
 ---
 title: "Trial architecture"
-description: "Per-session state, streak counter, identity-agnostic correlation via opaque tokens."
+description: "Per-session state, streak counter, opaque-token correlation."
 ---
 
-iSnap's trial model is built around three constraints:
+Trials let a prospect test iSnap end-to-end without buying a line. They
+exchange real messages against an iSnap-operated **shared pool number**,
+capped by a streak counter so a single trial can't be used as a
+free-tier sending channel.
 
-1. **Real round-trip.** A trial that doesn't actually exchange messages
-   isn't worth the prospect's time.
-2. **Anti-abuse without identity.** No email, no `partner_id`, no
-   `customer_id` — keep iSnap identity-agnostic so the trial isn't a
-   GDPR liability for partners.
-3. **Mutualizable hardware.** Trials run on a small pool of shared
-   pool lines, not on a per-trial dedicated line.
+This page covers the data model and the design choices behind it. For
+the integration walkthrough see
+[Guides → Trial onboarding](/guides/trial-onboarding).
 
-This page walks through the data model and the design choices that fall
-out of those constraints.
+## Per-session state
 
-## Per-session state, not per-user
-
-Older drafts of the contract stored trial state on the `lines` table
-itself (`lines.trial: bool`, `lines.streak_counter: int`). That broke
-mutualization: two concurrent trials on the same shared pool line
-would conflate streak counters.
-
-The current model uses a separate `trials` table. One row per trial
-session:
+A trial isn't a property of a line — it's a session of its own,
+recorded independently:
 
 ```
 trials
 ├── id
-├── pool_line_id        FK to the iSnap-owned shared pool line
-├── paired_handle        the prospect's phone number, set at pairing
-├── token                opaque, returned to the partner at init
-├── api_key_hash         the trial API key (hashed)
-├── streak_counter       outbounds since last inbound (per session)
-├── status               'pairing_pending' | 'paired' | 'dormant' | 'expired'
-├── created_by_api_key_id  who minted this trial — required, NOT NULL
+├── pool_line_id              shared pool line iSnap operates
+├── paired_handle             prospect's phone number, set at pairing
+├── token                     opaque, returned to the caller at init
+├── api_key_hash              the trial API key (hashed)
+├── streak_counter            outbounds since last inbound
+├── status                    'pairing_pending' | 'paired' | 'dormant' | 'expired'
 ├── max_outbound_without_inbound  the cap, set at init
+├── created_at
 └── ...
 ```
 
-The pool line has many trials over its lifetime; any given trial
-"owns" the line for the duration of its session.
+The pool line carries many trials over its lifetime; any given trial
+"owns" the line for the duration of its session. The trials table
+keeps streak and status per session, so two concurrent trials on the
+same pool line don't conflate counters.
 
 ## The streak counter
 
@@ -49,23 +42,22 @@ A simple two-value gate:
 
 - **Outbound from the trial API key:** counter += 1.
 - **Inbound from the paired handle:** counter = 0.
-- **Counter ≥ `max_outbound_without_inbound`:** outbound returns
-  `429 trial_outbound_streak_exceeded`.
+- **Counter ≥ `max_outbound_without_inbound`:** further outbound
+  returns `429 trial_outbound_streak_exceeded`.
 
 Effects:
 
-- Spammers can't blast a trial — the second outbound without a reply
-  bumps the counter, the cap stops the loop.
-- Real conversations clear the counter naturally — a reply resets it.
-- The cap is per-session, configurable per API key
-  (`api_keys.trial_pool_limit` is the *concurrent-sessions* cap;
-  `max_outbound_without_inbound` per session is the *streak* cap, set
-  at `POST /v1/trial/init`).
+- A trial can't be used to blast cold messages — the second outbound
+  without a reply pushes the counter, the cap stops the loop.
+- Real conversations clear the counter naturally — every reply resets
+  it.
+- The cap is configurable per trial via `max_outbound_without_inbound`
+  on `POST /v1/trial/init` (range 1–100).
 
 ## Self-echo enforcement
 
-The trial API key is scoped to send **only** to the `paired_handle`.
-This is server-enforced at `POST /v1/messages`:
+The trial API key is scoped to send **only** to the `paired_handle`
+recorded on the trial. This is checked server-side at every send:
 
 ```
 if api_key.is_trial:
@@ -73,42 +65,30 @@ if api_key.is_trial:
     return 403 trial_self_echo_only
 ```
 
-Why this matters:
-
-- Without it, a partner could mint a trial to test their integration,
-  then use the trial key as a free-tier sending key against any
-  recipient. That's abuse.
-- With it, the trial key is useful only for what it's named for: a
-  trial conversation with the one prospect who paired.
-
 The recipient is set **at pairing**, not at init — the prospect's
-phone number isn't known until they text the pool line.
+phone number isn't known until they text the pool number.
 
-## Identity-agnostic correlation
+## Opaque-token correlation
 
-`POST /v1/trial/init` returns an opaque `token`. That's the only handle
-the partner gets to track the trial. iSnap stores no email, no
-`partner_id`, no `customer_id` on the trial row. The partner's CRM
-holds the (token → their-customer-record) mapping.
+`POST /v1/trial/init` returns an opaque `token`. That's the only
+handle your code gets to track the trial in your own systems. iSnap
+stores no email, customer record, or business identifier on the trial
+row.
 
-Why this matters:
-
-- iSnap doesn't become a PII dump for partners' end-users.
-- GDPR rights (deletion, export) stay with the partner, not iSnap.
-- A partner deleting their CRM record on iSnap's side is a no-op —
-  iSnap still has a (token, paired_handle, streak) row and that's all
-  it should have.
+The token is what your CRM keeps mapped to your customer. Status
+queries (`GET /v1/trial/status?token=…`) and conversion calls
+(`billing.checkout({ trial_token })`) both reference it.
 
 ## Webhook fan-out
 
-The 4-event trial family fires from the `created_by_api_key_id` —
-whoever minted the trial gets the events:
+The 4-event trial family fires to whichever account minted the trial:
 
-- `trial.linked` — pairing succeeded, prospect texted the pool line.
-- `trial.dormant` — no message for `dormancy_window_hours` (default 24).
-- `trial.reactivated` — dormant trial got a new inbound.
-- `trial.converted` — partner upgraded the trial to paid; pool line
-  released.
+- `trial.linked` — pairing succeeded; the prospect texted the pool
+  number.
+- `trial.dormant` — no message in either direction for
+  `dormancy_window_hours` (default 24).
+- `trial.reactivated` — a dormant trial got a new inbound.
+- `trial.converted` — the trial was upgraded to a paid line.
 
 Each payload includes `trial_id`, `token`, `pool_line_id`, and
 `paired_handle`. No identity fields.
@@ -128,37 +108,21 @@ paired  ⇄ (24h no traffic) ⇄  dormant
     │           │
     │           └── inbound ──► reactivated ──► paired
     │
-    │ partner calls billing.checkout({ trial_token })
+    │ billing.checkout({ trial_token })
     ▼
 converted (terminal)
 ```
 
-`expired` and `converted` are terminal. The pool line slot frees in
-both cases.
+`expired` and `converted` are terminal states. The pool line slot frees
+in both cases.
 
-## Wholesale vs direct-customer flows
+## Trials count toward usage
 
-Two flows mint trials, both authenticated:
-
-- **Direct-customer (`platform.isnap.ai`):** the iSnap-owned web
-  frontend mints trials with an iSnap-owned publishable key
-  (`isnap_pub_…`, similar to a Stripe `pk_live_…`). The user signs
-  up via this flow.
-- **Wholesale partner:** the partner's backend mints trials with their
-  own `isnap_live_…` key. The trial belongs to the partner; iSnap
-  bills the partner per converted trial.
-
-Both flows produce an identical row in `trials`; the difference is
-whose `created_by_api_key_id` is on it. Webhooks fire to whichever
-account owns that key.
-
-## Why trials are billed
-
-Trials cost iSnap money — each pool line is real hardware, with real
-electricity, real Apple ID rotation labor. The wholesale model
-[charges for every trial](https://github.com/WhatSnap/iSnap-App/blob/main/docs/api-contract.md#wholesale-billing-model)
-including ones that don't convert, with a small "trial-only" line item
-on the partner invoice. Anti-abuse and aligning incentives.
+Each trial reserves a real shared-pool line and consumes real
+device-side resources. Trials are tracked on your account's usage
+ledger (visible in the dashboard) the same way regular sends are.
+Conversion to a paid line carries the trial's billing context
+forward — the `trial.converted` event is the audit trail.
 
 ## Related
 

@@ -29,11 +29,19 @@ const outputPath = resolve(REPO_ROOT, 'api-reference/openapi.json')
 
 const spec = JSON.parse(readFileSync(inputPath, 'utf8'))
 
+// Some `/v1/*` paths are legacy device callbacks that pre-date the
+// current device contract. They're still served for the bridge app but
+// aren't part of the customer-facing API surface — drop them too.
+const LEGACY_DEVICE_CALLBACKS = new Set([
+  '/v1/messages/inbound',
+  '/v1/messages/{id}/status'
+])
+
 const before = Object.keys(spec.paths ?? {}).length
 const kept = {}
 const dropped = []
 for (const [path, ops] of Object.entries(spec.paths ?? {})) {
-  if (path.startsWith('/v1/')) {
+  if (path.startsWith('/v1/') && !LEGACY_DEVICE_CALLBACKS.has(path)) {
     kept[path] = ops
   } else {
     dropped.push(path)
@@ -42,13 +50,9 @@ for (const [path, ops] of Object.entries(spec.paths ?? {})) {
 
 spec.paths = kept
 
-// Add a partner-friendly server entry. The upstream spec doesn't pin one
-// because the backend is multi-environment; the docs site is partner-facing
-// so production gets top billing.
-spec.servers = [
-  { url: 'https://api.isnap.ai', description: 'Production' },
-  { url: 'https://api-staging.isnap.ai', description: 'Staging' }
-]
+// Pin the production server. Internal environments are not surfaced to
+// customers — partners only ever talk to api.isnap.ai.
+spec.servers = [{ url: 'https://api.isnap.ai' }]
 
 writeFileSync(outputPath, JSON.stringify(spec, null, 2) + '\n')
 

@@ -28,10 +28,10 @@ Link: </v1/successor-endpoint>; rel="successor-version"
 
 The OpenAPI spec also flags the operation with `"deprecated": true`.
 
-The minimum deprecation window is **30 days**, enforced in CI by
-[oasdiff](https://oasdiff.com)'s `--deprecation-days-stable 30`. iSnap
-typically gives longer for partner-facing surfaces — the
-`Sunset` date in the response is authoritative.
+The minimum deprecation window is **30 days**, and customer-facing
+surfaces typically get longer notice. The `Sunset` date in the
+response is always authoritative — read it programmatically rather
+than assuming a fixed window.
 
 ### What the SDK does for you
 

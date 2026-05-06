@@ -7,15 +7,14 @@ Everything below applies to **every** endpoint in the API. The
 per-endpoint reference is generated from the
 [OpenAPI spec](/api-reference/openapi.json) — use the sidebar to navigate.
 
-## Base URLs
+## Base URL
 
-| Environment | Base URL |
-|---|---|
-| Production | `https://api.isnap.ai` |
-| Staging | `https://api-staging.isnap.ai` |
+```
+https://api.isnap.ai
+```
 
-Test API keys (`isnap_test_*`) work against either environment but never
-hit a real device. Live keys (`isnap_live_*`) are production-only.
+Test API keys (`isnap_test_*`) produce real-shaped responses but never
+reach a real device. Live keys (`isnap_live_*`) are production traffic.
 
 ## Envelope
 

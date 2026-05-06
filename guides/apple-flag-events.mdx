@@ -5,27 +5,27 @@ description: "What line.apple_id_flagged means, how to recover, what to tell the
 
 iMessage delivery depends on Apple keeping the line's Apple ID in good
 standing. If Apple flags the account — usually for sending patterns it
-considers suspicious — iMessage stops working immediately. iSnap surfaces
-this via the `line.apple_id_flagged` webhook so you can react fast.
+considers suspicious — iMessage stops working immediately. iSnap fires
+a `line.apple_id_flagged` webhook so you can react fast.
 
-This page covers what to do on each end of the SKU split.
+Recovery differs depending on whether the line is **rental** or
+**BYOD** — both cases below.
 
-## Why it happens
+## What triggers a flag
 
-Apple's iMessage flag heuristics aren't documented, but iSnap's signal
-in the field comes down to:
+Apple doesn't publish its rules, but the patterns most likely to flag
+a line are:
 
-- **Sending patterns that look automated** — bursts, regular cadence,
+- **Sending shapes that look automated** — bursts, regular cadence,
   identical bodies across many recipients.
-- **Low reply rate** — Apple's most reliable bot signal. The
-  [warming model](/concepts/quotas-and-warming) and the new/known
-  contact split exist precisely to keep this ratio healthy.
+- **Low reply rate.** This is the most reliable signal. The
+  [warming model](/concepts/quotas-and-warming) and the new-vs-known
+  contact split exist to keep this ratio healthy.
 - **Aggressive opt-out reports** — recipients tapping "Report Junk"
   enough times.
 
-Hit any of these and the Apple ID becomes "flagged." From iSnap's
-side, `iMessage` sends start failing. The line itself is still alive —
-SMS / RCS still work. iMessage is the only channel that breaks.
+Once flagged, iMessage sends from the line start failing. The line
+itself is still alive — SMS and RCS keep working. Only iMessage breaks.
 
 ## The webhook
 

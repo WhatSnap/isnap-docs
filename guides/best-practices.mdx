@@ -125,10 +125,10 @@ The default is `reject`. Switch via
 shape; rental lines have it admin-locked because mis-configured smart
 overflow can spam pool-shared resources.
 
-## 7. Pin `api_version` in your webhook handler
+## 7. Default to log-and-skip on unknown event types
 
-When iSnap ships a MINOR bump (1.x → 1.y), webhook payloads add fields
-but never break. Your handler should:
+Webhook payloads add fields and event types over time, always
+backward-compatible within v1. Make your handler tolerant of additions:
 
 ```ts
 function handleEvent(event: WebhookEvent) {
@@ -147,7 +147,7 @@ function handleEvent(event: WebhookEvent) {
 ```
 
 A `default` that **throws** is brittle; one that **logs and skips** is
-forward-compatible. See [Versioning](/versioning) for the full policy.
+forward-compatible. See [Versioning](/versioning) for the policy.
 
 ## 8. Don't poll, subscribe
 

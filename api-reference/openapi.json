@@ -7762,122 +7762,6 @@
         }
       }
     },
-    "/v1/messages/inbound": {
-      "post": {
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "line_id": {
-                    "type": "string"
-                  },
-                  "from": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "body": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "channel": {
-                    "type": "string",
-                    "enum": [
-                      "imessage",
-                      "sms",
-                      "whatsapp"
-                    ]
-                  },
-                  "secret": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "line_id",
-                  "from",
-                  "body",
-                  "channel",
-                  "secret"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Inbound accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Message"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/messages/{id}/status": {
-      "post": {
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "required": true,
-            "name": "id",
-            "in": "path"
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "status": {
-                    "type": "string",
-                    "enum": [
-                      "sent",
-                      "delivered",
-                      "read",
-                      "failed"
-                    ]
-                  },
-                  "error_code": {
-                    "type": "string"
-                  },
-                  "error_message": {
-                    "type": "string"
-                  },
-                  "secret": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "status",
-                  "secret"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Status updated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatusUpdate"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/webhooks": {
       "post": {
         "requestBody": {
@@ -8635,12 +8519,7 @@
   },
   "servers": [
     {
-      "url": "https://api.isnap.ai",
-      "description": "Production"
-    },
-    {
-      "url": "https://api-staging.isnap.ai",
-      "description": "Staging"
+      "url": "https://api.isnap.ai"
     }
   ]
 }

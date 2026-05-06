@@ -13,22 +13,23 @@ and how to convert a successful trial into a paid line.
 ## What a trial actually is
 
 A trial is a **per-session pairing** between a prospect's phone number
-and an iSnap pool line. The prospect texts the pool number from their
-device; iSnap pairs that number to a fresh trial session and mints a
-**trial API key** scoped to send only back to the prospect. After they
-reply, they can keep the conversation going up to the streak limit.
+and a shared pool line iSnap operates. The prospect texts the pool
+number from their device; iSnap pairs that number to a fresh trial
+session and mints a **trial API key** scoped to send only back to the
+prospect. After they reply, the conversation can continue up to the
+streak limit.
 
-Three things to internalise:
+Three things to know:
 
-- **No identity is stored.** No email, no `partner_id`, no `customer_id` —
-  iSnap has only an opaque `token` your code uses to fetch status and
-  the prospect's phone number used for self-echo enforcement.
-- **Self-echo only.** The trial API key can only send to the
-  `paired_handle`. Sending to any other recipient is a 403.
-- **The streak counter is per-session.** It counts outbound messages
-  without an inbound reply. Hit `max_outbound_without_inbound`
-  consecutive sends and the line refuses further outbound until the
-  prospect replies, which resets the counter.
+- **iSnap stores no identity.** Your code gets back an opaque `token`
+  to track the trial; the prospect's phone number is the only other
+  data point, and it's used only for the self-echo check below.
+- **Self-echo only.** The trial API key can only send to the paired
+  recipient. Sending to anyone else returns 403.
+- **The streak counter caps cold outbound.** It counts outbound
+  messages without an inbound reply. Hit `max_outbound_without_inbound`
+  in a row and the line refuses further outbound until the prospect
+  replies, which resets the counter.
 
 ## 1. Mint a trial session
 
@@ -142,21 +143,21 @@ A dormant prospect texting the pool number again triggers
 
 ## 5. Conversion to paid
 
-When you decide a trial is ready to upgrade:
+When the prospect is ready to upgrade:
 
 ```ts
-// Create a real billing subscription. The trial token correlates the
-// prospect across iSnap's records (without iSnap knowing who they are).
+// Create a real billing subscription. Pass `trial_token` to attribute
+// the conversion to the trial session.
 const subscription = await isnap.billing.checkout({
   product: 'rental_iphone_monthly',
-  trial_token: trial.token             // tags the conversion in Stripe metadata
+  trial_token: trial.token
 })
 ```
 
-`trial.converted` fires once payment clears. iSnap auto-releases the
-pool line slot and provisions a real line for the prospect (rental:
-operator picks one off the shelf; BYOD: you trigger the BYOD pair flow
-next).
+`trial.converted` fires once payment clears. iSnap releases the pool
+line slot and provisions a real line — rental lines are ready to send
+right away; BYOD lines need the [pairing flow](/guides/byod-pairing)
+next.
 
 ## Errors
 

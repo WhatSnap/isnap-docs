@@ -16,25 +16,7 @@ yarn add @isnap/sdk
 The package is published as ESM with TypeScript types. Bun, Node 20+,
 Deno, and modern bundlers (Vite, Webpack, esbuild) are supported.
 
-## Distribution channels
-
-| Channel | npm dist-tag | When to use |
-|---|---|---|
-| Stable | `latest` | Production. Released after staging validation. |
-| Pre-release | `next` | Internal validation track. Suffix: `-next.<N>`. |
-
-```bash
-bun add @isnap/sdk@latest    # stable, default
-bun add @isnap/sdk@next      # validation track
-```
-
-The `next` track is published on every staging deploy with a build
-counter suffix (`1.0.0-next.42` etc.). It's there for partner-side
-canary validation; production deployments should pin to `@latest`.
-
 ## Pin by major
-
-iSnap follows semver decoupled between SDK and API:
 
 ```jsonc
 // package.json
@@ -47,12 +29,8 @@ iSnap follows semver decoupled between SDK and API:
 
 `^1.0.0` is the right default. Within a major (1.x), the SDK adds
 methods and improves retry behavior but never breaks existing call
-sites. A 2.0.0 release means breaking changes to the SDK surface
-(method renames, removed exports) — review the migration guide before
-bumping the major.
-
-This is **independent** of the API version. A `^1.0.0` SDK works
-against any 1.x backend; see [Versioning](/versioning).
+sites. A 2.0.0 release means breaking changes to the SDK surface;
+review the migration notes before bumping the major.
 
 ## What you get
 
@@ -79,12 +57,11 @@ import {
   MIN_API_VERSION
 } from '@isnap/sdk'
 
-// Resource types are also exported under their own names —
+// Resource types are exported under their own names —
 // import type { Message, Line, Webhook } from '@isnap/sdk'
 ```
 
-The default export is named, not default — there's no `import isnap
-from '@isnap/sdk'`. Mintlify-flavored ESM and you're set.
+The exports are all named — there is no default export.
 
 ## Construct the client
 
@@ -101,31 +78,11 @@ const isnap = new ISnapClient({
 })
 ```
 
-For staging, override `baseUrl: 'https://api-staging.isnap.ai'`. There
-is no environment enum — partners that span both run two `ISnapClient`
-instances with different `baseUrl`s, both reading from the same API
-key vault.
+## Versioning
 
-## Local development
+The SDK follows its own semver, decoupled from the API contract — see
+[Versioning](/versioning) for the policy.
 
-The SDK works offline (no SDK-side feature flags, no remote config) so
-you can wire it against a local backend:
+## npm
 
-```ts
-const isnap = new ISnapClient({
-  apiKey: 'isnap_test_local',
-  baseUrl: 'http://localhost:3030'
-})
-```
-
-## Versioning policy
-
-The SDK version is decoupled from the API contract version per
-industry standard (Stripe, Twilio, OpenAI all do this). Read more at
-[Versioning](/versioning).
-
-## Source
-
-- npm: [`@isnap/sdk`](https://www.npmjs.com/package/@isnap/sdk)
-- GitHub: [`WhatSnap/iSnap-App`](https://github.com/WhatSnap/iSnap-App/tree/main/packages/sdk)
-- Bug reports: GitHub issues on the iSnap-App repo.
+[`@isnap/sdk` on npm](https://www.npmjs.com/package/@isnap/sdk).

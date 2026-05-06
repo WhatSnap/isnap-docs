@@ -1,11 +1,11 @@
 ---
 title: "Channels"
-description: "iMessage, SMS, RCS — what they are, when to pick each, the fallback chain, why no WhatsApp."
+description: "iMessage, SMS, RCS — what they are, when to pick each, the fallback chain."
 ---
 
-iSnap ships three channels: **iMessage**, **SMS**, **RCS**. Every send
-picks one (or lets `auto` pick); every received message reports which
-one was used. WhatsApp is intentionally out of scope.
+iSnap supports three channels: **iMessage**, **SMS**, **RCS**. Every
+send picks one (or lets `auto` pick); every received message reports
+which one was used.
 
 ## The three channels
 
@@ -48,17 +48,6 @@ Android line.
   default on most Androids; falls back to SMS if not).
 - **Risk surface:** lower than SMS for cold outbound; carriers treat
   RCS more like a brand channel.
-
-### Why no WhatsApp
-
-WhatsApp is a separate ecosystem with a separate compliance regime
-(Meta WABA verification, opt-in templates, BSP partnerships). Mixing
-WhatsApp into iSnap's "real-device P2P" model would dilute the
-positioning and pull iSnap into a different competitive category
-(Twilio / MessageBird / Sinch's WhatsApp BSP business).
-
-If you need WhatsApp, use a Meta BSP. iSnap stays focused on iMessage,
-SMS, and RCS.
 
 ## The `channel` request field
 

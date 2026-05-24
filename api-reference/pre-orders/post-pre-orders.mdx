@@ -24,7 +24,7 @@ queued first-come, first-served per tier.
 
 | Field | Value |
 |---|---|
-| `billing_tier` | Required. `rental_iphone` or `rental_android`. (BYOD doesn't pre-order — slots provision instantly via [`POST /v1/billing/byod-checkout`](/api-reference/billing/post-billing-byod-checkout).) |
+| `billing_tier` | Required. `rental_iphone` or `rental_android`. (BYOD doesn't pre-order — slots provision instantly via the dashboard at [platform.isnap.ai](https://platform.isnap.ai).) |
 | `preferred_area_codes` | Optional. Up to 5 codes (3–10 chars each). iSnap matches the first available; falls back to any code if all 5 are exhausted. Empty array means "any area code". |
 
 ## Response

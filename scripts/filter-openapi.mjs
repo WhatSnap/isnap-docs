@@ -83,11 +83,26 @@ const LEGACY_DEVICE_CALLBACKS = new Set([
   '/v1/messages/{id}/status'
 ])
 
+// `/v1/billing/*` is shipped backend code but isn't useful as a public
+// partner surface today. The two legitimate billing patterns (wholesale
+// = one master account with its own card; reseller OAuth = per-end-user
+// accounts each with their own card) are both handled outside this
+// surface — wholesale via the iSnap dashboard at platform.isnap.ai;
+// reseller via an OAuth flow that hasn't shipped yet. Surfacing the
+// endpoints prematurely tempts integrators into a third (mis-)usage
+// where they'd store end-customer cards on their own Stripe customer.
+// Re-enable when reseller OAuth ships and a real white-label scenario
+// exists. Tracked in Linear.
+const INTERNAL_PREFIXES = ['/v1/billing/']
+
 const before = Object.keys(spec.paths ?? {}).length
 const kept = {}
 const dropped = []
 for (const [path, ops] of Object.entries(spec.paths ?? {})) {
-  if (path.startsWith('/v1/') && !LEGACY_DEVICE_CALLBACKS.has(path)) {
+  const isV1 = path.startsWith('/v1/')
+  const isLegacyCallback = LEGACY_DEVICE_CALLBACKS.has(path)
+  const isInternal = INTERNAL_PREFIXES.some((prefix) => path.startsWith(prefix))
+  if (isV1 && !isLegacyCallback && !isInternal) {
     kept[path] = ops
   } else {
     dropped.push(path)

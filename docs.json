@@ -125,20 +125,6 @@
             ]
           },
           {
-            "group": "Billing",
-            "pages": [
-              "api-reference/billing/post-billing-checkout",
-              "api-reference/billing/post-billing-byod-checkout",
-              "api-reference/billing/get-billing-subscriptions",
-              "api-reference/billing/delete-billing-subscriptions-id",
-              "api-reference/billing/get-billing-invoices",
-              "api-reference/billing/get-billing-payment-methods",
-              "api-reference/billing/post-billing-payment-methods",
-              "api-reference/billing/post-billing-payment-methods-id-default",
-              "api-reference/billing/delete-billing-payment-methods-id"
-            ]
-          },
-          {
             "group": "Attachments",
             "pages": [
               "api-reference/attachments/post-attachments",

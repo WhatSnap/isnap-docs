@@ -1,21 +1,23 @@
 ---
 title: "Billing"
-description: "How iSnap charges for lines and BYOD slots, what cancellation does to in-flight subscriptions, and where partners see the source of truth."
+description: "How iSnap charges for lines and BYOD slots, what cancellation does to in-flight subscriptions, and where to manage payment."
 ---
 
-iSnap bills three things — rental lines, BYOD slots, and pre-orders — through Stripe. This page explains the lifecycle of each, the timing rules that surprise people (no proration, trial-billed-from-day-one), and the API surface that surfaces it.
+iSnap bills three things — rental lines, BYOD slots, and pre-orders — through Stripe. This page explains the timing rules that surprise people (no proration, trial-billed-from-day-one) and where to actually manage your payment + invoices.
 
 For SKU choice (rental vs BYOD) see [BYOD vs Rental](/concepts/byod-vs-rental). For how line ownership moves through procurement → active → released, see [Line lifecycle](/concepts/line-lifecycle).
 
+## Where you manage billing
+
+**Use the dashboard at [platform.isnap.ai](https://platform.isnap.ai).** That's where you add a card, view invoices, cancel subscriptions, and download PDF receipts. There's no separate API surface today — `/v1/billing/*` exists in the backend but is reserved for the iSnap dashboard itself and for future reseller integrations (per-end-user OAuth flow, not yet shipped). If you're building a white-label product on top of iSnap and need programmatic billing access, talk to us first.
+
 ## The three things you pay for
 
-| What | Stripe product | Cadence | Created by |
-|---|---|---|---|
-| Rental line (`rental_iphone` / `rental_android`) | Per-tier monthly price (`$175` / `$250`) | Monthly | `POST /v1/billing/checkout` after `POST /v1/lines/{id}/reserve` |
-| BYOD slot (`byod_imessage` / `byod_android`) | Quantity-driven `$15/mo` or `$150/yr` per slot | Monthly or annual | `POST /v1/billing/byod-checkout` |
-| Pre-order | One-time Stripe `PaymentIntent` for the first month | One-shot | `POST /v1/pre-orders` |
-
-Each Stripe subscription has its own `current_period_start` / `current_period_end` (unix seconds). Partners read them via `GET /v1/billing/subscriptions`; the dashboard reads the same shape.
+| What | Stripe product | Cadence |
+|---|---|---|
+| Rental line (`rental_iphone` / `rental_android`) | Per-tier monthly price (`$175` / `$250`) | Monthly |
+| BYOD slot (`byod_imessage` / `byod_android`) | Quantity-driven `$15/mo` or `$150/yr` per slot | Monthly or annual |
+| Pre-order | One-time Stripe `PaymentIntent` for the first month | One-shot |
 
 ## Locked-in rules
 
@@ -23,45 +25,40 @@ These are deliberately rigid — they keep the integration math predictable and 
 
 - **No proration.** Mid-period changes (adding a slot, switching tier, releasing a line) bill the full next month at the new rate. Stripe's `proration_behavior` is set to `none` on every subscription update. If a partner needs precise per-day accounting they bake it into their own consumer-facing pricing.
 - **Trials are billed.** Trial sessions (`POST /v1/trial/init`) provision a real shared-pool line backed by a real BYOD subscription. We charge from day one — the trial is about partner integration ergonomics (zero-config pairing, dormancy guarantees), not about a free month of telephony. Anti-abuse: the trial enum doesn't mean "unbilled."
-- **Wholesale, monthly, end-of-month.** Reseller partners (WhatSnap, etc.) get one invoice on the last day of each month for the sum of all active lines that touched their account. Test-mode lines (`isnap_test_*`) do not bill; live lines (`isnap_live_*`) do.
+- **Wholesale, monthly, end-of-month.** Reseller partners get one invoice on the last day of each month for the sum of all active lines that touched their account. Test-mode lines (`isnap_test_*`) do not bill; live lines (`isnap_live_*`) do.
 
 ## Cancellation timing
 
-`DELETE /v1/billing/subscriptions/{id}` schedules the cancellation at the end of the current billing period — it does **not** prorate. The line stays active until the period rolls over, you can keep sending up to the cap, and the subscription surfaces `cancel_at_period_end: true` in `GET /v1/billing/subscriptions` until then.
+Cancelling a subscription (via the dashboard) schedules termination at the end of the current billing period — it does **not** prorate. The line stays active until the period rolls over, you can keep sending up to the cap, and the subscription is flagged `cancel_at_period_end: true` until then.
 
 When the period rolls over:
 - Stripe stops charging
 - Rental: iSnap reclaims the line to the marketplace (`status: 'available'`)
-- BYOD: the slot count on `byod_subscriptions` decrements, freeing capacity for a new pair
+- BYOD: the slot count decrements, freeing capacity for a new pair
 
-If you need the line gone *immediately* (not at period end), call `POST /v1/lines/{id}/release` — that's a different operation. Release skips the Stripe wait and surrenders the line right now; you forfeit the unused portion of the period (no proration credit, see above). Most partners cancel via the subscription, not via release.
+If you need the line gone *immediately* (not at period end), call [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release). Release skips the Stripe wait and surrenders the line right now; you forfeit the unused portion of the period (no proration credit, see above). Most partners cancel via the dashboard, not via release.
 
 ## Transfer of ownership
 
-`POST /v1/lines/{id}/transfer-ownership` moves the line between iSnap users. The underlying Stripe subscription stays on the original payer until the period rolls over — the new owner gets billed starting from the next period. There is no Stripe `customer_id` swap mid-period; the gap between "line is theirs" and "subscription is theirs" is intentional and documented.
+[`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/post-lines-id-transfer-ownership) moves the line between iSnap users. The underlying Stripe subscription stays on the original payer until the period rolls over — the new owner gets billed starting from the next period. There is no Stripe `customer_id` swap mid-period; the gap between "line is theirs" and "subscription is theirs" is intentional and documented.
 
 Preserves the paired device session by default — outbound traffic doesn't pause. Pass `preserve_device_session: false` to force the new owner to re-pair before they can send.
 
 ## Pre-orders
 
-`POST /v1/pre-orders` creates a Stripe `PaymentIntent` for the first month plus an inventory task for ops. `device_status` on the pre-order tracks procurement (`awaiting_hardware → received → setup_in_progress → ready → deployed`); the `pre_order.fulfilled` webhook fires the moment ops completes the setup and the matching line is activated under your account.
+[`POST /v1/pre-orders`](/api-reference/pre-orders/post-pre-orders) creates a Stripe `PaymentIntent` for the first month plus an inventory task for ops. `device_status` on the pre-order tracks procurement (`awaiting_hardware → received → setup_in_progress → ready → deployed`); the `pre_order.fulfilled` webhook fires the moment ops completes the setup and the matching line is activated under your account.
 
-Cancellation refunds via Stripe (`POST /v1/pre-orders/{id}/cancel`). If ops has already moved past `pending`, the device is converted to fleet provisioning rather than discarded — you still get refunded.
+Cancellation refunds via Stripe ([`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/post-pre-orders-id-cancel)). If ops has already moved past `pending`, the device is converted to fleet provisioning rather than discarded — you still get refunded.
 
-## Where to look
+## Where the data lives
 
-- `GET /v1/billing/subscriptions` — every active Stripe subscription on the customer record, both rental and BYOD slots
-- `GET /v1/billing/invoices` — reverse-chronological invoice history, with hosted invoice URL + PDF link
-- `GET /v1/billing/payment-methods` — saved card metadata (brand, last4); never the PAN
-- `GET /v1/pre-orders` — cursor-paginated pre-order list with `status` + `device_status` filters
-
-All amounts are integer cents (`4999` = `$49.99`); all timestamps are unix seconds. The casing is snake_case across the surface — `current_period_start`, `cancel_at_period_end`, `invoice_pdf`, `hosted_invoice_url`.
+All cards, subscriptions, and invoices for your account live on Stripe and are surfaced in the iSnap dashboard. Amounts are stored as integer cents (`4999` = `$49.99`); timestamps are unix seconds; field casing is snake_case throughout (`current_period_start`, `cancel_at_period_end`, `invoice_pdf`, `hosted_invoice_url`) — useful to know if you're scripting reconciliation against the dashboard exports.
 
 ## Webhooks
 
 | Event | Fires when |
 |---|---|
-| `pre_order.fulfilled` | Ops completes the procurement + setup pipeline and the line is activated under the customer |
+| `pre_order.fulfilled` | Ops completes the procurement + setup pipeline and the line is activated under your account |
 | `pre_order.cancelled` | A pre-order is cancelled (refund issued or in-flight) |
 | `pre_order.refunded` | Stripe issues a refund on the pre-order's payment intent |
 

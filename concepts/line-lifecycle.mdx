@@ -40,10 +40,10 @@ available ──────── reserved ─────── active ──�
 
 - The line is hidden from public `GET /v1/lines` listings
 - Only the reserving user can read it via `GET /v1/lines/{id}` with API key auth
-- Activation (`POST /v1/billing/checkout`) flips it to `active` and stops the release timer
+- Activation (`POST /v1/lines/{id}/activate`, typically after a Stripe Checkout completes in the dashboard) flips it to `active` and stops the release timer
 - Manual release (`POST /v1/lines/{id}/release`) flips it back to `available` immediately
 
-The 15-min window exists to let partners drive an embedded Stripe Checkout flow without race conditions — long enough for a customer to fill out card details, short enough that abandoned reservations don't starve the marketplace. The window is not configurable.
+The 15-min window exists to let the dashboard drive a Stripe Checkout flow without race conditions — long enough for a customer to fill out card details, short enough that abandoned reservations don't starve the marketplace. The window is not configurable.
 
 ## Atomic assign
 
@@ -71,9 +71,9 @@ Status stays `active` throughout — transfer is not a state transition, it's an
 These do different things:
 
 - `POST /v1/lines/{id}/release` — immediate. The line drops back to `available`, the device session unpairs, ongoing sends complete but no new ones are accepted. The Stripe subscription is scheduled for end-of-period cancellation; you forfeit the unused portion.
-- `DELETE /v1/billing/subscriptions/{id}` — deferred. The line stays `active` and usable until the period rolls over. Then the subscription cancels and the line drops to `available`. Use this when you want to keep sending through the paid month and only stop billing the *next* one.
+- **Subscription cancel** (via the [dashboard](https://platform.isnap.ai)) — deferred. The line stays `active` and usable until the period rolls over. Then the subscription cancels and the line drops to `available`. Use this when you want to keep sending through the paid month and only stop billing the *next* one.
 
-Most partners use release for immediate offboarding and subscription cancel for graceful churn.
+Most partners use release for immediate offboarding and the dashboard cancel for graceful churn.
 
 ## Events on the edges
 

@@ -12,7 +12,7 @@ which one was used.
 ### iMessage
 
 Apple-native, blue bubbles, end-to-end encrypted. Available only on
-iSnap's Mac+iPhone hardware (rental: in our farm; BYOD: customer-owned).
+Mac+iPhone hardware (rental: in our farm; BYOD: you own it).
 
 - **Capabilities:** rich text, large attachments, native effects
   (bubble + screen), reactions, typing indicators, read receipts.
@@ -24,8 +24,8 @@ iSnap's Mac+iPhone hardware (rental: in our farm; BYOD: customer-owned).
 
 ### SMS
 
-Universal carrier-routed text. Available only on iSnap's Android
-hardware (rental: in our farm; BYOD: customer-owned Android).
+Universal carrier-routed text. Available only on Android
+hardware (rental: in our farm; BYOD: you own the Android).
 
 - **Capabilities:** plain text up to 160 chars per segment (long
   messages get auto-split), MMS for attachments (carrier caps vary,
@@ -122,17 +122,18 @@ sending from an Android line; the iMessage line falls direct to SMS.
 
 ## Lookup informs channel selection
 
-Before cold outbound, `POST /v1/lookup` tells you what's reachable:
+Before cold outbound, `POST /v1/lookup` tells you if iMessage is an
+option:
 
 ```ts
 const probe = await isnap.lookup.check({ handle: '+15551234567' })
-// probe.imessage: boolean | null  (null = lookup pending, retry)
-// probe.line_type: 'mobile' | 'landline' | 'voip' | null
-// probe.carrier: 'AT&T' | ... | null
+// probe.imessage: true | false  — the reliable signal
 ```
 
-A landline `line_type` means SMS / RCS will fail — flag the lead before
-you waste a send.
+Use it as a pre-send gate so you don't waste an iMessage attempt on a
+recipient who only has SMS. See
+[`POST /v1/lookup`](/api-reference/lookup/post-lookup) for the full
+contract.
 
 ## Inbound: the `service` field on received messages
 

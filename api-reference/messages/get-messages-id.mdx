@@ -1,4 +1,70 @@
 ---
-title: "GET /v1/messages/{id}"
+title: "Get a message"
+description: "Fetch a single message by ID — full shape with effect, reply chain, metadata."
 openapi: "GET /v1/messages/{id}"
 ---
+
+Returns the full message object — including `effect`,
+`reply_to_message_id`, `metadata`, the resolved `service` (which
+channel was actually used), and `queue_info` if the message is still
+queued.
+
+## When to use this
+
+- **Polling for status during the quickstart** while you're still
+  learning the API.
+- **Debugging a specific message** flagged in your own logs by ID.
+- **Reconciling a list response** to get fields the list endpoint
+  doesn't return.
+
+## Polling vs webhooks
+
+In a production integration, **don't poll this endpoint to track
+delivery status**. Subscribe to the `message.sent`,
+`message.delivered`, and `message.failed`
+[webhook events](/guides/webhooks) instead — each event delivers the
+full message object, so you don't need a follow-up fetch.
+
+Polling is fine for one-off debugging or quickstart exploration.
+
+## 72-hour retention
+
+iSnap retains messages for 72 hours. After that, this endpoint returns
+404 `message_not_found`. Mirror messages into your own database via
+[webhooks](/guides/webhooks) if you need long-term history.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `message_not_found` | The ID doesn't exist on your account, or the message is older than 72 h and has been purged. |
+| 403 | `line_not_owned` | The message belongs to a line your API key isn't scoped to. |
+
+Example:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 404,
+    "code": "message_not_found",
+    "message": "No message with that ID"
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+## Related
+
+- [`GET /v1/messages`](/api-reference/messages/get-messages) — list
+  endpoint, cursor-paginated.
+- [`DELETE /v1/messages/{id}`](/api-reference/messages/delete-messages-id) —
+  cancel a queued message.
+- [Webhooks](/guides/webhooks) — push delivery, no polling needed.

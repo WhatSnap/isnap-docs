@@ -1,4 +1,91 @@
 ---
-title: "GET /v1/webhooks/events"
+title: "Event catalog"
+description: "List the webhook event types you can subscribe to."
 openapi: "GET /v1/webhooks/events"
 ---
+
+Returns the catalog of webhook event types iSnap currently fires —
+the canonical source of what's available to subscribe to. Each entry
+carries the event name, a one-line description, and the payload
+schema reference.
+
+## Use this to
+
+- **Discover what's available** before calling
+  [`POST /v1/webhooks`](/api-reference/webhooks/post-webhooks). The
+  `events` array on a subscription must use names from this catalog.
+- **Build a UI for picking events** in your own dashboard — read
+  this list, render checkboxes, send the selection back as the
+  subscription's `events` field.
+- **Detect new event types** added in additive releases. Polling
+  this endpoint periodically and diffing against your subscriptions
+  surfaces events you might want to start consuming.
+
+## Current catalog (v1)
+
+The shipped event families. Subscribe to individual events, to a
+family wildcard (`line.*`), or to everything with `*`.
+
+**Messages** — `message.queued`, `message.sent`, `message.delivered`,
+`message.read`, `message.received`, `message.failed`,
+`message.scheduled`, `message.cancelled`. Family wildcard:
+`message.*`.
+
+**Lines** — `line.connected` (fires when a rental activates or a BYOD
+bridge confirms), `line.disconnected`, `line.offline`, `line.degraded`
+(BYOD only — rentals suppress these), `line.apple_id_flagged`,
+`line.quota_warning`, `line.quota_exceeded`. Family wildcard:
+`line.*`.
+
+**Reactions** — `reaction.added`, `reaction.received`,
+`reaction.removed`. Family wildcard: `reaction.*`.
+
+**Typing indicators** — `typing_indicator.started`,
+`typing_indicator.stopped`. Family wildcard: `typing_indicator.*`.
+
+**Trials** — `trial.linked`, `trial.dormant`, `trial.reactivated`,
+`trial.converted`. Family wildcard: `trial.*`.
+
+**Pre-orders** — `pre_order.fulfilled`, `pre_order.cancelled`,
+`pre_order.refunded`. Family wildcard: `pre_order.*`.
+
+**Testing** — `webhook.test` for the rotate-secret / dispatch test
+hook surface.
+
+This page is just a snapshot — `GET /v1/webhooks/events` is the
+authoritative source. If you see a discrepancy, the live endpoint
+wins.
+
+## Why the catalog is an endpoint, not a static doc
+
+The catalog grows over time (additive within v1). Hardcoding the
+names in your code creates drift. Reading from this endpoint at
+boot — or caching it for a few minutes — keeps you aligned with
+what iSnap actually emits.
+
+## Pagination
+
+Cursor-paginated like the other list endpoints. In practice the
+catalog is small enough to fit in a single page; pass `limit` only
+if you want to override the default.
+
+## Auth
+
+Requires an API key like every other `/v1/*` endpoint. The catalog
+is the same for every account — there are no per-account event
+types — but iSnap still requires auth to avoid letting the catalog
+become a free-form ping target.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+This endpoint has no further endpoint-specific error codes.
+
+## Related
+
+- [`POST /v1/webhooks`](/api-reference/webhooks/post-webhooks) —
+  subscribe to events from this catalog.
+- [Webhooks guide](/guides/webhooks) — payload structure, signature
+  verification, deduplication.

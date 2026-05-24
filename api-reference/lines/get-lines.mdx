@@ -1,4 +1,68 @@
 ---
-title: "GET /v1/lines"
+title: "List available lines"
+description: "Browse the marketplace of lines you can rent — filter by tier, area code, region, and status."
 openapi: "GET /v1/lines"
 ---
+
+Returns the marketplace catalog of lines you can rent or pair: rental
+iPhones, rental Androids, and BYOD slots. This is the read-side of the
+marketplace — use it to surface options in your own UI before
+[`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign).
+
+For lines already on your account, see
+[`GET /v1/lines/my`](/api-reference/lines/get-lines-my).
+
+## Query parameters
+
+| Param | Behavior |
+|---|---|
+| `billing_tier` | Filter by tier: `rental_iphone`, `rental_android`, `byod_imessage`, `byod_android`, `shared_pool`. |
+| `area_code` | Filter by US area code (3 chars) or international prefix (up to 10 chars). |
+| `region` | Free-form region label (e.g. `US-CA`). |
+| `status` | Filter by listing status (typically `available`). |
+
+All parameters are optional. With no filters, you get the unfiltered
+catalog of available lines.
+
+## Response shape
+
+The response is an array of `Line` records. Notable fields per item:
+
+| Field | Notes |
+|---|---|
+| `id` | `line_…` identifier. Use this in all subsequent calls. |
+| `phone_number` | E.164 phone number for rental lines. Empty / placeholder for BYOD slots — the number is assigned when the bridge pairs. |
+| `area_code` | Surfaced separately for filtering / display. |
+| `billing_tier` | Determines pricing and capability set. |
+| `monthly_price` | USD per month, decimal (e.g. `175.00`). |
+| `status` | Listing status — typically `available` for the marketplace view. |
+| `metadata` | Free-form labels iSnap surfaces on the listing (e.g. carrier, region tags). |
+
+## When to use this vs `/v1/lines/my`
+
+| Use case | Endpoint |
+|---|---|
+| "What lines can I rent?" | `GET /v1/lines` |
+| "Which lines do I already have?" | `GET /v1/lines/my` |
+| "Pick one and rent it" | `POST /v1/lines/assign` (or `/reserve` + `/activate` if you want the two-step flow) |
+
+The catalog is **eventually consistent** — a line you see may be
+claimed by someone else between the read and the assign. Handle the
+`409 line_already_assigned` error gracefully.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 422 | `validation_error` | `billing_tier` not in the enum, or `area_code` longer than 10 chars. |
+
+## Related
+
+- [`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) — claim a line from the catalog.
+- [`GET /v1/lines/my`](/api-reference/lines/get-lines-my) — your own lines.
+- [Concepts → Line lifecycle](/concepts/line-lifecycle) — what each `status` means.

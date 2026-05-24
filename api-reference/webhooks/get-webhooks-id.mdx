@@ -1,4 +1,38 @@
 ---
-title: "GET /v1/webhooks/{id}"
+title: "Get a webhook subscription"
+description: "Fetch a single subscription's URL, events, scope, and delivery health."
 openapi: "GET /v1/webhooks/{id}"
 ---
+
+Returns the full subscription record by ID — useful when you need
+the current event list or scope and only have the `wh_…` ID stored
+in your system.
+
+## What's NOT in the response
+
+The signing `secret` is never re-emitted after the initial create
+(or after a rotation). This endpoint returns only the metadata — URL,
+events, scope, active state, last-delivery timestamps. If you lost
+the secret, call
+[`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/post-webhooks-id-rotate-secret)
+to mint a new one.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `webhook_not_found` | No subscription with that `wh_…` ID on this account. |
+
+## Related
+
+- [`GET /v1/webhooks`](/api-reference/webhooks/get-webhooks) — list
+  all subscriptions.
+- [`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/patch-webhooks-id) —
+  update URL, events, scope.
+- [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/get-webhooks-id-deliveries) —
+  recent deliveries for this subscription.

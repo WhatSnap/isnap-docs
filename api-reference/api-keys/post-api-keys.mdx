@@ -1,4 +1,85 @@
 ---
-title: "POST /v1/api-keys"
+title: "Create an API key"
+description: "Mint a new live or test key — optionally scoped to specific lines. The full key is returned once."
 openapi: "POST /v1/api-keys"
 ---
+
+Creates a new API key on your account. The full secret is returned
+**exactly once** in the response — store it server-side immediately.
+Subsequent reads only return the prefix.
+
+## Request shape
+
+```json
+{
+  "name": "Production worker",
+  "scope": "live",
+  "line_ids": ["line_aBc..."]
+}
+```
+
+| Field | Value |
+|---|---|
+| `name` | Optional. Human-readable label, up to 100 chars. Surfaces in the dashboard and on `GET /v1/api-keys`. |
+| `scope` | `live` (default) or `test`. Test keys can only target test lines / pool resources. |
+| `line_ids` | Optional. Array of `line_…` IDs to scope the key to. If omitted, the key has access to all lines on the account. |
+
+## Response
+
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "key": "isnap_live_pSk_aBcDeF...",
+  "name": "Production worker",
+  "prefix": "isnap_live_pSk_aBc",
+  "scope": "live",
+  "line_ids": ["line_aBc..."],
+  "rate_limit": 600,
+  "created_at": "2026-05-11T22:00:00Z",
+  "last_used_at": null
+}
+```
+
+| Field | Notes |
+|---|---|
+| `key` | **The full secret — returned once.** Never logged again. Store it in your secret manager immediately. |
+| `prefix` | First N chars. Use this to identify the key in your logs without leaking the full secret. |
+| `rate_limit` | Requests-per-minute ceiling, account-wide on this key. |
+
+## Scope rules
+
+- **`live`** — production. Targets your real lines and bills against
+  your real account.
+- **`test`** — test/sandbox. Targets test lines (shared pool, trials,
+  designated test rental lines). Useful for CI and local dev. No
+  billing impact for test sends.
+
+If `line_ids` is set, the key can only operate against those lines.
+Calls referencing any other `line_id` return `403 line_not_in_scope`.
+
+## Best practices
+
+- **One key per service.** Don't share a key between unrelated
+  services — rotation is per-key, so a single shared key blocks
+  rotation when one service can't redeploy.
+- **Name everything.** `Production worker`, `Staging worker`,
+  `Eng workstation laptops` — naming makes audit trails readable.
+- **Scope by line when possible.** Limits blast radius if a key
+  leaks.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | A `line_id` in `line_ids` isn't on your account. |
+| 422 | `validation_error` | `name` too long, `scope` not in enum, or `line_id` malformed. |
+
+## Related
+
+- [`GET /v1/api-keys`](/api-reference/api-keys/get-api-keys) — list keys (prefix only, no secret).
+- [`DELETE /v1/api-keys/{id}`](/api-reference/api-keys/delete-api-keys-id) — revoke a key.

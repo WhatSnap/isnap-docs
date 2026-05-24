@@ -1,4 +1,58 @@
 ---
-title: "PATCH /v1/webhooks/{id}"
+title: "Update a webhook subscription"
+description: "Change URL, events, scope, description, or active state."
 openapi: "PATCH /v1/webhooks/{id}"
 ---
+
+Updates fields on an existing subscription. Only the fields you pass
+are changed; omitted fields keep their current value.
+
+The signing **secret is not touched** by this endpoint. Use it to
+move a webhook to a new URL or change the event filter without
+forcing partners to re-sync the secret. To rotate the secret, call
+[`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/post-webhooks-id-rotate-secret).
+
+## Fields you can update
+
+| Field | Effect |
+|---|---|
+| `url` | New delivery URL. Must be HTTPS. |
+| `events` | Replace the event filter. Pass the full list, not a delta. |
+| `line_ids` | Replace the scope. Pass `null` for "all lines on the account", or an array to restrict. |
+| `description` | Free-form label surfaced in the dashboard listing. |
+| `active` | `false` pauses delivery without deleting the subscription; useful when you need to drain a queue. |
+
+## Replace, not merge
+
+`events` and `line_ids` are **replace** semantics. To add an event to
+an existing subscription, fetch via
+[`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhooks-id),
+append, and PATCH the full new list.
+
+## Pausing instead of deleting
+
+If you want to stop deliveries temporarily (e.g. during a deploy or
+an incident) without losing the signing secret and subscription
+history, PATCH `active: false`. Re-enable later with `active: true`.
+Events that fire while inactive are **not** queued — they're dropped.
+For a clean shutdown that keeps replays available, see
+[deliveries](/api-reference/webhooks/get-webhooks-id-deliveries).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `webhook_not_found` | No subscription with that `wh_…` ID. |
+| 422 | `validation_error` | `url` not HTTPS, `events` empty, or `line_ids` references a line your key can't see. |
+
+## Related
+
+- [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/post-webhooks-id-rotate-secret) —
+  change the signing secret.
+- [`DELETE /v1/webhooks/{id}`](/api-reference/webhooks/delete-webhooks-id) —
+  remove the subscription entirely.

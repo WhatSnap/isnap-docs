@@ -1,4 +1,85 @@
 ---
-title: "POST /v1/webhooks"
+title: "Create a webhook subscription"
+description: "Register a URL to receive iSnap events with a signed payload."
 openapi: "POST /v1/webhooks"
 ---
+
+Registers a URL to receive events from iSnap. Each subscription gets
+its own **signing secret** at creation — store it immediately, it's
+only shown once. Every delivery to your URL is signed with HMAC-SHA256
+so you can verify the request is genuinely from iSnap before trusting
+the payload.
+
+## What you'll get back
+
+The response includes a `secret` field (`sec_…`). **iSnap shows this
+once** — there's no way to retrieve it again, only to
+[rotate it](/api-reference/webhooks/post-webhooks-id-rotate-secret).
+Persist the secret in your secret manager before doing anything else.
+
+## Pick your events
+
+Subscribe to the specific events you need rather than catching
+everything. Discover the available events via
+[`GET /v1/webhooks/events`](/api-reference/webhooks/get-webhooks-events) —
+that endpoint is the live catalog and replaces any hardcoded list.
+
+The minimum is one event; you can pass an array of any size. Common
+shapes:
+
+```json
+{ "events": ["message.received"] }
+{ "events": ["message.received", "message.failed"] }
+```
+
+Subscribing to an event you never use costs nothing — iSnap just
+delivers a few more events. The opposite (forgetting to subscribe to
+an event you care about) means missing data.
+
+## Scope to specific lines
+
+Pass `line_ids` to receive events only for that subset. Useful when:
+
+- A specific service in your stack only handles a few lines.
+- You're running multiple subscriptions split by team / customer /
+  environment.
+
+Omitting `line_ids` (or passing `null`) means "all lines on this
+account."
+
+## Endpoint requirements
+
+The URL you register must:
+
+- Be **HTTPS**. iSnap refuses `http://` URLs.
+- Respond with **2xx in under 30 seconds**. Anything else counts as a
+  failed delivery and triggers a retry.
+- Tolerate **at-least-once delivery**. iSnap retries on transport
+  errors; deduplicate on `event.id` server-side.
+
+For local development, use a tunnel
+([Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
+[ngrok](https://ngrok.com)) and register the tunnel URL on a test
+subscription.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 422 | `validation_error` | `url` is not HTTPS, malformed, or `events` empty / contains an unknown event. `error.issues[]` carries per-field details. |
+| 403 | `line_not_owned` | A `line_id` you passed in scope isn't owned by your account. |
+| 409 | `subscription_limit_reached` | The account already has the maximum number of active subscriptions. Delete an unused one first. |
+
+## Related
+
+- [Webhooks guide](/guides/webhooks) — signature verification,
+  deduplication, retries.
+- [`GET /v1/webhooks/events`](/api-reference/webhooks/get-webhooks-events) —
+  the live event catalog.
+- [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/post-webhooks-id-rotate-secret) —
+  rotate the signing secret without re-creating the subscription.

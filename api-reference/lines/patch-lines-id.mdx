@@ -1,4 +1,67 @@
 ---
-title: "PATCH /v1/lines/{id}"
+title: "Update line metadata"
+description: "Attach or change free-form metadata on a line — your own labels, tags, internal IDs."
 openapi: "PATCH /v1/lines/{id}"
 ---
+
+Updates the `metadata` map on a line. iSnap stores it verbatim and
+returns it on every line read — use it to thread your own identifiers
+(CRM customer ID, region label, team owner) through the API.
+
+## Request shape
+
+```json
+{
+  "metadata": {
+    "team": "sales-east",
+    "internal_id": "cust_4582"
+  }
+}
+```
+
+| Field | Behavior |
+|---|---|
+| `metadata` | A flat object. String, number, boolean, or `null` values. `null` deletes the key. |
+
+The metadata is **replaced** at the top level, but value-level merge
+semantics still apply: pass only the keys you want to change. To
+remove a key, send `null`.
+
+## What you can't change here
+
+This endpoint is metadata-only. It deliberately doesn't let you change:
+
+- `phone_number`, `area_code`, `billing_tier` — these are properties
+  of the underlying line.
+- `status` — driven by the lifecycle endpoints (`/reserve`,
+  `/activate`, `/release`) and ops.
+- Quota / throttle config — see
+  [`PATCH /v1/lines/{id}/config`](/api-reference/lines/patch-lines-id-config).
+
+## What metadata is good for
+
+- **Threading your own customer ID** so webhooks carry it back to your
+  database (`event.data.line.metadata.cust_id`).
+- **Region or team tags** that drive your own routing or dashboards.
+- **A/B identifiers** when you're testing different warming or content
+  strategies across multiple lines.
+
+iSnap never indexes metadata — don't rely on it for filtering inside
+the API. Use your own database for that.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | The line ID isn't on your account. |
+| 422 | `validation_error` | `metadata` not an object, or `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`GET /v1/lines/{id}`](/api-reference/lines/get-lines-id) — read the current metadata.
+- [`PATCH /v1/lines/{id}/config`](/api-reference/lines/patch-lines-id-config) — change quota / throttle config.

@@ -1,4 +1,70 @@
 ---
-title: "GET /v1/trial/activity"
+title: "Get trial activity"
+description: "Account-wide snapshot of how the trials you've minted are behaving — paired handles, send counts, dormancy headroom."
 openapi: "GET /v1/trial/activity"
 ---
+
+Returns a snapshot of trial sessions on the calling account — paired
+handles, message counts, dormancy state, and how much streak headroom
+each trial has left.
+
+Use it for dashboards, conversion analytics, or to flag trials that
+are close to going dormant so you can re-engage the prospect before
+they drop off.
+
+For a single trial keyed by token, use
+[`GET /v1/trial/status`](/api-reference/trial/get-trial-status).
+
+## What the response contains
+
+The endpoint returns an array of activity records, each with:
+
+| Field | What it's for |
+|---|---|
+| `trial_id` | iSnap-side identifier. |
+| `pool_line_id` | Which pool line the trial is running on. |
+| `paired_handle` | The prospect's phone number, captured at pairing. |
+| `status` | `active` or `dormant`. Pre-paired and revoked trials aren't included. |
+| `last_inbound_at` | ISO timestamp of the most recent inbound from `paired_handle`. `null` if there's been none since the lifecycle started. |
+| `last_activity_at` | ISO timestamp of the most recent message in either direction. |
+| `messages_sent_total` | Outbounds on the trial, lifetime. |
+| `messages_received_total` | Inbounds on the trial, lifetime. |
+| `activity_rule` | `{ max_outbound_without_inbound, outbound_since_last_inbound, remaining_before_dormant }`. The third field is what your UI displays to show how close the trial is to the streak cap. |
+
+## What this is good for
+
+- **Conversion funnel dashboards.** Render a table of active trials,
+  their pairing age, and `remaining_before_dormant` to prioritize
+  outreach.
+- **Drop-off detection.** Filter for `status: "dormant"` to find
+  prospects who paired but went quiet — usually the right list to
+  follow up on.
+- **Volume sanity checks.** `messages_sent_total` /
+  `messages_received_total` per trial surfaces "one-sided" trials
+  (lots of outbound, no inbound) that may indicate a misconfigured
+  flow on your side, not just a quiet prospect.
+
+## What it isn't
+
+This is a **snapshot**, not a transactional log. For per-message
+detail use [`GET /v1/messages`](/api-reference/messages/get-messages)
+scoped to the pool line.
+
+The endpoint doesn't return revoked trials — once a trial is revoked
+the pool slot is freed, and the row is no longer interesting for
+operational use. Audit trails for terminal trials live in the
+`trial.converted` / `trial.linked` webhook history.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors). This
+endpoint has no endpoint-specific error codes — bad API keys return
+`401`, everything else is `500` / `503`.
+
+## Related
+
+- [`GET /v1/trial/status`](/api-reference/trial/get-trial-status) — single-trial lookup by token.
+- [`POST /v1/trial/init`](/api-reference/trial/post-trial-init) — start a new trial.
+- [Concepts → Trial architecture](/concepts/trials) — lifecycle, streak counter, opaque-token correlation.

@@ -1,4 +1,52 @@
 ---
-title: "POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay"
+title: "Replay a webhook delivery"
+description: "Re-deliver a specific event to a subscription's URL."
 openapi: "POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay"
 ---
+
+Queues a re-delivery of a specific past event to the subscription's
+URL. Useful when your receiver was down, the original delivery
+exhausted its retry budget, or you want to test a fix against real
+historical payloads.
+
+## How replay differs from the original delivery
+
+- **Same payload**, same `event.id`. Your deduplication on `event.id`
+  should treat a replay as a duplicate of the original (i.e. no-op
+  if you've already processed it).
+- **Same signature** — the HMAC is recomputed against the same body
+  with the **current** signing secret. If you rotated the secret
+  after the original delivery, the replay carries the new signature.
+- A fresh delivery row is created with status `pending`, so it shows
+  up in `GET /v1/webhooks/{id}/deliveries` with a new
+  `delivery_id`.
+
+## When you can replay
+
+The original delivery must still be within the **24-hour retention
+window** (see
+[`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/get-webhooks-id-deliveries)).
+Past that, the row is GC'd and the replay returns 404.
+
+Status of the original doesn't matter — successful, failed, and
+pending deliveries can all be replayed. Replaying a `success` is a
+valid pattern when debugging.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `webhook_not_found` | The `wh_…` subscription ID doesn't exist. |
+| 404 | `delivery_not_found` | The `delivery_id` doesn't exist on this subscription, or fell outside the 24 h retention window. |
+| 409 | `subscription_inactive` | The subscription is `active: false`; reactivate first. |
+
+## Related
+
+- [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/get-webhooks-id-deliveries) —
+  list deliveries to find replay candidates.
+- [Webhooks guide](/guides/webhooks) — deduplication on `event.id`.

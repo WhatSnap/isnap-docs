@@ -1,4 +1,44 @@
 ---
-title: "DELETE /v1/chats/{chat_id}/typing"
+title: "Stop typing indicator"
+description: "Explicitly clear a typing indicator before its ~7s auto-expire."
 openapi: "DELETE /v1/chats/{chat_id}/typing"
 ---
+
+Clears the "typing…" indicator on the recipient's screen ahead of its
+~7-second auto-expire. Use when the human-in-the-loop UI cancels the
+compose flow without sending.
+
+If you send a message via
+[`POST /v1/messages`](/api-reference/messages/post-messages), the
+indicator clears automatically on the recipient side — you don't need
+to call this endpoint explicitly.
+
+Like [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/post-chats-chat_id-typing),
+this is **iMessage-only**. SMS and RCS chats accept the call but it's
+a silent no-op.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `chat_id` | The conversation ID. Format: `^chat_[0-9A-Za-z]{25}$`. |
+
+## Response
+
+`202 Accepted` — the stop fires asynchronously.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `chat_not_found` | `chat_id` doesn't match a chat on your account. |
+| 422 | `validation_error` | `chat_id` doesn't match the `chat_…` pattern. |
+
+## Related
+
+- [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/post-chats-chat_id-typing) — start the indicator.

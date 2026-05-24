@@ -13,7 +13,7 @@
 //
 // Run:  bun run scripts/generate-endpoint-pages.mjs
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,7 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..')
 const SPEC_PATH = resolve(REPO_ROOT, 'api-reference/openapi.json')
 const OUT_ROOT = resolve(REPO_ROOT, 'api-reference')
-const MINT_PATH = resolve(REPO_ROOT, 'mint.json')
+const DOCS_PATH = resolve(REPO_ROOT, 'docs.json')
 
 const METHODS = ['get', 'post', 'put', 'patch', 'delete']
 
@@ -56,6 +56,92 @@ const GROUP_ORDER = [
   'Pre-orders',
   'Meta'
 ]
+
+// Per-resource sidebar order. Slugs in this list are placed first, in
+// the listed order; anything else falls in alphabetically after. Lets
+// us put the "send" before "list" before "cancel" instead of relying
+// on alphabetical sort.
+const PAGE_ORDER = {
+  Messages: [
+    'post-messages',
+    'get-messages',
+    'get-messages-id',
+    'post-messages-id-reactions',
+    'delete-messages-id-reactions',
+    'delete-messages-id'
+  ],
+  Webhooks: [
+    'get-webhooks-events',
+    'post-webhooks',
+    'get-webhooks',
+    'get-webhooks-id',
+    'patch-webhooks-id',
+    'delete-webhooks-id',
+    'post-webhooks-id-rotate-secret',
+    'get-webhooks-id-deliveries',
+    'post-webhooks-id-deliveries-delivery_id-replay'
+  ],
+  Lines: [
+    // Marketplace + your fleet
+    'get-lines',
+    'get-lines-my',
+    'get-lines-id',
+    'patch-lines-id',
+    // Lifecycle
+    'post-lines-assign',
+    'post-lines-id-reserve',
+    'post-lines-id-activate',
+    'post-lines-id-release',
+    'post-lines-id-transfer-ownership',
+    // Operational surface
+    'get-lines-id-config',
+    'patch-lines-id-config',
+    'get-lines-id-quota',
+    'get-lines-id-queue',
+    'get-lines-id-health'
+  ],
+  Trial: [
+    'post-trial-init',
+    'get-trial-status',
+    'get-trial-activity'
+  ],
+  Billing: [
+    'post-billing-checkout',
+    'post-billing-byod-checkout',
+    'get-billing-subscriptions',
+    'delete-billing-subscriptions-id',
+    'get-billing-invoices',
+    'get-billing-payment-methods',
+    'post-billing-payment-methods',
+    'post-billing-payment-methods-id-default',
+    'delete-billing-payment-methods-id'
+  ],
+  Attachments: [
+    'post-attachments',
+    'get-attachments-id'
+  ],
+  Chats: [
+    'post-chats-chat_id-typing',
+    'delete-chats-chat_id-typing',
+    'post-chats-chat_id-read',
+    'post-chats-chat_id-share-contact-card'
+  ],
+  'API Keys': [
+    'post-api-keys',
+    'get-api-keys',
+    'delete-api-keys-id'
+  ],
+  'Pre-orders': [
+    'post-pre-orders',
+    'get-pre-orders',
+    'get-pre-orders-id',
+    'post-pre-orders-id-cancel'
+  ],
+  Meta: [
+    'get-health',
+    'get-version'
+  ]
+}
 
 function classify(path) {
   // path: '/v1/messages/{id}'  →  resource segment: 'messages'
@@ -96,16 +182,10 @@ function escapeMdxString(s) {
 
 const spec = JSON.parse(readFileSync(SPEC_PATH, 'utf8'))
 
-// Wipe and recreate generated dirs so removing endpoints upstream
-// doesn't leave orphaned files.
-for (const { dir } of Object.values(RESOURCE_GROUPS)) {
-  rmSync(resolve(OUT_ROOT, dir), { recursive: true, force: true })
-}
-rmSync(resolve(OUT_ROOT, 'meta'), { recursive: true, force: true })
-
 const groupedPages = new Map() // group label → ordered array of nav paths
 
-let filesWritten = 0
+let filesCreated = 0
+let filesPreserved = 0
 for (const [path, ops] of Object.entries(spec.paths ?? {})) {
   for (const method of METHODS) {
     const op = ops[method]
@@ -118,13 +198,21 @@ for (const [path, ops] of Object.entries(spec.paths ?? {})) {
     const fileDir = resolve(OUT_ROOT, dir)
     mkdirSync(fileDir, { recursive: true })
 
-    const body = `---
+    const filePath = resolve(fileDir, `${slug}.mdx`)
+    if (existsSync(filePath)) {
+      // Preserve any prose enrichments already added to this file.
+      // Frontmatter mismatches are surfaced as a manual TODO in
+      // PHASE4-ISSUES.md rather than auto-overwritten.
+      filesPreserved += 1
+    } else {
+      const body = `---
 title: "${escapeMdxString(title)}"
 openapi: "${method.toUpperCase()} ${path}"
 ---
 `
-    writeFileSync(resolve(fileDir, `${slug}.mdx`), body)
-    filesWritten += 1
+      writeFileSync(filePath, body)
+      filesCreated += 1
+    }
 
     if (!groupedPages.has(label)) groupedPages.set(label, [])
     groupedPages.get(label).push(`api-reference/${dir}/${slug}`)
@@ -136,30 +224,39 @@ const endpointsGroups = []
 for (const groupLabel of GROUP_ORDER) {
   const pages = groupedPages.get(groupLabel)
   if (!pages || pages.length === 0) continue
-  pages.sort()
-  endpointsGroups.push({ group: groupLabel, pages })
+
+  const manual = PAGE_ORDER[groupLabel] ?? []
+  // Page IDs include the resource directory (e.g. `api-reference/messages/post-messages`);
+  // PAGE_ORDER lists the bare slug. Match on the trailing slug.
+  const slugOf = (id) => id.split('/').pop()
+  const manualSet = new Set(manual)
+  const head = manual
+    .map((slug) => pages.find((p) => slugOf(p) === slug))
+    .filter(Boolean)
+  const tail = pages.filter((p) => !manualSet.has(slugOf(p))).sort()
+  endpointsGroups.push({ group: groupLabel, pages: [...head, ...tail] })
 }
 
-// Splice into mint.json — replace the existing Endpoints groups with
-// the regenerated ones, leaving everything else (Get started, Guides,
-// Concepts, SDK, Changelog) untouched.
-const mint = JSON.parse(readFileSync(MINT_PATH, 'utf8'))
+// Splice into docs.json's API Reference tab — replace the per-resource
+// endpoint groups, leaving the leading "API Reference" intro group and
+// every other tab (Guides, SDK, Changelog) untouched.
+const docs = JSON.parse(readFileSync(DOCS_PATH, 'utf8'))
 const ENDPOINT_GROUP_LABELS = new Set([...GROUP_ORDER])
-const otherGroups = mint.navigation.filter((g) => !ENDPOINT_GROUP_LABELS.has(g.group))
 
-// Find the API Reference group; insert the endpoint groups right after it.
-const apiRefIndex = otherGroups.findIndex((g) => g.group === 'API Reference')
-if (apiRefIndex < 0) {
-  throw new Error('mint.json navigation has no "API Reference" group; refusing to splice.')
+const apiTab = docs.navigation?.tabs?.find((t) => t.tab === 'API Reference')
+if (!apiTab) {
+  throw new Error('docs.json navigation has no "API Reference" tab; refusing to splice.')
 }
 
-const newNav = [
-  ...otherGroups.slice(0, apiRefIndex + 1),
-  ...endpointsGroups,
-  ...otherGroups.slice(apiRefIndex + 1)
-]
-mint.navigation = newNav
-writeFileSync(MINT_PATH, JSON.stringify(mint, null, 2) + '\n')
+const introGroup = apiTab.groups.find((g) => g.group === 'API Reference')
+if (!introGroup) {
+  throw new Error('docs.json API Reference tab is missing the intro group; refusing to splice.')
+}
 
-console.log(`generate-endpoint-pages: wrote ${filesWritten} files`)
+apiTab.groups = [introGroup, ...endpointsGroups]
+writeFileSync(DOCS_PATH, JSON.stringify(docs, null, 2) + '\n')
+
+console.log(
+  `generate-endpoint-pages: ${filesCreated} created, ${filesPreserved} preserved`
+)
 console.log(`  groups: ${endpointsGroups.map((g) => `${g.group} (${g.pages.length})`).join(', ')}`)

@@ -1,4 +1,85 @@
 ---
-title: "GET /v1/lines/{id}/health"
+title: "Get BYOD line health"
+description: "Bridge connectivity, last heartbeat, Apple-ID flag state — full health surface for lines you own."
 openapi: "GET /v1/lines/{id}/health"
 ---
+
+Returns the live health snapshot for a **BYOD line**. iSnap hides this
+surface on rental lines because the hardware is in iSnap's farm and
+you can't act on offline-state alerts — see
+[Concepts → BYOD vs Rental](/concepts/byod-vs-rental#what-events-you-receive).
+
+On rental lines, this endpoint returns `403 rental_health_not_exposed`.
+Subscribe to durable rental events (`line.apple_id_flagged`,
+`line.quota_warning`) via webhooks instead.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID. Must be on a BYOD tier (`byod_imessage` or `byod_android`). |
+
+## What the response contains
+
+```json
+{
+  "line_id": "line_aBc...",
+  "byod": true,
+  "state": "active",
+  "last_heartbeat_at": "2026-05-11T22:02:03Z",
+  "daily_quota_remaining": 380,
+  "apple_id_flagged": false,
+  "last_error": null,
+  "last_offline_at": "2026-05-10T03:14:00Z",
+  "bridge_version": "2.0.1"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `state` | `active` (heartbeating cleanly), `degraded` (online but missing heartbeats), `offline` (no heartbeat for the configured threshold). |
+| `last_heartbeat_at` | ISO timestamp. `null` if the bridge has never connected. |
+| `daily_quota_remaining` | Remaining `daily_total_message_limit` minus `daily_messages_used`. Convenience — same data is in `/quota`. |
+| `apple_id_flagged` | `true` while iMessage is suspended on this line due to an Apple flag. |
+| `last_error` | Short tag for the most recent bridge-side error (e.g. `imessage_send_failed`, `auth_required`, `device_unreachable`). `null` if no error this session. |
+| `last_offline_at` | When the line was last in `state: "offline"`. `null` if never. |
+| `bridge_version` | The MessageSyncApp / bridge version currently paired. Useful for "is this bridge old enough to need an upgrade?" |
+
+## When `state: "degraded"` matters
+
+Degraded means "the bridge is reachable but missing the heartbeat
+SLA" — typically a few skipped beats but not a full disconnect. It's
+recoverable in seconds 90% of the time, but if it persists past a few
+minutes treat it like `offline` for routing purposes.
+
+For real-time updates, subscribe to the `line.connected` /
+`line.disconnected` / `line.offline` / `line.degraded` webhook events
+instead of polling this endpoint.
+
+## Apple flags
+
+`apple_id_flagged: true` means iMessage sends from this line are
+returning Apple-side errors. Recovery requires re-auth via the bridge
+— see [Guides → Apple flag events](/guides/apple-flag-events).
+
+SMS / RCS on the same line keep working while flagged — only iMessage
+breaks.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 403 | `rental_health_not_exposed` | Line is a rental tier. Use the durable webhook events instead. |
+| 404 | `line_not_found` | Line ID isn't on your account. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) — why this is BYOD-only.
+- [Guides → Apple flag events](/guides/apple-flag-events) — recovery walkthrough.
+- [Webhooks → `line.connected` / `line.offline`](/guides/webhooks) — push alternative to polling.

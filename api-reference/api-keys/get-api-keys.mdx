@@ -1,4 +1,69 @@
 ---
-title: "GET /v1/api-keys"
+title: "List API keys"
+description: "Every key on your account — prefix, name, scope, last used at. Full secret is not returned."
 openapi: "GET /v1/api-keys"
 ---
+
+Returns the keys on your account. The **full secret is never returned
+on read** — only the `prefix` (first N characters) for identification.
+If you lost the full key, revoke it and mint a new one.
+
+## Response shape
+
+```json
+{
+  "api_keys": [
+    {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "name": "Production worker",
+      "prefix": "isnap_live_pSk_aBc",
+      "scope": "live",
+      "line_ids": ["line_aBc..."],
+      "rate_limit": 600,
+      "created_at": "2026-05-11T22:00:00Z",
+      "last_used_at": "2026-05-11T22:14:03Z"
+    }
+  ]
+}
+```
+
+| Field | Notes |
+|---|---|
+| `prefix` | First N chars of the secret. Use it to map logs back to a specific key without leaking. |
+| `scope` | `live` or `test`. |
+| `line_ids` | If `null` or absent, key has account-wide line access. Otherwise restricted to listed lines. |
+| `rate_limit` | Requests-per-minute ceiling. |
+| `last_used_at` | When the key was last seen on an authenticated request. `null` if never used. |
+
+## Use cases
+
+- **Audit unused keys.** Filter `last_used_at` older than 30 days
+  and revoke — minimises blast radius.
+- **Find the source of a log entry.** Match the `prefix` in your
+  request logs against this list.
+- **Verify scope before rolling out.** Confirm a key's `line_ids`
+  matches the line you're about to point it at.
+
+## Rotation
+
+To rotate a key:
+
+1. Mint a new key via [`POST /v1/api-keys`](/api-reference/api-keys/post-api-keys).
+2. Deploy the new key to your services.
+3. Verify `last_used_at` on the new key updates.
+4. Revoke the old key via [`DELETE /v1/api-keys/{id}`](/api-reference/api-keys/delete-api-keys-id).
+
+There's no "soft revoke" — revocation is immediate. Always deploy
+the replacement first.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors). This
+endpoint has no endpoint-specific error codes.
+
+## Related
+
+- [`POST /v1/api-keys`](/api-reference/api-keys/post-api-keys) — mint a new key.
+- [`DELETE /v1/api-keys/{id}`](/api-reference/api-keys/delete-api-keys-id) — revoke.

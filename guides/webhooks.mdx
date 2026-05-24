@@ -160,7 +160,7 @@ Verified events arrive with a stable shape:
 {
   "id": "evt_01HX...",
   "type": "message.received",
-  "api_version": "1.1.0",
+  "api_version": "1.0.0",
   "created_at": "2026-05-05T14:32:00Z",
   "data": {
     "message": {
@@ -193,9 +193,12 @@ Three fields you should always pay attention to:
 
 iSnap retries failed deliveries (anything that doesn't return 2xx within
 30 seconds) with **exponential backoff**: 30s, 1min, 5min, 30min, 2h, 12h.
-After 10 consecutive failures, the subscription is auto-suspended and a
-`webhook.suspended` event fires (delivered to *other* subscriptions on
-the same account, since this one is disabled).
+After 10 consecutive failures, the subscription is auto-suspended —
+`active` flips to `false` on
+[`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhooks-id) and
+no further deliveries are attempted. Re-enable by patching the
+subscription (`PATCH /v1/webhooks/{id} { "active": true }`) once
+you've fixed the receiver.
 
 This means **the same event ID can arrive multiple times**. Treat your
 handler as at-least-once delivery:

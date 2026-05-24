@@ -25,7 +25,7 @@ trials
 ├── token                     opaque, returned to the caller at init
 ├── api_key_hash              the trial API key (hashed)
 ├── streak_counter            outbounds since last inbound
-├── status                    'pairing_pending' | 'paired' | 'dormant' | 'expired'
+├── status                    'pairing_pending' | 'active' | 'dormant' | 'revoked'
 ├── max_outbound_without_inbound  the cap, set at init
 ├── created_at
 └── ...
@@ -100,20 +100,20 @@ Each payload includes `trial_id`, `token`, `pool_line_id`, and
     │
     │ POST /v1/trial/init
     ▼
-pairing_pending  ────────── (15 min) ──────────►  expired
+pairing_pending  ────────── (15 min) ──────────►  revoked
     │
     │ prospect texts pool_line_number
     ▼
-paired  ⇄ (24h no traffic) ⇄  dormant
+active  ⇄ (24h no traffic) ⇄  dormant
     │           │
-    │           └── inbound ──► reactivated ──► paired
+    │           └── inbound ──► reactivated ──► active
     │
     │ billing.checkout({ trial_token })
     ▼
 converted (terminal)
 ```
 
-`expired` and `converted` are terminal states. The pool line slot frees
+`revoked` and `converted` are terminal states. The pool line slot frees
 in both cases.
 
 ## Trials count toward usage
@@ -127,4 +127,5 @@ forward — the `trial.converted` event is the audit trail.
 ## Related
 
 - [Guides → Trial onboarding](/guides/trial-onboarding) — the integration walkthrough.
+- [`GET /v1/trial/activity`](/api-reference/trial/get-trial-activity) — account-wide snapshot for dashboards.
 - [Webhooks → trial.* events](/guides/webhooks#what-events-to-subscribe-to) — the 4-event family.

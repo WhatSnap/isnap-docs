@@ -1,4 +1,121 @@
 ---
-title: "GET /v1/lines/{id}/queue"
+title: "Inspect outbound queue"
+description: "Messages parked by quota, throttle, or activity-curve scheduling — see what's queued and when each will fire."
 openapi: "GET /v1/lines/{id}/queue"
 ---
+
+Returns the outbound queue for a line: messages that have been
+accepted by `POST /v1/messages` but haven't dispatched yet, plus a
+summary view of why.
+
+Things land in the queue when:
+
+- A bucket is at the limit and `quota_overflow_behavior: "queue"`
+  (the default).
+- The send arrived during a `weight: 0` hour of the line's
+  `activity_curve` and got pushed to the next active hour.
+- `min_inter_message_seconds` enforced a gap and parked the send.
+
+For the underlying buckets and config, see
+[`GET /v1/lines/{id}/quota`](/api-reference/lines/get-lines-id-quota)
+and
+[`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config).
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID. |
+
+## Query parameters
+
+| Param | Behavior |
+|---|---|
+| `limit` | Page size, 1–100. Default 50. |
+| `cursor` | Opaque cursor from `next_cursor` on the previous page. |
+| `status` | Filter to one of `queued`, `scheduled`, `delivered_to_device`. |
+
+## Response shape
+
+```json
+{
+  "line_id": "line_aBc...",
+  "summary": {
+    "total_queued": 14,
+    "total_scheduled": 3,
+    "total_delivered_to_device": 0,
+    "next_scheduled_at": "2026-05-12T09:00:00-07:00",
+    "timezone": "America/Los_Angeles",
+    "daily_new_contacts_used": 40,
+    "daily_new_contact_limit": 40,
+    "buckets_warning": { "new_contacts_at_80_percent": false }
+  },
+  "items": [
+    {
+      "id": "msg_...",
+      "to": "+15551234567",
+      "body": "Hi.",
+      "status": "scheduled",
+      "scheduled_for": "2026-05-12T09:00:00-07:00",
+      "schedule_reason": "daily_new_contact_limit",
+      "queue_position": 0,
+      "is_new_contact": true,
+      "target_activity_hour": 9,
+      "created_at": "2026-05-11T22:01:00Z"
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}
+```
+
+### Item status
+
+| Value | Meaning |
+|---|---|
+| `queued` | Waiting on a non-time gate (quota bucket, inter-message throttle). Will dispatch as soon as the gate clears. |
+| `scheduled` | Time-bound — pinned to `scheduled_for` because of the activity curve. |
+| `delivered_to_device` | Already handed to the device, waiting on the device-side outbound. Counts in `total_delivered_to_device`. |
+
+### `schedule_reason`
+
+A short tag explaining why the message was held. Examples:
+`daily_new_contact_limit`, `daily_known_contact_limit`,
+`hourly_message_limit`, `min_inter_message_seconds`,
+`activity_curve_weight_zero`. Useful for surfacing "why is this send
+delayed?" in your UI.
+
+## Pagination
+
+Cursor-based. `has_more: true` means there's another page — pass
+`next_cursor` as `cursor` to get it. The cursor is opaque; don't try
+to decode it.
+
+## Use cases
+
+- **Operator dashboard.** Render the queue depth and the head of the
+  list so the team sees what's about to go out.
+- **Customer-side "your message is queued" UI.** Map your own
+  `message.id` back to a queue entry and show the `scheduled_for`
+  ETA.
+- **Capacity planning.** If `total_queued` is consistently high, the
+  line's caps are too tight for the demand — either raise the limits
+  (within the warming-stage recommendation) or add another line.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | Line ID isn't on your account. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern, `limit` out of range, or `status` not in the enum. |
+
+## Related
+
+- [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-lines-id-quota) — bucket usage.
+- [`PATCH /v1/lines/{id}/config`](/api-reference/lines/patch-lines-id-config) — change `quota_overflow_behavior` if you'd rather fail than queue.
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — when to expect queueing.

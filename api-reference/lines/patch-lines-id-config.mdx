@@ -1,4 +1,98 @@
 ---
-title: "PATCH /v1/lines/{id}/config"
+title: "Update line config"
+description: "Override quota, throttle, and activity-curve defaults on a specific line."
 openapi: "PATCH /v1/lines/{id}/config"
 ---
+
+Sets per-line overrides on quota, throttle, and activity-curve fields.
+Anything you don't pass stays at the tier default. Pass `null` (where
+the field allows it) to revert an override back to default.
+
+Read the current effective config first via
+[`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config).
+
+## Request shape
+
+```json
+{
+  "daily_new_contact_limit": 50,
+  "min_inter_message_seconds": 12,
+  "timezone": "America/New_York",
+  "activity_curve": [
+    { "hour": 9, "weight": 1 },
+    { "hour": 10, "weight": 4 },
+    { "hour": 17, "weight": 2 },
+    { "hour": 22, "weight": 0 }
+  ]
+}
+```
+
+All fields optional. Only the keys you include are touched.
+
+## Field bounds
+
+These are enforced server-side. Values outside the range return
+`422 validation_error`.
+
+| Field | Range |
+|---|---|
+| `daily_new_contact_limit` | 1 – 500 |
+| `daily_known_contact_limit` | 1 – 2000 |
+| `daily_total_message_limit` | 1 – 100000 |
+| `hourly_message_limit` | 1 – 1000 |
+| `minute_message_limit` | 1 – 100 |
+| `min_inter_message_seconds` | 1 – 3600 |
+| `min_inter_new_contact_seconds` | 0 – 86400 |
+| `max_queue_depth` | 1 – 100000 |
+| `timezone` | Any IANA zone string, 1–64 chars |
+| `activity_curve` | Array of `{hour, weight}`; `hour` 0–23, `weight` ≥ 0 |
+| `quota_overflow_behavior` | `queue`, `drop`, or `fail` |
+| `default_use_typing_indicator` | Boolean |
+
+These are **safety caps** — the warming model and Apple's tolerances
+sit well below the upper bounds. Don't crank `daily_new_contact_limit`
+to 500 because the bound allows it; iSnap's recommendation per warming
+stage is in [Concepts → Quotas + warming](/concepts/quotas-and-warming).
+
+## `quota_overflow_behavior`
+
+What happens when a send would exceed a bucket:
+
+| Value | Behavior |
+|---|---|
+| `queue` (default) | Send is queued, dispatched when the bucket window resets. Inspect via [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-lines-id-queue). |
+| `drop` | Send is silently dropped. The original `POST /v1/messages` call returns 202 (message accepted) but no delivery ever happens. Use only when partial success is acceptable. |
+| `fail` | Send returns `429 quota_exceeded` immediately. No queue, no retry. Your code handles the failure. |
+
+## `activity_curve`
+
+A 24-element shape (one weight per hour) the scheduler uses to bias
+when queued sends go out. Weight `0` at an hour means "don't send at
+that hour locally"; relative weights set proportional rate.
+
+You don't have to send all 24 hours — hours you omit default to
+weight `0` (no sends).
+
+## Response
+
+The updated effective config — same shape as
+[`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config),
+with `overridden_keys` reflecting the new state.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | Line ID isn't on your account. |
+| 422 | `validation_error` | Field out of range, invalid `timezone`, or invalid `activity_curve` entry. |
+
+## Related
+
+- [`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config) — read current config.
+- [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-lines-id-quota) — current bucket usage.
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — recommended values per warming stage.

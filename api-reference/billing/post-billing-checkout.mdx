@@ -1,4 +1,71 @@
 ---
-title: "POST /v1/billing/checkout"
+title: "Start checkout for a rental line"
+description: "Open a Stripe Checkout session to attach payment and start a monthly subscription on a rental line."
 openapi: "POST /v1/billing/checkout"
 ---
+
+Returns a hosted Stripe Checkout URL. Redirect the customer there;
+they complete card capture; on success, the line's monthly
+subscription is created and billing starts.
+
+Use this after creating a rental line via
+[`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) if
+you need a fresh payment method capture in the same flow. For BYOD
+slots, see
+[`POST /v1/billing/byod-checkout`](/api-reference/billing/post-billing-byod-checkout).
+
+## Request shape
+
+```json
+{
+  "line_id": "line_aBc..."
+}
+```
+
+| Field | Value |
+|---|---|
+| `line_id` | The line you're attaching the subscription to. Must be on your account, status `reserved` or `active`. |
+
+## Response
+
+```json
+{
+  "url": "https://checkout.stripe.com/c/pay/cs_test_..."
+}
+```
+
+Redirect the customer to `url`. On completion Stripe redirects back to
+your configured success URL.
+
+## Billing model — locked-in rules
+
+- **No proration.** A subscription started any day of the month is
+  billed in full for that month.
+- **Trials are billed.** iSnap doesn't ship free trials — the trial
+  feature
+  ([`POST /v1/trial/init`](/api-reference/trial/post-trial-init)) is
+  a separate session-level construct, not a billing trial.
+- **Calendar-month cycle.** Renewal date is the 1st of each month,
+  not the anniversary of the signup.
+- **Stripe metered subscriptions.** Each line is one Stripe
+  subscription. Cancellation is at end-of-period (current month
+  fully billed).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | `line_id` isn't on your account. |
+| 409 | `subscription_already_active` | Line already has an active subscription. |
+| 422 | `validation_error` | Missing `line_id`. |
+
+## Related
+
+- [`POST /v1/billing/byod-checkout`](/api-reference/billing/post-billing-byod-checkout) — buy BYOD slots.
+- [`GET /v1/billing/subscriptions`](/api-reference/billing/get-billing-subscriptions) — list your subscriptions.
+- [`POST /v1/billing/payment-methods`](/api-reference/billing/post-billing-payment-methods) — capture a payment method without checkout.

@@ -1,4 +1,70 @@
 ---
-title: "GET /v1/version"
+title: "Get API version"
+description: "Current API schema version — pairs with the `api_version` field on webhook payloads."
 openapi: "GET /v1/version"
 ---
+
+Returns iSnap's current public API schema version. Useful for:
+
+- Asserting at deploy-time that your client expects the same version
+  the API is on.
+- Surfacing version info in admin dashboards / debug panels.
+- Matching against `api_version` on webhook payloads to detect when
+  iSnap rolls a new minor.
+
+Public endpoint — no authentication required.
+
+## Response
+
+```json
+{
+  "success": true,
+  "data": { "version": "1.0.0" },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+| Field | Notes |
+|---|---|
+| `data.version` | Semver string. Bumped per the deprecation lifecycle — see [Concepts → Deprecation lifecycle](/concepts/deprecation-lifecycle). |
+
+## Why a single API_SCHEMA_VERSION
+
+iSnap pins a single version constant across the whole API and all
+webhook payloads. Every webhook event includes `api_version` matching
+this value. That guarantees that a client built against
+`/v1/version = 1.0.0` will understand every event it receives.
+
+## Versioning rules
+
+- **Major bumps** (`1.0.0` → `2.0.0`) introduce breaking changes and
+  ship under a new URL prefix (`/v2/*`). The old major continues
+  serving in parallel during the deprecation window.
+- **Minor bumps** (`1.0.0` → `1.1.0`) are **additive only** — new
+  fields, new endpoints, new event types. Existing clients keep
+  working.
+- **Patch bumps** (`1.0.0` → `1.0.1`) are bug fixes that don't change
+  shapes.
+
+Check the [changelog](/changelog) for the full version history.
+
+## Use cases
+
+- **Deploy-time guard.** Have CI hit `/v1/version` and fail the
+  deploy if the major doesn't match what your client SDK expects.
+- **Diagnostics endpoint.** Include the version in your support
+  bundle so iSnap can debug against the exact version your client
+  was running.
+
+## Errors
+
+This endpoint never returns 4xx codes. 5xx codes (`500`, `503`) are
+documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+
+## Related
+
+- [Concepts → Deprecation lifecycle](/concepts/deprecation-lifecycle) — how versions roll.
+- [Changelog](/changelog) — what changed in each version.
+- [`GET /v1/health`](/api-reference/meta/get-health) — the other unauthenticated meta endpoint.

@@ -1,4 +1,53 @@
 ---
-title: "POST /v1/billing/payment-methods/{id}/default"
+title: "Set default payment method"
+description: "Pick which card Stripe charges on the next invoice."
 openapi: "POST /v1/billing/payment-methods/{id}/default"
 ---
+
+Marks a payment method as the **default** for the account. The next
+calendar-month invoice will be charged against this card instead of
+whatever was default before.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | Stripe payment method ID (`pm_…`). Must already be attached to your account (capture via [`POST /v1/billing/payment-methods`](/api-reference/billing/post-billing-payment-methods) or via the hosted Checkout flow). |
+
+## Response
+
+```json
+{ "message": "Default payment method updated" }
+```
+
+[`GET /v1/billing/payment-methods`](/api-reference/billing/get-billing-payment-methods)
+will now show `is_default: true` on the chosen card and `false` on
+all others.
+
+## When the change takes effect
+
+- **Future invoices.** The next scheduled invoice charge uses the new
+  default.
+- **In-flight charges.** Already-posted invoices retain their original
+  payment method.
+- **Past-due invoices.** If you have an unpaid invoice from a previous
+  cycle, Stripe will retry it against whatever method was attached at
+  invoice creation — not the new default. To retry against the new
+  card, open the `hosted_invoice_url` and pay there.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `payment_method_not_found` | `id` isn't attached to your account. Capture it first. |
+| 422 | `validation_error` | `id` missing or empty. |
+
+## Related
+
+- [`GET /v1/billing/payment-methods`](/api-reference/billing/get-billing-payment-methods) — verify the new default.
+- [`DELETE /v1/billing/payment-methods/{id}`](/api-reference/billing/delete-billing-payment-methods-id) — remove a card.

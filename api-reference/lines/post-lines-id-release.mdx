@@ -1,4 +1,76 @@
 ---
-title: "POST /v1/lines/{id}/release"
+title: "Release a line"
+description: "Stop billing and detach a line from your account — terminal, no take-backsies."
 openapi: "POST /v1/lines/{id}/release"
 ---
+
+Detaches a line from your account, cancels its Stripe subscription,
+and returns it to iSnap's pool (rental) or frees the BYOD slot. This
+is the cancellation path — there's no "pause", just release.
+
+The line ID won't be reusable after release. If you want the same
+phone number back later, you'll need to assign a new line — the
+underlying number routing may or may not survive depending on tier.
+
+## When to release
+
+- **You no longer need the line.** Most common case.
+- **Switching tiers.** Release the rental, assign a BYOD slot (or
+  vice-versa). The phone number changes.
+- **Cleaning up a BYOD slot.** Releasing frees the BYOD slot so you
+  can re-pair different hardware on a new slot.
+- **Ending a trial early.** Use the trial's lifecycle instead — see
+  [Concepts → Trials](/concepts/trials).
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID of the line you want to release. |
+
+## What the response contains
+
+The full `Line` record with `status: "released"`. After this returns,
+the line:
+
+- No longer accepts `POST /v1/messages` (returns
+  `404 line_not_found`).
+- No longer appears in `GET /v1/lines/my`.
+- Stops receiving inbound. Messages addressed to the underlying number
+  are silently dropped (rental) or returned (BYOD bridge offline).
+- Stops billing — the Stripe subscription is canceled effective
+  immediately. No proration; the current calendar month is fully
+  billed (see [Concepts → Billing](/concepts/billing)).
+
+v1 doesn't ship a dedicated `line.released` event — detect the
+release by polling `GET /v1/lines/my` (the line drops out) or by
+watching `line.disconnected` on BYOD slots.
+
+## What this doesn't do
+
+- It does not refund any pre-paid period. The current month is fully
+  billed.
+- It does not delete message history. Past messages remain accessible
+  via `GET /v1/messages` until iSnap's standard retention reaps them
+  (72h).
+- It does not auto-migrate downstream — if your CRM keyed off this
+  `line_id`, you need to handle the lookup yourself.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | Line ID isn't on your account, or already released. |
+| 409 | `line_release_pending` | Release was already requested and is still processing. Re-check with `GET /v1/lines/{id}` after a few seconds. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/post-lines-id-transfer-ownership) — move the line instead of releasing it.
+- [Concepts → Billing](/concepts/billing) — why release isn't pro-rated.
+- [Concepts → Line lifecycle](/concepts/line-lifecycle) — full state machine.

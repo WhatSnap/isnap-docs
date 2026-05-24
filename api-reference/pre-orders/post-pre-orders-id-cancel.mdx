@@ -1,4 +1,55 @@
 ---
-title: "POST /v1/pre-orders/{id}/cancel"
+title: "Cancel a pre-order"
+description: "Abandon a pre-order — auto-refund if the deposit was already captured."
 openapi: "POST /v1/pre-orders/{id}/cancel"
 ---
+
+Cancels a pre-order. The terminal state depends on where in the
+lifecycle the pre-order is:
+
+| When you cancel… | Final state | Deposit |
+|---|---|---|
+| Before `provisioning` (still `pending`) | `cancelled` | Never charged. |
+| After `provisioning` started | `refunded` | Auto-refunded via Stripe. |
+| After `fulfilled` | Not cancellable — release the line instead via [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release). |
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | The pre-order's UUID. |
+
+## Response
+
+The updated `PreOrder` record with `status: "cancelled"` or
+`"refunded"` depending on the path above.
+
+## Refund timing
+
+If the deposit was captured (status was `provisioning` or later when
+you cancelled), the refund posts via Stripe asynchronously. Expected
+appearance in the customer's statement: 5–10 business days
+(card-issuer dependent).
+
+The PreOrder's `status` flips to `refunded` once Stripe confirms the
+refund — poll
+[`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-orders-id)
+if you want to render the refund-complete state.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `pre_order_not_found` | `id` isn't on your account. |
+| 409 | `pre_order_not_cancellable` | Pre-order already `fulfilled`, `cancelled`, or `refunded`. |
+| 422 | `validation_error` | `id` not a valid UUID. |
+
+## Related
+
+- [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-orders-id) — confirm the cancellation went through.
+- [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release) — cancel a fulfilled line instead.

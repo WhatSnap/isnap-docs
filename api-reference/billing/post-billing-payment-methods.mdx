@@ -1,4 +1,75 @@
 ---
-title: "POST /v1/billing/payment-methods"
+title: "Capture a payment method"
+description: "Get a Stripe SetupIntent client secret — mount Stripe Elements on your side to capture a card."
 openapi: "POST /v1/billing/payment-methods"
 ---
+
+Returns a Stripe **SetupIntent** client secret. Pass it to Stripe
+Elements on your front-end to render a card-capture UI and attach a
+payment method to the account, without going through hosted Checkout.
+
+For the all-in-one hosted UI, use
+[`POST /v1/billing/checkout`](/api-reference/billing/post-billing-checkout)
+or
+[`POST /v1/billing/byod-checkout`](/api-reference/billing/post-billing-byod-checkout)
+instead.
+
+## Request
+
+No body required. The endpoint mints a SetupIntent against your
+account and returns the client secret immediately.
+
+## Response
+
+```json
+{ "client_secret": "seti_..._secret_..." }
+```
+
+| Field | What it's for |
+|---|---|
+| `client_secret` | Pass to `stripe.confirmCardSetup(clientSecret, {...})` on your front-end. After Stripe confirms the card, the new payment method is auto-attached to your iSnap account. |
+
+## Front-end integration
+
+```html
+<script src="https://js.stripe.com/v3/"></script>
+```
+
+```ts
+const stripe = Stripe(STRIPE_PUBLISHABLE_KEY)
+
+const { client_secret } = await isnap.billing.captureMethod()
+
+const { setupIntent, error } = await stripe.confirmCardSetup(
+  client_secret,
+  {
+    payment_method: { card: cardElement }
+  }
+)
+
+if (error) {
+  // surface error.message to the user
+} else {
+  // setupIntent.status === 'succeeded'
+  // the method is now in GET /v1/billing/payment-methods
+}
+```
+
+After confirmation, call
+[`GET /v1/billing/payment-methods`](/api-reference/billing/get-billing-payment-methods)
+to see the new card, and optionally
+[`POST /v1/billing/payment-methods/{id}/default`](/api-reference/billing/post-billing-payment-methods-id-default)
+to mark it as default.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors). This
+endpoint has no endpoint-specific error codes — Stripe-side failures
+surface on the front-end via the SetupIntent error object.
+
+## Related
+
+- [`GET /v1/billing/payment-methods`](/api-reference/billing/get-billing-payment-methods) — read the resulting card list.
+- [`POST /v1/billing/checkout`](/api-reference/billing/post-billing-checkout) — Stripe-hosted alternative.

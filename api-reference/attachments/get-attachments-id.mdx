@@ -1,4 +1,89 @@
 ---
-title: "GET /v1/attachments/{id}"
+title: "Get an attachment"
+description: "Read attachment metadata and get a fresh signed download URL."
 openapi: "GET /v1/attachments/{id}"
 ---
+
+Returns the metadata for an attachment plus a **freshly-signed**
+`download_url`. Use it to:
+
+- Download attachment bytes you sent (audit, re-render in your UI).
+- Download attachment bytes you received on an inbound message
+  webhook.
+- Check whether an attachment is still within the 72-hour retention
+  window.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | The `att_…` identifier. |
+
+## What the response contains
+
+```json
+{
+  "id": "att_aBc...",
+  "filename": "invoice.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 184320,
+  "status": "uploaded",
+  "download_url": "https://storage.../att_aBc?X-Amz-Signature=...",
+  "download_expires_at": "2026-05-11T22:25:00Z",
+  "duration_ms": null,
+  "created_at": "2026-05-11T22:00:00Z",
+  "uploaded_at": "2026-05-11T22:00:15Z",
+  "expires_at": "2026-05-14T22:00:15Z",
+  "warnings": []
+}
+```
+
+| Field | Notes |
+|---|---|
+| `status` | `pending` (upload not received), `uploaded` (bytes landed and verified), `failed` (upload error), `expired` (past 72h retention). |
+| `download_url` | Presigned GET URL. **5-minute TTL** — refresh by calling this endpoint again. `null` once `expires_at` has passed. |
+| `download_expires_at` | When the presign expires. Always 5 minutes from issue. |
+| `duration_ms` | Audio/video duration in milliseconds. `null` for non-media attachments. |
+| `uploaded_at` | When the bytes were verified server-side. `null` until upload completes. |
+| `expires_at` | 72 hours after `uploaded_at`. After this the bytes are reaped. |
+| `warnings` | Soft notices about the attachment (e.g. content-type filtered on iMessage). |
+
+## Download flow
+
+```bash
+ATT=$(curl -s -H "Authorization: Bearer $ISNAP_API_KEY" \
+  https://api.isnap.ai/v1/attachments/att_aBc...)
+
+URL=$(echo "$ATT" | jq -r .download_url)
+curl -o invoice.pdf "$URL"
+```
+
+The download URL doesn't take any auth headers — the signature in the
+URL is the auth. Re-call this endpoint if you need a fresh URL.
+
+## Inbound attachments
+
+Inbound message webhooks carry `attachments: [{ id, filename, … }]`
+on the `data.message` object. Use those IDs here to pull the bytes.
+
+iSnap deliberately doesn't push the raw bytes in webhooks — the
+72-hour retention plus presigned-fetch pattern keeps payloads small
+and lets you decide what to persist on your side.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `attachment_not_found` | `id` doesn't match an attachment on this account, or the row was reaped past retention. |
+| 410 | `attachment_expired` | Past the 72-hour retention window. Re-upload if you still need the bytes. |
+| 422 | `validation_error` | `id` is malformed. |
+
+## Related
+
+- [`POST /v1/attachments`](/api-reference/attachments/post-attachments) — the upload side.
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — send a message that references an attachment.

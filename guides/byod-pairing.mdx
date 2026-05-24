@@ -3,22 +3,17 @@ title: "BYOD pairing"
 description: "Bring your own Mac+iPhone or Android — install the bridge, pair with an activation code, start sending."
 ---
 
-BYOD ("bring your own device") lets your customer connect their existing
-hardware to iSnap and start sending under the API. The flow is four
-steps: mint an activation code, install the bridge app, enter the code,
-done.
+BYOD ("bring your own device") lets you connect your existing hardware
+to iSnap and start sending under the API. The flow is four steps: mint
+an activation code, install the bridge, enter the code, done.
 
-This guide covers the iSnap-side calls. The bridge install / setup
-walkthrough lives in the customer-facing docs that
-`setup_instructions_url` links to.
+## When BYOD is the right pick
 
-## When to use BYOD
-
-| If your customer… | Pick… |
+| If you… | Pick… |
 |---|---|
-| has their own Mac + iPhone, doesn't want to pay rental | `macos_byod` |
-| has an Android phone on a real SIM | `android_byod` |
-| doesn't have hardware or doesn't want to manage it | rental (not this guide) |
+| have your own Mac + iPhone | `macos_byod` |
+| have an Android phone on a real SIM | `android_byod` |
+| don't have hardware or don't want to manage it | rental (not this guide) |
 
 [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) covers the
 trade-offs in depth.
@@ -30,12 +25,12 @@ trade-offs in depth.
     ```ts
     const pair = await isnap.byod.pair({
       device_type: 'macos_byod',           // or 'android_byod'
-      device_name: 'Reception Mac Mini'    // surfaced in the dashboard
+      device_name: 'Reception Mac Mini'    // shows up in your dashboard
     })
 
     console.log(pair.activation_code)        // 'act_4Lp8Rn9Fh2'
     console.log(pair.expires_at)             // ISO timestamp, +5 min from now
-    console.log(pair.bridge_download_url)    // presigned R2 .dmg / .apk
+    console.log(pair.bridge_download_url)    // .dmg (macOS) / .apk (Android)
     console.log(pair.bridge_version)         // '2.0.1'
     console.log(pair.setup_instructions_url) // deep link to setup docs
     ```
@@ -53,27 +48,25 @@ trade-offs in depth.
   </Tab>
 </Tabs>
 
-The activation code (`act_…`) is **single-use** and **expires in 5
-minutes**. The download URL is also presigned for 5 minutes — long
-enough for the customer to start the install, short enough that a
-leaked URL stops working before anything bad happens.
+The `activation_code` (`act_…`) is **single-use** and **expires in
+5 minutes**. The download URL is stable — same URL for every pairing,
+no expiry — so cache it if you want.
 
 ### Errors
 
 | HTTP | `error.code` | Cause |
 |---|---|---|
-| 402 | `no_byod_slot_available` | The caller's BYOD subscription has no free slot. Upsell or cancel an existing pairing first. |
+| 402 | `no_byod_slot_available` | Your BYOD subscription has no free slot. Release an existing pairing or upgrade your plan. |
 | 422 | `validation_error` | Bad `device_type` or empty `device_name`. |
 
-## 2. Customer installs the bridge
+## 2. Install the bridge
 
-Send the customer to `setup_instructions_url` (a deep link to the
-platform-specific setup walkthrough at `docs.isnap.ai`). The
-walkthrough tells them to:
+Open `setup_instructions_url` for the platform-specific walkthrough.
+The steps:
 
 1. Download the bridge from `bridge_download_url`.
-2. Open the bridge installer.
-3. Enter the `activation_code`.
+2. Open the installer.
+3. Enter the `activation_code` when prompted.
 4. Grant macOS Full Disk Access (Mac) or default-SMS-app permission
    (Android).
 
@@ -82,53 +75,53 @@ device fingerprint, and the activation code is consumed.
 
 <Note>
 On macOS, the iMessage bridge requires both a paired iPhone (via
-Continuity) and the customer's Apple ID. iSnap doesn't store the Apple
-ID credentials — the bridge handles auth locally and only sends iSnap
+Continuity) and your Apple ID. iSnap doesn't store Apple ID
+credentials — the bridge handles auth locally and only sends iSnap
 session tokens.
 </Note>
 
 ## 3. Server activation
 
-Once the bridge connects with a valid activation code, iSnap mints the
-new line on the caller's account. You'll receive:
+Once the bridge connects with a valid activation code, iSnap mints
+the new line on your account:
 
-- A `line.created` webhook with the new `line_id`, `device_type`, and
-  `byod: true`.
-- The line shows up in `GET /v1/lines/my` with `status: "pending"`
-  briefly, then `"active"` once the bridge confirms it can send.
+- A `line.connected` webhook fires with the new `line_id` and `byod: true`.
+- The line shows up in `GET /v1/lines/my` with `status: "active"`
+  once the bridge confirms it can send.
 
 After that, the line is just a normal iSnap line — `POST /v1/messages`
 with the new `line_id` and you're sending.
 
 ## 4. Health monitoring
 
-BYOD lines get the **full health surface** because the customer owns the
+BYOD lines expose the **full health surface** because you own the
 hardware and can act on issues:
 
-- `line.offline` / `line.online` — the bridge lost / regained
-  connectivity.
+- `line.connected` / `line.disconnected` — the bridge regained /
+  lost its long-lived connection.
+- `line.offline` — the bridge has been unreachable past the
+  threshold.
 - `line.degraded` — the bridge is online but missing heartbeats.
 - `GET /v1/lines/{id}/health` returns the current state +
   last-seen-at + recent error history.
 
-This is intentionally different from rental, which suppresses transient
-events to avoid alert noise. See
+Rental lines suppress these transient events to avoid alert noise. See
 [Concepts → BYOD vs Rental](/concepts/byod-vs-rental#what-events-you-receive)
 for the full matrix.
 
 ## Re-pairing a device
 
-Each BYOD slot holds one device. If the customer wants to swap (replaced
-the iPhone, lost the Mac), call `POST /v1/byod/pair` again with the
-same `device_name` — the new activation code supersedes any previous
+Each BYOD slot holds one device. If you swap (replaced an iPhone,
+lost a Mac), call `POST /v1/byod/pair` again with the same
+`device_name` — the new activation code supersedes any previous
 pairing on that slot.
 
-To free a slot entirely (e.g. cancelling the BYOD subscription):
-release the line via `POST /v1/lines/{id}/release`. The bridge stops
-having anywhere to send and the slot frees up.
+To free a slot entirely (cancellation), release the line via
+`POST /v1/lines/{id}/release`. The bridge has nowhere to send to and
+the slot frees up.
 
 ## Related
 
 - [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) — what's different about BYOD operationally.
-- [API Reference → POST /v1/byod/pair](/api-reference) — the full schema.
-- [Webhooks → line.* events](/guides/webhooks) — what you get on a BYOD line going offline.
+- [`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair) — the API reference.
+- [Webhooks → line.* events](/guides/webhooks) — what fires when a BYOD line goes offline.

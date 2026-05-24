@@ -1,4 +1,66 @@
 ---
-title: "GET /v1/health"
+title: "Health check"
+description: "Liveness + dependency check — useful for uptime monitors and pre-flight checks in CI."
 openapi: "GET /v1/health"
 ---
+
+Returns iSnap's current operational status. Public endpoint — no
+authentication required. Use it from uptime monitors, load balancers,
+or as a smoke test in CI before running an integration suite.
+
+## Response
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-05-11T22:00:00Z",
+  "checks": {
+    "db": "ok",
+    "redis": "ok",
+    "storage": "ok"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok` (all checks pass) or `degraded` (at least one check failed but the API is still serving). |
+| `timestamp` | Server time at check, ISO 8601. |
+| `checks` | Per-dependency status. Keys are stable identifiers (`db`, `redis`, `storage`); values are short status strings (`ok`, `error: <detail>`). |
+
+## Status codes
+
+| HTTP | When |
+|---|---|
+| `200` | `status: "ok"` — everything healthy. |
+| `503` | `status: "degraded"` — service is up but a dependency is impaired. Sends may still work, but expect elevated error rates. |
+
+iSnap deliberately returns 503 (not 200) on degraded so that
+load-balancer health checks treat the node as out-of-rotation when
+appropriate.
+
+## Use cases
+
+- **Uptime monitors.** Pingdom / BetterStack / etc. Treat 503 as a
+  warning, not a page — there are often degraded sub-systems iSnap
+  ops is already handling.
+- **CI smoke test.** Run before integration tests to confirm the
+  staging environment is up.
+- **Pre-flight in your worker.** Cheap probe before kicking off a
+  large send batch.
+
+## Public — no auth required
+
+This is one of two endpoints (with
+[`GET /v1/version`](/api-reference/meta/get-version)) that don't
+require bearer auth. The signal is non-sensitive — no per-customer
+state is exposed.
+
+## Errors
+
+This endpoint never returns 4xx codes (no validation, no auth, no
+path params). It only returns 200 or 503.
+
+## Related
+
+- [`GET /v1/version`](/api-reference/meta/get-version) — the other unauthenticated meta endpoint.

@@ -1,4 +1,81 @@
 ---
-title: "GET /v1/messages"
+title: "List messages"
+description: "Cursor-paginated history of messages across your lines."
 openapi: "GET /v1/messages"
 ---
+
+Returns recent messages — outbound and inbound — across the lines
+visible to your API key. Filtered by line, status, and date range.
+Cursor-paginated.
+
+## Use sparingly
+
+iSnap retains messages for **72 hours**. After that, this endpoint
+won't return them. If your integration needs persistent conversation
+history, mirror messages into your own database via
+[webhooks](/guides/webhooks) — don't rely on this endpoint as the
+canonical source.
+
+The intended uses for this endpoint are:
+
+- **Resyncing after downtime.** Your webhook receiver was offline for
+  10 minutes; backfill the gap.
+- **Spot-checking from a debug tool.** Inspecting recent traffic on a
+  line.
+- **Audit snapshot.** Pulling the last 24 h of activity into a report.
+
+## Pagination
+
+Cursor-based. Each response includes:
+
+```json
+{
+  "items": [ ... ],
+  "has_more": true,
+  "next_cursor": "cur_eyJpZCI6Im1zZ18..."
+}
+```
+
+Pass `?cursor=<next_cursor>` on the next request to walk forward.
+Cursors are opaque base64; don't parse them. They're stable for
+~24 h — restart the iteration with the same filters if a cursor
+expires.
+
+`has_more: false` (or a missing `next_cursor`) means you've reached
+the end.
+
+## Filters
+
+| Query param | Effect |
+|---|---|
+| `line_id` | Restrict to a single line. Recommended — without it you list across every line you can see. |
+| `status` | Filter to a specific status (`queued`, `sent`, `delivered`, `failed`, `received`, etc.). |
+| `since` | ISO 8601 timestamp; only messages after this. |
+| `until` | ISO 8601 timestamp; only messages before this. |
+| `direction` | `inbound` or `outbound`. |
+| `cursor` | Pagination cursor from the previous response. |
+
+## Response shape
+
+Each item is the same `Message` shape returned by
+[`GET /v1/messages/{id}`](/api-reference/messages/get-messages-id) —
+identical fields, identical types. No shape difference between list
+and singular fetches.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 400 | `invalid_cursor` | The `cursor` query param doesn't decode — it was tampered with or expired (cursors are stable for ~24 h). Restart the iteration with the same filters. |
+| 422 | `validation_error` | A query param is malformed (e.g. `since` isn't ISO 8601, `direction` not in `inbound \| outbound`). `error.issues[]` carries per-field details. |
+
+## Related
+
+- [Webhooks](/guides/webhooks) — push delivery instead of pull.
+- [`GET /v1/messages/{id}`](/api-reference/messages/get-messages-id) —
+  full message shape.

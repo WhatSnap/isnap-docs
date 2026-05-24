@@ -1,4 +1,94 @@
 ---
-title: "GET /v1/pre-orders"
+title: "List pre-orders"
+description: "Every pre-order on your account — paginated, filterable by status."
 openapi: "GET /v1/pre-orders"
 ---
+
+Returns pre-orders on your account in reverse creation order. Use it
+to render a "waiting for hardware" view in your dashboard.
+
+## Query parameters
+
+| Param | Behavior |
+|---|---|
+| `status` | Filter to one of `pending`, `provisioning`, `ready`, `fulfilled`, `cancelled`, `refunded`. |
+| `cursor` | Opaque pagination cursor from the previous `next_cursor`. |
+| `limit` | Page size, 1–100. Default 25. |
+
+## Response shape
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "uuid-of-the-pre-order",
+        "billing_tier": "rental_iphone",
+        "preferred_area_codes": ["415"],
+        "status": "provisioning",
+        "amount": 25000,
+        "estimated_fulfillment": "2026-05-15T00:00:00Z",
+        "fulfilled_line_id": null,
+        "device_status": "setup_in_progress",
+        "created_at": "2026-05-11T22:00:00Z",
+        "updated_at": "2026-05-12T08:30:00Z"
+      }
+    ],
+    "has_more": false,
+    "next_cursor": null
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+Each item is a `PreOrder` record — same shape as the create / get
+responses. See
+[`POST /v1/pre-orders`](/api-reference/pre-orders/post-pre-orders)
+for the field guide and lifecycle.
+
+## Pagination
+
+Cursor-based. `has_more: true` means more pages — pass `next_cursor`
+as `cursor` to fetch the next.
+
+## Webhook vs polling
+
+Three pre-order webhook events ship in v1:
+`pre_order.fulfilled`, `pre_order.cancelled`, `pre_order.refunded`.
+Subscribe to `pre_order.*` instead of polling — the payload carries
+the `fulfilled_line_id` directly:
+
+```ts
+// One-time webhook subscription
+await isnap.webhooks.create({
+  url: 'https://your.example.com/isnap',
+  events: ['pre_order.*']
+})
+
+// Handler — keyed by event.type
+if (event.type === 'pre_order.fulfilled') {
+  // event.data.pre_order.fulfilled_line_id is the live line
+}
+```
+
+This endpoint is still useful for **dashboards / audit**: render the
+queue, surface ETAs, audit refund states. For "tell me when the line
+is ready," prefer the webhook.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 422 | `validation_error` | `status` not in the enum, or `limit` out of range. |
+
+## Related
+
+- [`POST /v1/pre-orders`](/api-reference/pre-orders/post-pre-orders) — create.
+- [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-orders-id) — poll a single record.

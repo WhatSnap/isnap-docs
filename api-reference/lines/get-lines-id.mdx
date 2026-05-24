@@ -1,4 +1,69 @@
 ---
-title: "GET /v1/lines/{id}"
+title: "Get a line"
+description: "Single-line details — phone number, tier, status, monthly price, and any metadata you've attached."
 openapi: "GET /v1/lines/{id}"
 ---
+
+Returns the full `Line` record for a single line ID. Use it whenever
+you need the current `status`, `phone_number`, or `metadata` for a
+specific line — for example, after a `line.connected` webhook fires
+and you want to enrich your own database with the line's details.
+
+For a list of all your lines, see
+[`GET /v1/lines/my`](/api-reference/lines/get-lines-my).
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | The `line_…` identifier. Format: `^line_[0-9A-Za-z]{25}$`. |
+
+## What the response contains
+
+| Field | Notes |
+|---|---|
+| `id` | Echoed back for convenience. |
+| `phone_number` | E.164. May be empty/placeholder during BYOD provisioning before the bridge pairs. |
+| `area_code` | Surfaced as a separate field. |
+| `billing_tier` | `rental_iphone`, `rental_android`, `byod_imessage`, `byod_android`, or `shared_pool`. |
+| `status` | Lifecycle state — `reserved`, `provisioning`, `active`, `suspended`, `released`. See [Concepts → Line lifecycle](/concepts/line-lifecycle) for the full state machine. |
+| `monthly_price` | USD per month, decimal. `0` for trial pool lines. |
+| `stripe_subscription_id` | Internal — exposed for billing reconciliation only. May be `null`. |
+| `activated_at` | When the line transitioned to `active`. `null` while reserved. |
+| `expires_at` | When the current reservation/subscription window ends. `null` for indefinite. |
+| `metadata` | Free-form key-value labels you set via [`PATCH /v1/lines/{id}`](/api-reference/lines/patch-lines-id). |
+| `capabilities` | Capability descriptor (varies by tier). Treat as informational. |
+| `byod` | `true` when this is a BYOD slot (`byod_imessage` / `byod_android`), `false` for rental tiers. BYOD lines expose the full health surface (`GET /v1/lines/{id}/health`, `line.offline` / `line.degraded` events); rental lines suppress transient events to avoid alert noise — see [Concepts → BYOD vs Rental](/concepts/byod-vs-rental). |
+
+## BYOD vs rental
+
+Branch on `byod` directly instead of pattern-matching `billing_tier`:
+
+```ts
+if (line.byod) {
+  // BYOD line — full health surface available
+} else {
+  // Rental — only durable events fire
+}
+```
+
+The webhook payloads carry the same `byod` field on the embedded
+`data.line` object so handlers don't need to re-derive.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | The `id` doesn't match a line you can see. Either it doesn't exist or it belongs to another account. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`PATCH /v1/lines/{id}`](/api-reference/lines/patch-lines-id) — update metadata.
+- [`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config) — per-line quota / throttle config.
+- [`GET /v1/lines/{id}/health`](/api-reference/lines/get-lines-id-health) — BYOD-only health surface.

@@ -6,3 +6,13 @@ node_modules/
 *.log
 .env
 .env.local
+
+# Mintlify uses `docs.json` as the canonical config (newer schema).
+# `mint.json` is the legacy form — Mintlify regenerates it on `mintlify
+# dev` if anyone still has it locally, but we don't commit it.
+mint.json
+
+# Phase 4 scratchpad — internal triage notes, never published, never
+# linked from nav, never indexed by Mintlify. Kept local-only so it
+# doesn't accidentally ship as a public page.
+PHASE4-ISSUES.md

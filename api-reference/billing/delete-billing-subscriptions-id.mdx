@@ -1,4 +1,66 @@
 ---
-title: "DELETE /v1/billing/subscriptions/{id}"
+title: "Cancel a subscription"
+description: "Cancel at end-of-period — the line keeps working through the current month, then stops."
 openapi: "DELETE /v1/billing/subscriptions/{id}"
 ---
+
+Marks a Stripe subscription as `cancel_at_period_end`. The line keeps
+working through the **end of the current calendar month**, then
+auto-releases on the 1st.
+
+This is the standard cancellation path for rental lines and BYOD
+slots — no refund, no proration, no immediate cutoff.
+
+For immediate cutoff, call
+[`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release)
+instead — that detaches the line right now, but the current month is
+still fully billed (same wholesale-billing rule).
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | Stripe subscription ID (`sub_…`). Get it from [`GET /v1/billing/subscriptions`](/api-reference/billing/get-billing-subscriptions). |
+
+## Response
+
+```json
+{ "message": "Subscription cancellation scheduled" }
+```
+
+Subsequent
+[`GET /v1/billing/subscriptions`](/api-reference/billing/get-billing-subscriptions)
+calls will show `cancel_at_period_end: true`. The line stays in
+`status: "active"` until the period ends.
+
+## When the line actually stops
+
+On the 1st of the next month:
+
+- The Stripe subscription transitions to `canceled`.
+- The iSnap line transitions to `status: "released"`.
+- The line drops out of `GET /v1/lines/my` (v1 doesn't ship a
+  dedicated `line.released` event — detect via polling or via
+  `line.disconnected` on BYOD slots).
+
+You can cancel a cancellation by calling
+[`POST /v1/billing/checkout`](/api-reference/billing/post-billing-checkout)
+again against the same line before the period ends — that opens a
+fresh subscription and the line keeps going.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `subscription_not_found` | Subscription ID isn't on your account or already terminated. |
+| 422 | `validation_error` | `id` missing or empty. |
+
+## Related
+
+- [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release) — immediate detach (same billing outcome).
+- [`GET /v1/billing/subscriptions`](/api-reference/billing/get-billing-subscriptions) — confirm `cancel_at_period_end` flipped.

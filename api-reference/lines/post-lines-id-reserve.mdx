@@ -1,4 +1,72 @@
 ---
-title: "POST /v1/lines/{id}/reserve"
+title: "Reserve a line"
+description: "Two-step rental: hold a specific line for 15 minutes before committing to activation."
 openapi: "POST /v1/lines/{id}/reserve"
 ---
+
+Holds a specific line for **15 minutes** without starting billing.
+Pair it with
+[`POST /v1/lines/{id}/activate`](/api-reference/lines/post-lines-id-activate)
+to complete the rental, or let the reservation expire and the line
+returns to the marketplace.
+
+If you don't need the two-step pattern, use
+[`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) — it
+picks-and-activates in one call.
+
+## When to reserve vs assign
+
+| You want to… | Use |
+|---|---|
+| Pick a specific line ID from the catalog and show a confirmation step in your UI | `reserve` → `activate` |
+| Let your end-user pay in a separate flow before billing kicks in | `reserve` → wait for payment → `activate` |
+| Just grab a line of a given tier and start sending | `assign` (one call) |
+
+The reservation is a soft hold — no payment method check, no
+subscription created, no Stripe activity. It just removes the line
+from the marketplace catalog so nobody else can claim it while your
+flow is in progress.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID of the catalog line you want to hold. |
+
+## What the response contains
+
+The full `Line` record, with `status: "reserved"` and `expires_at` set
+to **now + 15 minutes**. Persist `expires_at` if you're rendering a
+countdown.
+
+## Auto-release behavior
+
+If you don't call `/activate` within the 15-minute window, iSnap:
+
+1. Flips the line back to `status: "available"`.
+2. Returns it to the marketplace catalog.
+3. Fires no webhook (no value to surface a "reservation expired" event
+   — your client knows when it abandoned the flow).
+
+Re-reserving the same line is fine — call this endpoint again to
+extend by another 15 minutes (subject to the catalog still having
+that line).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | The line ID isn't in the marketplace catalog. |
+| 409 | `line_not_available` | Someone else reserved it between your catalog read and this call. Pick another and retry. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`POST /v1/lines/{id}/activate`](/api-reference/lines/post-lines-id-activate) — commit the reservation.
+- [`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) — one-shot reserve + activate.
+- [Concepts → Line lifecycle](/concepts/line-lifecycle) — full state machine.

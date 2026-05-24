@@ -1,4 +1,80 @@
 ---
-title: "POST /v1/billing/byod-checkout"
+title: "Buy BYOD slots"
+description: "Open a Stripe Checkout session for N BYOD slots — monthly or annual cadence."
 openapi: "POST /v1/billing/byod-checkout"
 ---
+
+Returns a hosted Stripe Checkout URL for purchasing BYOD slots. Each
+slot lets you pair one device (Mac+iPhone or Android) via
+[`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair).
+
+Use this when you know upfront how many devices you'll pair. For
+individual rental lines, see
+[`POST /v1/billing/checkout`](/api-reference/billing/post-billing-checkout).
+
+## Request shape
+
+```json
+{
+  "device_count": 2,
+  "billing_cycle": "monthly"
+}
+```
+
+| Field | Value |
+|---|---|
+| `device_count` | Number of BYOD slots to purchase. 1–50. |
+| `billing_cycle` | `monthly` or `annual`. Annual = 10× monthly (2 months free). |
+
+## Response
+
+```json
+{
+  "checkout_url": "https://checkout.stripe.com/c/pay/cs_test_..."
+}
+```
+
+Redirect the customer to `checkout_url`. After payment, the slots are
+created on your account and ready to pair via the BYOD pairing flow.
+
+## After the purchase
+
+Each slot is a billable seat — even before you pair hardware to it.
+The seat charges from the moment the subscription starts, on the
+calendar-month cycle.
+
+Pair hardware via [`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair).
+A slot without a paired device still bills.
+
+## Sizing the purchase
+
+| Devices you need | `device_count` |
+|---|---|
+| 1 BYOD Mac in the office | `1` |
+| 1 BYOD Mac + 1 BYOD Android | `2` |
+| 10-seat team rollout | `10` |
+
+Adjust later by:
+
+- **Adding seats** — call this endpoint again with the delta. iSnap
+  prorates the new seats inside the same subscription.
+- **Removing seats** — release the line via
+  [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release).
+  Seat removal takes effect at end-of-period.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 422 | `validation_error` | `device_count` out of range (1–50), or `billing_cycle` not in the enum. |
+
+## Related
+
+- [`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair) — bind hardware to a slot.
+- [BYOD pairing guide](/guides/byod-pairing) — end-to-end walkthrough.
+- [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) — when to pick BYOD.

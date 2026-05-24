@@ -1,4 +1,81 @@
 ---
-title: "DELETE /v1/messages/{id}"
+title: "Cancel a queued message"
+description: "Pull back a queued or scheduled message before the device dispatches it."
 openapi: "DELETE /v1/messages/{id}"
 ---
+
+Cancels a message before it reaches the carrier or Apple. Returns the
+message with `status: "cancelled"`. Cancellable iff the current status
+is `queued` or `scheduled`. Anything else is a 409.
+
+## When this works
+
+```
+queued     ─► cancel works  ─► cancelled
+scheduled  ─► cancel works  ─► cancelled
+sent       ─► 409 too_late_to_cancel
+delivered  ─► 409 too_late_to_cancel
+failed     ─► 409 too_late_to_cancel
+cancelled  ─► 409 too_late_to_cancel  (already cancelled)
+```
+
+## Race with the device
+
+The transition from `queued` to `sent` can be sub-second on a healthy
+line. If you call cancel and the device picks the message up in the
+same instant, iSnap returns 409 `too_late_to_cancel` rather than 200 —
+the cancel **didn't take effect** and the message is on its way.
+
+Always check the response body for the final `status` rather than
+trusting the absence of an error.
+
+## What "cancelled" actually means
+
+Once a message reaches `sent`, the carrier (or Apple) has it. There's
+no mechanism to recall a sent message — that's a property of the
+underlying network, not an API limitation. Cancellation only works
+while the message is sitting in iSnap's queue waiting for device
+pickup.
+
+## Quota refund
+
+Cancelling a `queued` message before dispatch returns the quota slot
+to the bucket pool. The refund isn't transactional — there's a brief
+window (typically &lt; 1 s) where the slot still shows as consumed in
+[`GET /v1/lines/{id}/quota`](/api-reference/lines/get-lines-id-quota).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `message_not_found` | ID doesn't exist or is older than 72 h. |
+| 403 | `line_not_owned` | Message belongs to a line your API key doesn't have access to. |
+| 409 | `too_late_to_cancel` | Status is past `scheduled`, or already `cancelled`. |
+
+Example:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 409,
+    "code": "too_late_to_cancel",
+    "message": "Message status is sent; cannot be cancelled"
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+## Related
+
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — sends
+  start in `queued`.
+- [Sending messages → Cancelling](/guides/sending-messages#cancelling-a-queued-message) —
+  walkthrough.

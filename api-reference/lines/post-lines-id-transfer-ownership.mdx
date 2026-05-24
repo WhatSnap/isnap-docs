@@ -1,4 +1,84 @@
 ---
-title: "POST /v1/lines/{id}/transfer-ownership"
+title: "Transfer line ownership"
+description: "Move a line to a different account — billing follows ownership, optionally keeping the BYOD bridge session alive."
 openapi: "POST /v1/lines/{id}/transfer-ownership"
 ---
+
+Reassigns a line to a different iSnap account. The destination
+account becomes the billing party effective immediately; the source
+account no longer sees the line.
+
+Common when restructuring multi-account setups, handing a line off
+between teams, or moving a BYOD slot between iSnap accounts you
+control.
+
+## Request shape
+
+```json
+{
+  "to_user_id": "uuid-of-destination-account",
+  "preserve_device_session": true
+}
+```
+
+| Field | Value |
+|---|---|
+| `to_user_id` | UUID of the destination account. The destination must already exist on iSnap. |
+| `preserve_device_session` | Optional. `true` (default `false`) keeps the BYOD bridge connection alive across the transfer — the bridge stays paired, no re-activation needed. Rental lines ignore this flag. |
+
+The caller must be the **current owner** of the line. There's no
+"accept transfer" handshake on the destination side — the call
+succeeds and the line appears on the destination's
+[`GET /v1/lines/my`](/api-reference/lines/get-lines-my) immediately.
+
+## What changes
+
+- **Billing.** The source account's Stripe subscription is canceled at
+  end-of-current-period (no proration). The destination account starts
+  a new subscription for the line, prorated to the calendar month
+  boundary. See [Concepts → Billing](/concepts/billing).
+- **API key access.** Existing API keys on the source no longer
+  authenticate for this line. Destination API keys do.
+- **Webhooks.** `line.*` events stop firing on source subscriptions
+  and start firing on destination subscriptions immediately after the
+  transfer commits. v1 doesn't ship a dedicated `line.transferred`
+  event — both sides can detect the transition by polling
+  `GET /v1/lines/{id}` or `GET /v1/lines/my`.
+- **Message history.** Retained per standard 72h retention. Both
+  accounts can read messages exchanged before the transfer until
+  retention reaps them.
+
+## `preserve_device_session: true` (BYOD only)
+
+By default, transferring a BYOD line invalidates the bridge's session
+— the new owner has to pair again. With this flag, the existing
+bridge session is rebound to the destination account in place:
+
+- No re-activation code, no re-install.
+- The bridge keeps sending without interruption.
+- The destination must already have a free BYOD slot of the matching
+  type.
+
+Use it for in-team handoffs; leave it `false` (or omit) when the
+hardware physically changes hands.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 402 | `destination_payment_method_required` | Destination has no active payment method. |
+| 402 | `destination_no_slot_available` | Destination's subscription has no free slot for this tier. |
+| 404 | `line_not_found` | Line isn't on your account. |
+| 404 | `destination_user_not_found` | `to_user_id` doesn't match an iSnap account. |
+| 409 | `line_in_transition` | Line is mid-transition (e.g. release pending). Retry after a few seconds. |
+| 422 | `validation_error` | `to_user_id` not a UUID, or `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release) — cancel instead of transferring.
+- [Concepts → Billing](/concepts/billing) — proration rules at the calendar boundary.

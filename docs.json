@@ -1,0 +1,285 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "iSnap",
+  "colors": {
+    "primary": "#09090b",
+    "light": "#fafafa",
+    "dark": "#09090b"
+  },
+  "favicon": "/images/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/sending-messages",
+              "guides/webhooks",
+              "guides/byod-pairing",
+              "guides/trial-onboarding",
+              "guides/apple-flag-events",
+              "guides/best-practices"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/byod-vs-rental",
+              "concepts/channels",
+              "concepts/line-lifecycle",
+              "concepts/trials",
+              "concepts/quotas-and-warming",
+              "concepts/billing",
+              "concepts/deprecation-lifecycle"
+            ]
+          },
+          {
+            "group": "Versioning",
+            "pages": [
+              "versioning"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API Reference",
+            "pages": [
+              "api-reference/introduction"
+            ]
+          },
+          {
+            "group": "Messages",
+            "pages": [
+              "api-reference/messages/post-messages",
+              "api-reference/messages/get-messages",
+              "api-reference/messages/get-messages-id",
+              "api-reference/messages/post-messages-id-reactions",
+              "api-reference/messages/delete-messages-id-reactions",
+              "api-reference/messages/delete-messages-id"
+            ]
+          },
+          {
+            "group": "Lines",
+            "pages": [
+              "api-reference/lines/get-lines",
+              "api-reference/lines/get-lines-my",
+              "api-reference/lines/get-lines-id",
+              "api-reference/lines/patch-lines-id",
+              "api-reference/lines/post-lines-assign",
+              "api-reference/lines/post-lines-id-reserve",
+              "api-reference/lines/post-lines-id-activate",
+              "api-reference/lines/post-lines-id-release",
+              "api-reference/lines/post-lines-id-transfer-ownership",
+              "api-reference/lines/get-lines-id-config",
+              "api-reference/lines/patch-lines-id-config",
+              "api-reference/lines/get-lines-id-quota",
+              "api-reference/lines/get-lines-id-queue",
+              "api-reference/lines/get-lines-id-health"
+            ]
+          },
+          {
+            "group": "Webhooks",
+            "pages": [
+              "api-reference/webhooks/get-webhooks-events",
+              "api-reference/webhooks/post-webhooks",
+              "api-reference/webhooks/get-webhooks",
+              "api-reference/webhooks/get-webhooks-id",
+              "api-reference/webhooks/patch-webhooks-id",
+              "api-reference/webhooks/delete-webhooks-id",
+              "api-reference/webhooks/post-webhooks-id-rotate-secret",
+              "api-reference/webhooks/get-webhooks-id-deliveries",
+              "api-reference/webhooks/post-webhooks-id-deliveries-delivery_id-replay"
+            ]
+          },
+          {
+            "group": "Lookup",
+            "pages": [
+              "api-reference/lookup/post-lookup"
+            ]
+          },
+          {
+            "group": "Trial",
+            "pages": [
+              "api-reference/trial/post-trial-init",
+              "api-reference/trial/get-trial-status",
+              "api-reference/trial/get-trial-activity"
+            ]
+          },
+          {
+            "group": "BYOD",
+            "pages": [
+              "api-reference/byod/post-byod-pair"
+            ]
+          },
+          {
+            "group": "Billing",
+            "pages": [
+              "api-reference/billing/post-billing-checkout",
+              "api-reference/billing/post-billing-byod-checkout",
+              "api-reference/billing/get-billing-subscriptions",
+              "api-reference/billing/delete-billing-subscriptions-id",
+              "api-reference/billing/get-billing-invoices",
+              "api-reference/billing/get-billing-payment-methods",
+              "api-reference/billing/post-billing-payment-methods",
+              "api-reference/billing/post-billing-payment-methods-id-default",
+              "api-reference/billing/delete-billing-payment-methods-id"
+            ]
+          },
+          {
+            "group": "Attachments",
+            "pages": [
+              "api-reference/attachments/post-attachments",
+              "api-reference/attachments/get-attachments-id"
+            ]
+          },
+          {
+            "group": "Chats",
+            "pages": [
+              "api-reference/chats/post-chats-chat_id-typing",
+              "api-reference/chats/delete-chats-chat_id-typing",
+              "api-reference/chats/post-chats-chat_id-read",
+              "api-reference/chats/post-chats-chat_id-share-contact-card"
+            ]
+          },
+          {
+            "group": "API Keys",
+            "pages": [
+              "api-reference/api-keys/post-api-keys",
+              "api-reference/api-keys/get-api-keys",
+              "api-reference/api-keys/delete-api-keys-id"
+            ]
+          },
+          {
+            "group": "Pre-orders",
+            "pages": [
+              "api-reference/pre-orders/post-pre-orders",
+              "api-reference/pre-orders/get-pre-orders",
+              "api-reference/pre-orders/get-pre-orders-id",
+              "api-reference/pre-orders/post-pre-orders-id-cancel"
+            ]
+          },
+          {
+            "group": "Meta",
+            "pages": [
+              "api-reference/meta/get-health",
+              "api-reference/meta/get-version"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK",
+        "groups": [
+          {
+            "group": "SDK",
+            "pages": [
+              "sdk/install",
+              "sdk/auth",
+              "sdk/errors",
+              "sdk/pagination",
+              "sdk/idempotency",
+              "sdk/webhooks-verification",
+              {
+                "group": "Examples",
+                "pages": [
+                  "sdk/examples/send-message",
+                  "sdk/examples/lookup-handle",
+                  "sdk/examples/handle-webhooks"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Changelog",
+        "groups": [
+          {
+            "group": "Changelog",
+            "pages": [
+              "changelog"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/WhatSnap",
+          "icon": "github"
+        },
+        {
+          "anchor": "Status",
+          "href": "https://status.isnap.ai",
+          "icon": "signal-stream"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/images/logo-light.svg",
+    "dark": "/images/logo-dark.svg",
+    "href": "https://isnap.ai"
+  },
+  "api": {
+    "openapi": [
+      "api-reference/openapi.json"
+    ]
+  },
+  "appearance": {
+    "default": "light",
+    "strict": false
+  },
+  "background": {
+    "color": {
+      "light": "#ffffff",
+      "dark": "#09090b"
+    }
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "Dashboard",
+        "href": "https://platform.isnap.ai"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Sign up",
+      "href": "https://platform.isnap.ai/signup"
+    }
+  },
+  "search": {
+    "prompt": "Search the iSnap docs..."
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/isnap_ai",
+      "github": "https://github.com/WhatSnap",
+      "linkedin": "https://www.linkedin.com/company/isnap"
+    }
+  },
+  "fonts": {
+    "heading": {
+      "family": "Inter"
+    },
+    "body": {
+      "family": "Inter"
+    }
+  }
+}

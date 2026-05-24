@@ -1,4 +1,87 @@
 ---
-title: "POST /v1/trial/init"
+title: "Start a trial"
+description: "Mint an opaque token and reserve a shared pool line so a prospect can text in and pair."
 openapi: "POST /v1/trial/init"
 ---
+
+Trials let a prospect exchange real messages against an iSnap-operated
+**shared pool number** before buying a paid line. This endpoint mints
+the trial session, reserves a pool line, and returns the number the
+prospect should text to complete pairing.
+
+See [Concepts → Trial architecture](/concepts/trials) for the data
+model and lifecycle. The
+[Trial onboarding guide](/guides/trial-onboarding) walks through the
+end-to-end integration.
+
+## Request shape
+
+```json
+{
+  "max_outbound_without_inbound": 5
+}
+```
+
+| Field | Value |
+|---|---|
+| `max_outbound_without_inbound` | Streak cap. After this many outbounds without an inbound reply, further sends return `429 trial_outbound_streak_exceeded`. Range 1–100; default 5. |
+
+The body is optional — `POST /v1/trial/init` with `{}` (or no body) is
+valid and uses the default cap.
+
+## What the response contains
+
+| Field | What it's for |
+|---|---|
+| `trial_id` | iSnap-side identifier for the trial session. Use this in logs and audit trails. |
+| `token` | Opaque correlation handle. **The only piece you persist in your own systems** — keep it mapped to whatever you call this prospect on your side. Used in `GET /v1/trial/status?token=…` and `billing.checkout({ trial_token })`. |
+| `pool_line_number` | The shared pool number the prospect texts to complete pairing. Show this in your UI. |
+| `pairing_expires_at` | ISO timestamp; the prospect has until this moment to send the first inbound. Default 15 minutes from issue. |
+| `instructions_url` | Deep link to a generic "text this number" landing page you can hand to the prospect if you don't want to render the UI yourself. |
+
+## The pairing step
+
+After `init` the trial is in `pairing_pending`. iSnap doesn't know who
+the prospect is yet — pairing happens when they text `pool_line_number`
+from their real phone, which iSnap matches to the open trial.
+
+Once that inbound lands:
+
+- The trial transitions to `active`.
+- The `paired_handle` (the prospect's phone number) is captured on the
+  trial row.
+- A `trial.linked` webhook fires with `trial_id`, `token`, and
+  `paired_handle`.
+
+If the prospect doesn't text in within `pairing_expires_at`, the trial
+moves to `revoked` and the pool line slot frees up. Call this endpoint
+again to start a fresh trial.
+
+## What you can do with the trial
+
+Once paired, iSnap mints a scoped trial API key (visible on
+`GET /v1/trial/status`). That key can send messages **only** to the
+`paired_handle` — server-side enforcement, no opt-in needed. This is
+the "self-echo" guarantee that makes trials safe to hand to prospects.
+
+The streak counter (`max_outbound_without_inbound`) caps cold blasting.
+Real conversations clear it; one-sided streaks get stopped at the cap.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 402 | `no_trial_pool_available` | No pool line is free right now. iSnap ops keeps the pool stocked; transient pressure means retry in a few minutes. |
+| 422 | `validation_error` | `max_outbound_without_inbound` out of range (must be 1–100). |
+| 429 | `trial_rate_limited` | Too many `/trial/init` calls from this account in a short window. Back off. |
+
+## Related
+
+- [Trial onboarding guide](/guides/trial-onboarding) — end-to-end walkthrough.
+- [`GET /v1/trial/status`](/api-reference/trial/get-trial-status) — poll the trial state.
+- [Concepts → Trial architecture](/concepts/trials) — data model, streak counter, opaque-token correlation.

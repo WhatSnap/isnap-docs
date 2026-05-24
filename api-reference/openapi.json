@@ -2,10 +2,22 @@
   "openapi": "3.0.0",
   "info": {
     "title": "iSnap API",
-    "version": "1.1.0",
-    "description": "Hardware-as-a-Service telephony platform API (contract v1.1.0)"
+    "version": "1.0.0",
+    "description": "Hardware-as-a-Service telephony platform API (contract v1.0.0)"
   },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key from the dashboard. `isnap_live_*` for production, `isnap_test_*` for sandbox."
+      }
+    },
     "schemas": {
       "HealthResponse": {
         "type": "object",
@@ -31,6 +43,91 @@
           "status",
           "timestamp",
           "checks"
+        ]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "data": {
+            "nullable": true
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "integer"
+              },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retry_after": {
+                "type": "integer",
+                "nullable": true
+              },
+              "issues": {
+                "type": "array",
+                "nullable": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "message",
+                    "code"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "status",
+              "code",
+              "message",
+              "retry_after",
+              "issues"
+            ]
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "error",
+          "trace_id",
+          "request_id"
         ]
       },
       "VersionResponse": {
@@ -170,7 +267,8 @@
                   "type": "object",
                   "properties": {
                     "unit_amount": {
-                      "type": "number"
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "currency": {
                       "type": "string"
@@ -185,7 +283,8 @@
                   "type": "object",
                   "properties": {
                     "unit_amount": {
-                      "type": "number"
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "currency": {
                       "type": "string"
@@ -200,7 +299,8 @@
                   "type": "object",
                   "properties": {
                     "unit_amount": {
-                      "type": "number"
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "currency": {
                       "type": "string"
@@ -438,10 +538,12 @@
             ]
           },
           "messages_sent": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "daily_limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "test_number": {
             "type": "string",
@@ -3362,10 +3464,15 @@
             "type": "string"
           },
           "line_ids": {
-            "nullable": true
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
+            }
           },
           "rate_limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "created_at": {
             "type": "string"
@@ -3380,6 +3487,7 @@
           "name",
           "prefix",
           "scope",
+          "line_ids",
           "rate_limit",
           "created_at",
           "last_used_at"
@@ -3420,13 +3528,17 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "required": [
@@ -3440,7 +3552,8 @@
         "type": "object",
         "properties": {
           "id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "phone_number": {
             "type": "string"
@@ -3458,6 +3571,10 @@
               "shared_pool"
             ]
           },
+          "byod": {
+            "type": "boolean",
+            "description": "True when the customer owns the underlying hardware (BYOD billing tiers). BYOD lines expose the full line-health surface (offline/degraded events, GET /v1/lines/{id}/health). Rental lines (false) only emit durable, actionable events to keep customers out of transient infrastructure noise they cannot act on."
+          },
           "capabilities": {
             "nullable": true
           },
@@ -3465,7 +3582,8 @@
             "type": "string"
           },
           "monthly_price": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "stripe_subscription_id": {
             "type": "string",
@@ -3499,6 +3617,7 @@
           "phone_number",
           "area_code",
           "billing_tier",
+          "byod",
           "status",
           "monthly_price",
           "stripe_subscription_id",
@@ -3609,7 +3728,8 @@
         "type": "object",
         "properties": {
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "daily_new_contacts_used": {
             "type": "integer",
@@ -3727,7 +3847,8 @@
         "type": "object",
         "properties": {
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "summary": {
             "$ref": "#/components/schemas/QueueSummary"
@@ -3928,7 +4049,8 @@
         "type": "object",
         "properties": {
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "byod": {
             "type": "boolean",
@@ -4010,7 +4132,8 @@
         "type": "object",
         "properties": {
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "config": {
             "$ref": "#/components/schemas/EffectiveLineConfig"
@@ -4216,14 +4339,15 @@
             }
           },
           "status": {
-            "type": "string"
+            "$ref": "#/components/schemas/PreOrderStatus"
           },
           "stripe_payment_intent_id": {
             "type": "string",
             "nullable": true
           },
           "amount": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "estimated_fulfillment": {
             "type": "string",
@@ -4235,8 +4359,7 @@
             "format": "uuid"
           },
           "device_status": {
-            "type": "string",
-            "nullable": true
+            "$ref": "#/components/schemas/DeviceFulfillmentStatus"
           },
           "created_at": {
             "type": "string"
@@ -4256,6 +4379,29 @@
           "fulfilled_line_id",
           "created_at",
           "updated_at"
+        ]
+      },
+      "PreOrderStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "provisioning",
+          "ready",
+          "fulfilled",
+          "cancelled",
+          "refunded"
+        ]
+      },
+      "DeviceFulfillmentStatus": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "awaiting_hardware",
+          "received",
+          "setup_in_progress",
+          "ready",
+          "deployed",
+          null
         ]
       },
       "PreOrderList": {
@@ -4387,11 +4533,34 @@
         ],
         "additionalProperties": false
       },
-      "SubscriptionList": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/Subscription"
-        }
+      "SubscriptionListEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Subscription"
+            }
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "trace_id",
+          "request_id"
+        ]
       },
       "Subscription": {
         "type": "object",
@@ -4402,53 +4571,80 @@
           "status": {
             "type": "string"
           },
-          "currentPeriodStart": {
-            "type": "number"
+          "current_period_start": {
+            "type": "integer",
+            "minimum": 0
           },
-          "currentPeriodEnd": {
-            "type": "number"
+          "current_period_end": {
+            "type": "integer",
+            "minimum": 0
           },
-          "cancelAtPeriodEnd": {
+          "cancel_at_period_end": {
             "type": "boolean"
           },
-          "lineId": {
+          "line_id": {
             "type": "string",
             "nullable": true
           },
-          "priceId": {
+          "price_id": {
             "type": "string",
             "nullable": true
           },
           "amount": {
-            "type": "number",
-            "nullable": true
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
           },
           "currency": {
             "type": "string",
             "nullable": true
           },
-          "createdAt": {
-            "type": "number"
+          "created_at": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
           "id",
           "status",
-          "currentPeriodStart",
-          "currentPeriodEnd",
-          "cancelAtPeriodEnd",
-          "lineId",
-          "priceId",
+          "current_period_start",
+          "current_period_end",
+          "cancel_at_period_end",
+          "line_id",
+          "price_id",
           "amount",
           "currency",
-          "createdAt"
+          "created_at"
         ]
       },
-      "InvoiceList": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/Invoice"
-        }
+      "InvoiceListEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invoice"
+            }
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "trace_id",
+          "request_id"
+        ]
       },
       "Invoice": {
         "type": "object",
@@ -4460,44 +4656,49 @@
             "type": "string",
             "nullable": true
           },
-          "amountDue": {
-            "type": "number"
+          "amount_due": {
+            "type": "integer",
+            "minimum": 0
           },
-          "amountPaid": {
-            "type": "number"
+          "amount_paid": {
+            "type": "integer",
+            "minimum": 0
           },
           "currency": {
             "type": "string"
           },
-          "invoicePdf": {
+          "invoice_pdf": {
             "type": "string",
             "nullable": true
           },
-          "hostedInvoiceUrl": {
+          "hosted_invoice_url": {
             "type": "string",
             "nullable": true
           },
-          "periodStart": {
-            "type": "number"
+          "period_start": {
+            "type": "integer",
+            "minimum": 0
           },
-          "periodEnd": {
-            "type": "number"
+          "period_end": {
+            "type": "integer",
+            "minimum": 0
           },
-          "createdAt": {
-            "type": "number"
+          "created_at": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
           "id",
           "status",
-          "amountDue",
-          "amountPaid",
+          "amount_due",
+          "amount_paid",
           "currency",
-          "invoicePdf",
-          "hostedInvoiceUrl",
-          "periodStart",
-          "periodEnd",
-          "createdAt"
+          "invoice_pdf",
+          "hosted_invoice_url",
+          "period_start",
+          "period_end",
+          "created_at"
         ]
       },
       "BillingMessage": {
@@ -4511,11 +4712,34 @@
           "message"
         ]
       },
-      "PaymentMethodList": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/PaymentMethod"
-        }
+      "PaymentMethodListEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentMethod"
+            }
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "trace_id",
+          "request_id"
+        ]
       },
       "PaymentMethod": {
         "type": "object",
@@ -4530,10 +4754,14 @@
             "type": "string"
           },
           "exp_month": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
           },
           "exp_year": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 2000,
+            "maximum": 2100
           },
           "is_default": {
             "type": "boolean"
@@ -4592,10 +4820,11 @@
             "type": "string"
           },
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "direction": {
-            "type": "string"
+            "$ref": "#/components/schemas/MessageDirection"
           },
           "to": {
             "type": "string"
@@ -4608,14 +4837,13 @@
             "nullable": true
           },
           "channel": {
-            "type": "string"
+            "$ref": "#/components/schemas/MessageChannel"
           },
           "service": {
-            "type": "string",
-            "nullable": true
+            "$ref": "#/components/schemas/MessageService"
           },
           "status": {
-            "type": "string"
+            "$ref": "#/components/schemas/MessageStatus"
           },
           "effect": {
             "oneOf": [
@@ -4709,37 +4937,47 @@
             "nullable": true,
             "properties": {
               "queue_position": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "is_new_contact": {
                 "type": "boolean"
               },
               "daily_new_contacts_used": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_new_contact_limit": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_known_contacts_used": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_known_contact_limit": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_messages_used": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_total_message_limit": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "messages_ahead_in_queue": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "daily_slot_of": {
                 "type": "string"
               },
               "target_activity_hour": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 23
               },
               "next_slot_available_at": {
                 "type": "string"
@@ -4748,10 +4986,12 @@
                 "type": "string"
               },
               "min_inter_new_contact_seconds": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               },
               "jitter_applied_seconds": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
@@ -4819,6 +5059,45 @@
           "cancelled_at"
         ]
       },
+      "MessageDirection": {
+        "type": "string",
+        "enum": [
+          "outbound",
+          "inbound"
+        ]
+      },
+      "MessageChannel": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "iMessage",
+          "SMS",
+          "RCS"
+        ]
+      },
+      "MessageService": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "iMessage",
+          "SMS",
+          "RCS",
+          null
+        ]
+      },
+      "MessageStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "scheduled",
+          "sent",
+          "delivered",
+          "read",
+          "failed",
+          "cancelled",
+          "received"
+        ]
+      },
       "ReactionEnvelope": {
         "type": "object",
         "properties": {
@@ -4854,13 +5133,6 @@
           "parent_message_id": {
             "type": "string"
           },
-          "operation": {
-            "type": "string",
-            "enum": [
-              "add",
-              "remove"
-            ]
-          },
           "type": {
             "type": "string",
             "enum": [
@@ -4889,7 +5161,6 @@
         "required": [
           "id",
           "parent_message_id",
-          "operation",
           "type",
           "direction",
           "status",
@@ -4899,13 +5170,6 @@
       "SendReactionRequest": {
         "type": "object",
         "properties": {
-          "operation": {
-            "type": "string",
-            "enum": [
-              "add",
-              "remove"
-            ]
-          },
           "type": {
             "type": "string",
             "enum": [
@@ -4919,7 +5183,61 @@
           }
         },
         "required": [
-          "operation",
+          "type"
+        ]
+      },
+      "ReactionRemovalEnvelope": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReactionRemoval"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "data",
+          "trace_id",
+          "request_id"
+        ]
+      },
+      "ReactionRemoval": {
+        "type": "object",
+        "properties": {
+          "parent_message_id": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "love",
+              "like",
+              "dislike",
+              "laugh",
+              "emphasize",
+              "question",
+              null
+            ]
+          }
+        },
+        "required": [
+          "parent_message_id",
+          "removed",
           "type"
         ]
       },
@@ -4955,7 +5273,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Message"
+              "$ref": "#/components/schemas/MessageV1"
             }
           },
           "has_more": {
@@ -4980,7 +5298,8 @@
             "format": "uuid"
           },
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "direction": {
             "type": "string"
@@ -5084,7 +5403,8 @@
             "type": "boolean"
           },
           "failure_count": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "last_success_at": {
             "type": "string",
@@ -5110,6 +5430,47 @@
           "last_failure_at",
           "created_at"
         ]
+      },
+      "WebhookEventName": {
+        "type": "string",
+        "enum": [
+          "message.queued",
+          "message.sent",
+          "message.delivered",
+          "message.read",
+          "message.failed",
+          "message.received",
+          "message.scheduled",
+          "message.cancelled",
+          "reaction.added",
+          "reaction.received",
+          "reaction.removed",
+          "line.connected",
+          "line.disconnected",
+          "line.offline",
+          "line.degraded",
+          "line.apple_id_flagged",
+          "line.quota_warning",
+          "line.quota_exceeded",
+          "typing_indicator.started",
+          "typing_indicator.stopped",
+          "trial.linked",
+          "trial.dormant",
+          "trial.reactivated",
+          "trial.converted",
+          "pre_order.fulfilled",
+          "pre_order.cancelled",
+          "pre_order.refunded",
+          "webhook.test",
+          "*",
+          "message.*",
+          "reaction.*",
+          "line.*",
+          "typing_indicator.*",
+          "trial.*",
+          "webhook.*"
+        ],
+        "description": "A concrete event type (e.g. `message.received`), a family wildcard (`line.*`), or the catch-all `*`."
       },
       "WebhookList": {
         "type": "object",
@@ -5393,7 +5754,8 @@
             "nullable": true
           },
           "attempt_number": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "status": {
             "type": "string"
@@ -5410,7 +5772,7 @@
             "nullable": true
           },
           "response_status": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "response_body_snippet": {
@@ -5552,7 +5914,9 @@
           "size_bytes": {
             "type": "integer",
             "minimum": 0,
-            "exclusiveMinimum": true
+            "exclusiveMinimum": true,
+            "description": "Attachment size in bytes. Hard cap 5 GB (R2 single-PUT ceiling); oversize requests are rejected with HTTP 413 `attachment_exceeds_storage_limit`. Sizes above 100 MB succeed but carry a `large_attachment_may_delay_delivery` warning.",
+            "maximum": 5368709120
           }
         },
         "required": [
@@ -5574,7 +5938,9 @@
             "type": "string"
           },
           "size_bytes": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
           },
           "status": {
             "type": "string"
@@ -5589,8 +5955,9 @@
             "nullable": true
           },
           "duration_ms": {
-            "type": "number",
-            "nullable": true
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0
           },
           "created_at": {
             "type": "string"
@@ -5659,42 +6026,11 @@
           "imessage": {
             "type": "boolean",
             "nullable": true
-          },
-          "facetime": {
-            "type": "boolean",
-            "nullable": true
-          },
-          "line_type": {
-            "type": "string",
-            "nullable": true
-          },
-          "carrier": {
-            "type": "string",
-            "nullable": true
-          },
-          "checked_at": {
-            "type": "string"
-          },
-          "cached": {
-            "type": "boolean"
-          },
-          "pending": {
-            "type": "boolean"
-          },
-          "retry_after": {
-            "type": "integer",
-            "minimum": 0,
-            "exclusiveMinimum": true
           }
         },
         "required": [
           "handle",
-          "imessage",
-          "facetime",
-          "line_type",
-          "carrier",
-          "checked_at",
-          "cached"
+          "imessage"
         ]
       },
       "LookupRequest": {
@@ -6241,13 +6577,17 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "required": [
@@ -6267,13 +6607,17 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "required": [
@@ -6291,7 +6635,8 @@
             "format": "uuid"
           },
           "line_id": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^line_[0-9A-Za-z]{25}$"
           },
           "contact_number": {
             "type": "string"
@@ -6300,7 +6645,8 @@
             "type": "string"
           },
           "message_count": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "created_at": {
             "type": "string"
@@ -6328,13 +6674,17 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "required": [
@@ -6355,13 +6705,17 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "limit": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
           }
         },
         "required": [
@@ -6389,7 +6743,7 @@
             "nullable": true
           },
           "response_status": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "response_body": {
@@ -6401,7 +6755,8 @@
             "nullable": true
           },
           "retry_count": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
@@ -6532,6 +6887,7 @@
   "paths": {
     "/v1/health": {
       "get": {
+        "security": [],
         "responses": {
           "200": {
             "description": "Healthy",
@@ -6539,6 +6895,36 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -6558,6 +6944,7 @@
     },
     "/v1/version": {
       "get": {
+        "security": [],
         "responses": {
           "200": {
             "description": "API schema version",
@@ -6568,12 +6955,49 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/api-keys": {
       "post": {
+        "summary": "Create an API key",
+        "description": "Mint a new API key for the authenticated user. The plaintext key is returned ONCE in this response — store it; the server only keeps a hash. Optional `line_ids` array scopes the key to specific lines; omit or pass `[]` for account-wide access.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6595,7 +7019,8 @@
                   "line_ids": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^line_[0-9A-Za-z]{25}$"
                     }
                   }
                 }
@@ -6613,10 +7038,57 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "get": {
+        "summary": "List API keys",
+        "description": "Return every non-revoked API key for the authenticated user. Includes the key prefix, scope, line allowlist, and last-used timestamp — never the plaintext (which is only emitted once at create time).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "API key list",
@@ -6627,12 +7099,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/api-keys/{id}": {
       "delete": {
+        "summary": "Revoke an API key",
+        "description": "Mark the API key as revoked. Subsequent requests presenting this key receive 401. Revocation is irreversible — issue a fresh key via `POST /v1/api-keys` to regain access.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -6654,12 +7173,75 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines": {
       "get": {
+        "summary": "List available lines (public marketplace)",
+        "description": "Browse the marketplace inventory of unassigned lines. Filter by billing tier, area code, region, status. Returns only `status: available` and never the iSnap-internal `shared_pool` tier. Unauthenticated — partners use this in prospecting / quote flows.",
+        "security": [],
         "parameters": [
           {
             "schema": {
@@ -6733,12 +7315,49 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/my": {
       "get": {
+        "summary": "List the caller's own lines",
+        "description": "Return every line owned by the authenticated user that's in `active` or `reserved` status. Includes a `fulfillment_status` hint for lines whose hardware is still being procured.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "User lines",
@@ -6749,16 +7368,60 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}": {
       "get": {
+        "summary": "Get line details (public marketplace)",
+        "description": "Fetch a single line by its `line_<base62>` id. Available unauthenticated for the marketplace browsing flow; partner-private metadata still requires API key access via `GET /v1/lines/my`.",
+        "security": [],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6775,14 +7438,62 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "patch": {
+        "summary": "Update line metadata",
+        "description": "Merge-patch the line's free-form `metadata` tag object. Pass `null` for a key to delete it; pass a new value to overwrite. Metadata is echoed on every `line.*` webhook so partners can attribute events back to their own customer IDs.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6808,12 +7519,79 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/assign": {
       "post": {
+        "summary": "Atomically reserve + activate a line",
+        "description": "Find an available line matching `billing_tier` (and optional `area_code`), reserve it, and activate it in a single round-trip. Useful when the partner doesn't care which specific number they get — saves the reserve→checkout→activate dance. Scoped API keys are rejected (cannot assign lines outside their allowlist).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6833,16 +7611,94 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/reserve": {
       "post": {
+        "summary": "Reserve an available line",
+        "description": "Move a specific line from `available` to `reserved` for 15 minutes. After that window a background worker auto-releases the reservation. Call `POST /v1/billing/checkout` next to convert the reservation into an active subscription.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6859,16 +7715,94 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/activate": {
       "post": {
+        "summary": "Activate a reserved line (test/dev)",
+        "description": "Move a reserved line to `active` with a mock Stripe subscription id. Test-environment shortcut so partners can drive an end-to-end flow without going through real Stripe checkout. Production activation happens via the Stripe webhook on `checkout.session.completed`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6885,16 +7819,94 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/transfer-ownership": {
       "post": {
+        "summary": "Transfer a line to another iSnap user",
+        "description": "Move ownership of a line to a different iSnap user. By default the paired device session stays attached so messaging continues uninterrupted; pass `preserve_device_session: false` to force the new owner to re-pair. See `/concepts/billing` for how the cutover handles the in-flight Stripe subscription.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6920,16 +7932,94 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/release": {
       "post": {
+        "summary": "Release a line back to the marketplace",
+        "description": "Cancel the line's ownership and return it to `available`. Cancels the underlying Stripe subscription at period end. The caller must own the line. See `/concepts/billing` for the proration rules.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6946,16 +8036,84 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/quota": {
       "get": {
+        "summary": "Get a line's quota snapshot",
+        "description": "Five-bucket quota snapshot: new-contacts, known-contacts, total daily messages, hourly, and minute counters with their effective limits plus 80%-warning flags. Drives the dashboard usage panel and partner self-service throttle decisions.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -6972,16 +8130,84 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/queue": {
       "get": {
+        "summary": "Inspect a line's queued and scheduled messages",
+        "description": "Cursor-paginated queue snapshot: per-row `to` / `body` / `status` (`queued` / `scheduled` / `delivered_to_device`) + the schedule reason and the activity-curve hour. Companion to `GET /v1/lines/{id}/quota` for partners debugging delivery delays.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7030,16 +8256,84 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/health": {
       "get": {
+        "summary": "Get a BYOD line's health snapshot",
+        "description": "BYOD-only health rollup: device-session state (`active` / `degraded` / `offline`), last heartbeat timestamp, daily quota headroom, Apple-ID-flagged flag, last-error string, bridge version. Rental tiers receive 403 `rental_health_not_exposed` — they don't own the hardware and surfacing transient state creates support-ticket noise.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7056,16 +8350,84 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lines/{id}/config": {
       "get": {
+        "summary": "Get a line's effective send configuration",
+        "description": "Return the resolved send configuration for this line — tier defaults merged with per-line overrides. Surfaces effective quota caps, timezone, activity-curve target hour, and the `overridden_keys` list so partners can see which fields they've customised.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7082,14 +8444,82 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "patch": {
+        "summary": "Update a line's send configuration",
+        "description": "Merge-patch the line's per-line config overrides (quota caps, timezone, activity curve). Pass `null` for a key to revert it to the tier default. Validates the activity curve sums to 1.0 and rejects an unknown timezone with 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7115,12 +8545,79 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/pre-orders": {
       "post": {
+        "summary": "Create a pre-order",
+        "description": "Place a pre-order for a line tier that has no inventory in stock. Returns a `provisioning` pre-order with a Stripe payment intent; ops picks it up to procure hardware, and the partner is notified via the `pre_order.fulfilled` webhook when a matching line is ready.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7162,10 +8659,57 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "get": {
+        "summary": "List pre-orders",
+        "description": "Cursor-paginated list of the caller's pre-orders. Filter by status (`pending`, `provisioning`, `ready`, `fulfilled`, `cancelled`, `refunded`) to surface only the ones the dashboard needs.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7213,12 +8757,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/pre-orders/{id}": {
       "get": {
+        "summary": "Get a pre-order",
+        "description": "Fetch a single pre-order, including its current status, the linked Stripe payment intent, and the fulfilled-line reference if the procurement has completed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7240,12 +8831,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/pre-orders/{id}/cancel": {
       "post": {
+        "summary": "Cancel a pre-order",
+        "description": "Cancel a pre-order before it is fulfilled. Refunds the Stripe payment intent (if charged) and releases the procurement task. No-op on already-cancelled or fulfilled pre-orders.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7267,12 +8915,79 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/checkout": {
       "post": {
+        "summary": "Start a Stripe Checkout for a reserved line",
+        "description": "Create a Stripe Checkout Session for the line previously reserved by `POST /v1/lines/{id}/reserve`. Returns the hosted checkout URL — redirect the customer there. The webhook handler activates the line once the session completes.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7301,12 +9016,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/byod-checkout": {
       "post": {
+        "summary": "Start a Stripe Checkout for BYOD slots",
+        "description": "Create a Stripe Checkout Session for the BYOD subscription product (`$15/mo` or `$150/yr` per slot, `device_count` slots). The completed session writes a `byod_subscriptions` row that `POST /v1/byod/pair` reads to enforce slot capacity.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7326,19 +9098,106 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/subscriptions": {
       "get": {
+        "summary": "List Stripe subscriptions",
+        "description": "Return every active Stripe subscription on the authenticated user's customer record — both per-line rental subs and BYOD slot subs. Period boundaries, line link, price ID, and cancellation flag are surfaced verbatim from Stripe.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Subscription list",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SubscriptionList"
+                  "$ref": "#/components/schemas/SubscriptionListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7348,13 +9207,60 @@
     },
     "/v1/billing/invoices": {
       "get": {
+        "summary": "List Stripe invoices",
+        "description": "List the authenticated user's Stripe invoices in reverse-chronological order. Each invoice exposes the period boundaries (unix seconds), the integer-cent amounts, the hosted invoice URL, and the PDF link.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Invoice list",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InvoiceList"
+                  "$ref": "#/components/schemas/InvoiceListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7364,6 +9270,13 @@
     },
     "/v1/billing/subscriptions/{id}": {
       "delete": {
+        "summary": "Cancel a subscription",
+        "description": "Schedule the subscription to cancel at the end of the current billing period. The line remains active until the period rolls over; the partner sees the `cancel_at_period_end: true` flag in `GET /v1/billing/subscriptions` until then.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7385,19 +9298,126 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/payment-methods": {
       "get": {
+        "summary": "List payment methods",
+        "description": "List the saved payment methods on the authenticated user's Stripe customer. Each entry exposes the brand (`visa`, `mastercard`, etc.), the last four digits, and the default-method flag — never the PAN.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Payment methods",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PaymentMethodList"
+                  "$ref": "#/components/schemas/PaymentMethodListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7405,6 +9425,13 @@
         }
       },
       "post": {
+        "summary": "Start adding a payment method",
+        "description": "Create a Stripe SetupIntent so the customer can save a new card. The returned `client_secret` feeds directly into Stripe Elements / PaymentSheet on the partner UI; the resulting payment method is attached to the customer record on completion.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Setup intent",
@@ -7415,12 +9442,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/payment-methods/{id}": {
       "delete": {
+        "summary": "Remove a payment method",
+        "description": "Detach the payment method from the Stripe customer. Active subscriptions paying with this method will retry against the new default; ensure another method is set as default first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7442,12 +9516,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/billing/payment-methods/{id}/default": {
       "post": {
+        "summary": "Set default payment method",
+        "description": "Mark the payment method as the default for invoice charges. Future invoices on existing subscriptions automatically draw from this card.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7469,12 +9600,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/messages": {
       "post": {
+        "summary": "Send a message",
+        "description": "Queue an outbound iMessage / SMS / RCS message on the specified line. The device picks the actual transport at delivery time (`channel: \"auto\"` is the only supported value in v1). Returns `202` with the queued message envelope; the message progresses through `queued → sent → delivered → read` (or `failed`) reflected via webhooks. Quota-deferred sends return `status: \"scheduled\"` with a future `scheduled_for`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7482,7 +9670,8 @@
                 "type": "object",
                 "properties": {
                   "line_id": {
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^line_[0-9A-Za-z]{25}$"
                   },
                   "to": {
                     "type": "string",
@@ -7496,20 +9685,20 @@
                   "channel": {
                     "type": "string",
                     "enum": [
-                      "auto",
-                      "iMessage",
-                      "SMS",
-                      "RCS"
+                      "auto"
                     ],
                     "default": "auto"
                   },
                   "attachments": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^att_[0-9A-Za-z]{25}$",
+                      "description": "Attachment publicId (`att_<base62>`)."
                     },
                     "maxItems": 10,
-                    "default": []
+                    "default": [],
+                    "description": "Ordered list of `att_<base62>` attachment publicIds. Mint each ID via `POST /v1/attachments` and upload the bytes to the returned signed URL before referencing the ID here. Up to 10 attachments per message and 100 MB per attachment. Per-channel total budgets at delivery time: iMessage ~100 MB, RCS ~10 MB, SMS ~1 MB — the device picks the transport at send time and degrades to a lower-cap channel only when iMessage is unavailable."
                   },
                   "effect": {
                     "oneOf": [
@@ -7570,7 +9759,7 @@
                   },
                   "reply_to_message_id": {
                     "type": "string",
-                    "pattern": "^(msg_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+                    "pattern": "^msg_[0-9A-Za-z]{25}$"
                   },
                   "use_typing_indicator": {
                     "type": "boolean"
@@ -7600,14 +9789,102 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable — domain rule violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "get": {
+        "summary": "List messages",
+        "description": "Cursor-paginated list of messages, newest first. Each item carries the full `MessageV1` shape — partners can write a uniform handler over both `GET /v1/messages` and `GET /v1/messages/{id}`. Filter by `line_id`, `status`, or `direction`; pass an opaque `cursor` from the previous page's `next_cursor` to advance.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^line_[0-9A-Za-z]{25}$"
             },
             "required": false,
             "name": "line_id",
@@ -7670,17 +9947,64 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/messages/{id}/reactions": {
       "post": {
+        "summary": "Add or replace a tapback",
+        "description": "Add an iMessage tapback (love / like / dislike / laugh / emphasize / question) on a prior message you sent. Replace-on-add semantics: posting a different `type` against the same parent updates the existing reaction in place — switching from `like` to `love` is a single POST, no DELETE-then-POST dance. Reactions require iMessage; SMS / RCS parents are rejected with 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(msg_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^msg_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7698,11 +10022,173 @@
         },
         "responses": {
           "202": {
-            "description": "Reaction queued",
+            "description": "Reaction queued (added or replaced)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReactionEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable — domain rule violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove a tapback",
+        "description": "Remove the caller's tapback on a prior message. Idempotent — `removed: false` is a 200, not a 404, so partners can fire-and-forget without first checking whether a reaction was set. The response reports the type that was removed when applicable.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^msg_[0-9A-Za-z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reaction removed (idempotent — no-op when nothing to remove)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactionRemovalEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -7712,11 +10198,18 @@
     },
     "/v1/messages/{id}": {
       "get": {
+        "summary": "Get a message",
+        "description": "Retrieve a single message by its `msg_<base62>` publicId. Returns the full message envelope with the current lifecycle status (`queued | scheduled | sent | delivered | read | failed | cancelled | received`). The `queue_info` field is always `null` on GET reads — that snapshot is populated only on the POST response at send time.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(msg_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^msg_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7733,15 +10226,82 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "delete": {
+        "summary": "Cancel a queued or scheduled message",
+        "description": "Cancel a message before it leaves iSnap. Cancellable while the row is still `queued` or `scheduled` (and has not been pushed to a device); returns `409 too_late_to_cancel` once the device has picked it up. Decrements the daily quota when the row had been counted at send time.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(msg_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^msg_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7758,12 +10318,89 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — concurrent or terminal state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks": {
       "post": {
+        "summary": "Register a webhook subscription",
+        "description": "Subscribe a URL to a list of event types and (optionally) a line allowlist. The server signs deliveries with an HMAC-SHA256 secret returned once here. Retries follow exponential backoff; 10 consecutive failures auto-disable the subscription.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7777,21 +10414,15 @@
                   "events": {
                     "type": "array",
                     "items": {
-                      "type": "string",
-                      "enum": [
-                        "message.received",
-                        "message.failed",
-                        "line.disconnected",
-                        "line.activated",
-                        "line.suspended"
-                      ]
+                      "$ref": "#/components/schemas/WebhookEventName"
                     },
                     "minItems": 1
                   },
                   "line_ids": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^line_[0-9A-Za-z]{25}$"
                     }
                   }
                 },
@@ -7813,10 +10444,57 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "get": {
+        "summary": "List webhook subscriptions",
+        "description": "Return every webhook subscription owned by the authenticated user. Each entry surfaces the URL, the subscribed event list, the line allowlist, the active flag, the failure counter, and the last success / failure timestamps.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Webhook list",
@@ -7827,12 +10505,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks/{id}": {
       "delete": {
+        "summary": "Delete a webhook subscription",
+        "description": "Permanently delete the webhook subscription. In-flight deliveries already enqueued will still attempt — the deletion only stops new event matching.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7847,15 +10572,72 @@
         "responses": {
           "204": {
             "description": "Webhook deleted"
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "get": {
+        "summary": "Get a webhook subscription",
+        "description": "Fetch a single webhook subscription by its `wh_<base62>` id. Returns the URL, the event list, the line allowlist, the active flag, and the metadata — never the secret (rotate via the dedicated endpoint to mint a new one).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(wh_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^wh_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7872,15 +10654,72 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "patch": {
+        "summary": "Update a webhook subscription",
+        "description": "Partial update of a webhook subscription. Any subset of `url`, `events`, `line_ids`, `description`, and `active` is accepted; at least one field is required. Event names are validated against the shared `WebhookEventName` enum so typos reject at 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(wh_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^wh_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -7900,7 +10739,7 @@
                   "events": {
                     "type": "array",
                     "items": {
-                      "type": "string"
+                      "$ref": "#/components/schemas/WebhookEventName"
                     },
                     "minItems": 1
                   },
@@ -7908,7 +10747,8 @@
                     "type": "array",
                     "nullable": true,
                     "items": {
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^line_[0-9A-Za-z]{25}$"
                     }
                   },
                   "description": {
@@ -7934,12 +10774,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks/events": {
       "get": {
+        "summary": "Replay webhook events within the retention window",
+        "description": "Pull events fired in the last 72h (the retention window) so a partner whose receiver was down can reconcile. Cursor-paginated on `(created_at DESC, event_id DESC)`. Each item is the same `§4.1` envelope the live webhook delivery carried — partners deduplicate by `event_id`.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -7961,9 +10858,10 @@
           },
           {
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/WebhookEventName"
             },
             "required": false,
+            "description": "A concrete event type (e.g. `message.received`), a family wildcard (`line.*`), or the catch-all `*`.",
             "name": "event",
             "in": "query"
           },
@@ -8006,17 +10904,64 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks/{id}/rotate-secret": {
       "post": {
+        "summary": "Rotate the signing secret",
+        "description": "Generate a new HMAC signing secret. The returned plaintext is shown once — update your verifier promptly. The old secret remains valid for a short grace window (`old_secret_expires_at`) so in-flight deliveries verify against either secret.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(wh_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^wh_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -8033,17 +10978,74 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks/{id}/deliveries": {
       "get": {
+        "summary": "List delivery attempts for a webhook",
+        "description": "Inspect delivery attempts for a webhook subscription. Cursor-paginated on `(createdAt DESC, id DESC)`; filter by status (`pending` / `success` / `failed`), event type, or time window. Each row carries the request snippet, the response status + body snippet, and the next-retry timestamp.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(wh_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^wh_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -8119,17 +11121,74 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/webhooks/{id}/deliveries/{delivery_id}/replay": {
       "post": {
+        "summary": "Replay a delivery attempt",
+        "description": "Re-enqueue a prior delivery attempt. Mints a new `whd_` delivery row referencing the original via `replay_of` but keeps the same `event_id` so partner-side dedup collapses both into the same logical event.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(wh_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^wh_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "id",
@@ -8138,7 +11197,7 @@
           {
             "schema": {
               "type": "string",
-              "pattern": "^(whd_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^whd_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "delivery_id",
@@ -8155,12 +11214,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/attachments": {
       "post": {
+        "summary": "Create an attachment + receive a signed upload URL",
+        "description": "Mint a new attachment record and receive a presigned R2 PUT URL valid for 15 minutes. The client uploads the bytes directly to R2 (the server never proxies them) and then references the returned `id` in the `attachment_ids` array on `POST /v1/messages`. Hard cap: 5 GB (R2 single-PUT ceiling). Attachments larger than 100 MB return a non-blocking `large_attachment_may_delay_delivery` warning.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8180,12 +11296,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/attachments/{id}": {
       "get": {
+        "summary": "Get an attachment + signed download URL",
+        "description": "Fetch an attachment record by its `att_<base62>` id. The response includes a short-TTL signed R2 download URL — re-call this endpoint to refresh the URL when the previous one expires.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
@@ -8206,12 +11369,69 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/lookup": {
       "post": {
+        "summary": "Look up a recipient capability",
+        "description": "Check whether a phone number or email is iMessage-capable. Returns `imessage: true | false | null`; `null` means we have no cached probe result yet and the caller should fall back to SMS-safe behaviour. Rate-limited per line and per account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8223,7 +11443,7 @@
         },
         "responses": {
           "200": {
-            "description": "Lookup result (cached)",
+            "description": "Lookup result",
             "content": {
               "application/json": {
                 "schema": {
@@ -8232,12 +11452,42 @@
               }
             }
           },
-          "202": {
-            "description": "Lookup pending — retry after the indicated window",
+          "400": {
+            "description": "Bad request — validation failed",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LookupEnvelope"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -8247,11 +11497,16 @@
     },
     "/v1/chats/{chat_id}/share-contact-card": {
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(chat_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^chat_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "chat_id",
@@ -8319,17 +11574,92 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable — domain rule violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/chats/{chat_id}/typing": {
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(chat_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^chat_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "chat_id",
@@ -8356,15 +11686,90 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable — domain rule violation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
       "delete": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(chat_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^chat_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "chat_id",
@@ -8381,17 +11786,82 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/chats/{chat_id}/read": {
       "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "pattern": "^(chat_[0-9A-Za-z]{25}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+              "pattern": "^chat_[0-9A-Za-z]{25}$"
             },
             "required": true,
             "name": "chat_id",
@@ -8418,12 +11888,79 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — caller authenticated but not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/trial/init": {
       "post": {
+        "summary": "Start a trial session",
+        "description": "Create a pairing-pending trial session against the caller's API key. Returns a one-time pairing token the partner embeds in their onboarding UI; the recipient claims it by sending an inbound message that links them to a shared-pool line.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8443,12 +11980,55 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/trial/status": {
       "get": {
+        "summary": "Check trial pairing status",
+        "description": "Token-keyed public lookup. Returns the current trial state — `pairing_pending` while waiting for the recipient's first inbound, `paired` once linked, `expired` after the pairing window. On first poll after `paired` the response also reveals the `trial_api_key` (`isnap_test_*`) for the partner to embed.",
+        "security": [],
         "parameters": [
           {
             "schema": {
@@ -8471,12 +12051,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/trial/activity": {
       "get": {
+        "summary": "Get trial activity counters",
+        "description": "Trial-key-only snapshot of the dormancy and outbound-without-inbound counters. Partner dashboards poll this to render the trial's live state (\"3/10 sends since last inbound\", dormancy timer remaining).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Trial activity snapshot",
@@ -8487,12 +12114,59 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
     },
     "/v1/byod/pair": {
       "post": {
+        "summary": "Start a BYOD pairing flow",
+        "description": "Mint a one-time activation code, a signed bridge-installer download URL, and setup instructions for a customer-owned Mac+iPhone or Android device. The customer runs the bridge, enters the code, and the device-side `POST /device/activate` consumes the code to mint a `byod_imessage` or `byod_android` line.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8509,6 +12183,56 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ByodPairEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated — missing or invalid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests — rate limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }

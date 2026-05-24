@@ -1,0 +1,44 @@
+---
+title: "Remove a reaction"
+description: "Remove the tapback you previously sent on an iMessage."
+openapi: "DELETE /v1/messages/{id}/reactions"
+---
+
+Removes the tapback you previously attached to the target message.
+You can have at most one reaction per (sender, message), so this
+endpoint doesn't need to know which `type` you sent — there's only
+one to remove.
+
+## Idempotent
+
+Calling this when you haven't reacted to the target message is a
+no-op — the response is still 200 with the unchanged reaction state.
+Safe to retry.
+
+## iMessage only
+
+Tapbacks are Apple-native. Calling this endpoint on a non-iMessage
+message returns 422 `reactions_imessage_only`.
+
+## Path param
+
+`{id}` is the ID of the **target** message — the one your reaction is
+attached to. The removal is sent **from** the line that originally
+received or sent that message; iSnap infers it.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `message_not_found` | Target message doesn't exist on your account, or older than 72 h. |
+| 422 | `reactions_imessage_only` | Target message is on SMS or RCS — tapbacks are an Apple-only feature. |
+
+## Related
+
+- [`POST /v1/messages/{id}/reactions`](/api-reference/messages/post-messages-id-reactions) —
+  add a reaction.

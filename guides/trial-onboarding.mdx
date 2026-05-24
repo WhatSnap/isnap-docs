@@ -82,8 +82,8 @@ While waiting, poll status with the `token`:
 
 ```ts
 const status = await isnap.trial.status(trial.token)
-// status.state: 'pairing_pending' | 'paired' | 'dormant' | 'expired'
-// status.api_key: only populated once state === 'paired'
+// status.status: 'pairing_pending' | 'active' | 'dormant' | 'revoked'
+// status.trial_api_key: only populated once status === 'active'
 ```
 
 Or subscribe to `trial.linked` webhooks (cleaner — no polling):

@@ -1,4 +1,46 @@
 ---
-title: "DELETE /v1/webhooks/{id}"
+title: "Delete a webhook subscription"
+description: "Permanently remove a subscription and stop deliveries."
 openapi: "DELETE /v1/webhooks/{id}"
 ---
+
+Removes the subscription. Stops all future deliveries to its URL.
+
+## Permanent
+
+Unlike `PATCH active: false` (which pauses but keeps the record),
+delete is final:
+
+- The signing secret is erased.
+- The delivery history becomes inaccessible — no more replay.
+- Recreating with the same URL gets a different `wh_…` ID and a new
+  secret.
+
+If you just need to stop deliveries temporarily, use
+[`PATCH active: false`](/api-reference/webhooks/patch-webhooks-id)
+instead.
+
+## Idempotent
+
+Deleting an already-deleted (or never-existing) subscription returns
+404 rather than 200. If your retry path needs to handle "this might
+have been deleted on a previous attempt," catch the 404 and treat
+it as success.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `webhook_not_found` | No subscription with that `wh_…` ID, or already deleted. |
+
+## Related
+
+- [`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/patch-webhooks-id) —
+  pause without deleting (`active: false`).
+- [`POST /v1/webhooks`](/api-reference/webhooks/post-webhooks) —
+  re-create a subscription if you change your mind.

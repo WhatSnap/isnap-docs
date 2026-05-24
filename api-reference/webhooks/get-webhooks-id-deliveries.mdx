@@ -1,4 +1,58 @@
 ---
-title: "GET /v1/webhooks/{id}/deliveries"
+title: "List webhook deliveries"
+description: "Recent delivery attempts (success / pending / failed) for a subscription."
 openapi: "GET /v1/webhooks/{id}/deliveries"
 ---
+
+Returns recent delivery attempts for a subscription — what iSnap
+tried to send, how the receiver responded, and the status. Cursor-
+paginated.
+
+## Use this to
+
+- **Debug a webhook outage** — what got delivered, what got rejected,
+  what's still being retried.
+- **Audit which events fired** for a customer's account during a
+  specific window.
+- **Find replay candidates** — failed deliveries you want to retry
+  manually via
+  [the replay endpoint](/api-reference/webhooks/post-webhooks-id-deliveries-delivery_id-replay).
+
+## Filtering
+
+| Query param | Effect |
+|---|---|
+| `status` | `pending` (in flight or scheduled for retry), `success` (your endpoint returned 2xx), `failed` (gave up after the retry budget). |
+| `limit` | Page size, 1–100, default 20. |
+| `cursor` | Pagination cursor from the previous response. |
+
+## Retention window
+
+iSnap retains deliveries for **24 hours**. After that the row drops
+and it's no longer listable or replayable. For longer-term audit,
+mirror this data into your own store using the webhook receiver
+itself (every event that lands is also a delivery row).
+
+## Pagination
+
+Cursor-based. The response carries `has_more` and `next_cursor` —
+pass `next_cursor` on the next request. Cursors are stable for the
+retention window (~24 h).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `webhook_not_found` | No subscription with that `wh_…` ID. |
+| 422 | `validation_error` | `status` not in the enum, `limit` out of range, or malformed `cursor`. |
+
+## Related
+
+- [`POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay`](/api-reference/webhooks/post-webhooks-id-deliveries-delivery_id-replay) —
+  replay a specific delivery.
+- [Webhooks guide](/guides/webhooks) — retry semantics, deduplication.

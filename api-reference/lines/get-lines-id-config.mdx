@@ -1,4 +1,101 @@
 ---
-title: "GET /v1/lines/{id}/config"
+title: "Get line config"
+description: "Effective quota + throttle + activity-curve settings on a line — tier defaults with your overrides applied."
 openapi: "GET /v1/lines/{id}/config"
 ---
+
+Returns the **effective** config for a line: the tier defaults
+(daily/hourly/minute limits, throttling, activity curve) merged with
+whatever overrides you've set via
+[`PATCH /v1/lines/{id}/config`](/api-reference/lines/patch-lines-id-config).
+The response also lists which keys are overridden, so you can render
+"reset to default" affordances in your UI.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID. |
+
+## What the response contains
+
+```json
+{
+  "line_id": "line_aBc...",
+  "config": {
+    "default_use_typing_indicator": true,
+    "quota_overflow_behavior": "queue",
+    "daily_new_contact_limit": 40,
+    "daily_known_contact_limit": 200,
+    "daily_total_message_limit": 500,
+    "hourly_message_limit": 60,
+    "minute_message_limit": 5,
+    "min_inter_message_seconds": 8,
+    "min_inter_new_contact_seconds": 60,
+    "max_queue_depth": 1000,
+    "timezone": "America/Los_Angeles",
+    "activity_curve": [
+      { "hour": 9, "weight": 1 },
+      { "hour": 10, "weight": 3 },
+      { "hour": 11, "weight": 4 }
+    ]
+  },
+  "overridden_keys": ["daily_new_contact_limit", "activity_curve"]
+}
+```
+
+### Quota fields
+
+| Field | Meaning |
+|---|---|
+| `daily_new_contact_limit` | Max number of distinct new-contact sends per day. Warming model gates the upper bound. |
+| `daily_known_contact_limit` | Max sends per day to contacts you've already exchanged with. |
+| `daily_total_message_limit` | Sum cap (both buckets together). |
+| `hourly_message_limit` | Rolling 60-min cap. |
+| `minute_message_limit` | Rolling 60-sec cap. |
+| `quota_overflow_behavior` | What happens when a bucket is exceeded: `queue` (default), `drop`, or `fail`. |
+
+### Throttle fields
+
+| Field | Meaning |
+|---|---|
+| `min_inter_message_seconds` | Min gap between any two outbound sends on this line. |
+| `min_inter_new_contact_seconds` | Min gap between two **new-contact** sends. Higher than `min_inter_message_seconds`. |
+| `max_queue_depth` | Cap on the outbound backlog (see [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-lines-id-queue)). |
+
+### Schedule fields
+
+| Field | Meaning |
+|---|---|
+| `timezone` | IANA zone the activity curve is interpreted in. |
+| `activity_curve` | Per-hour send weights. `[{hour: 0..23, weight: int}]`. The scheduler scales outbound to match this shape — e.g. `weight: 0` at hour 22 means "send nothing at 10pm local". |
+
+### `overridden_keys`
+
+Array of the keys explicitly set on the line via `PATCH`. Useful for
+"reset to default" UI — pass the keys you want to revert as `null` in
+a `PATCH` body.
+
+## Effective vs override
+
+The endpoint returns the **effective** view (defaults + overrides
+merged). To see the raw overrides separately, look at the
+`overridden_keys` list — everything else came from tier defaults.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | Line ID isn't on your account. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`PATCH /v1/lines/{id}/config`](/api-reference/lines/patch-lines-id-config) — change these values.
+- [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-lines-id-quota) — current usage against these limits.
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — how the limits are tuned.

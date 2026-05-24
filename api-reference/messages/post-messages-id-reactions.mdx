@@ -1,4 +1,87 @@
 ---
-title: "POST /v1/messages/{id}/reactions"
+title: "Add a reaction"
+description: "Attach an Apple-native tapback (love, like, dislike, laugh, emphasize, question) to an iMessage."
 openapi: "POST /v1/messages/{id}/reactions"
 ---
+
+Adds an Apple **tapback** — the round emoji-like reaction shown
+attached to a specific message bubble — on an iMessage thread.
+
+To remove a tapback you previously sent, call
+[`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/delete-messages-id-reactions).
+
+## iMessage only
+
+Tapbacks are an Apple feature; they don't exist on SMS or RCS.
+Calling this endpoint on a non-iMessage message returns 422
+`reactions_imessage_only`.
+
+If the recipient sends back a tapback to one of your messages, you
+**receive** it as a `message.received` webhook event with a
+`reaction` payload — there's no separate `reaction.received` event.
+
+## The 6 tapback types
+
+Apple's tapback set is fixed:
+
+| `type` | Renders as |
+|---|---|
+| `love` | Heart |
+| `like` | Thumbs up |
+| `dislike` | Thumbs down |
+| `laugh` | "HA HA" |
+| `emphasize` | "!!" |
+| `question` | "?" |
+
+Sending any other value is a 422 `validation_error`.
+
+## Replace semantics
+
+You can have at most one tapback per (sender, message). Sending a
+different `type` to a target where you already have a reaction
+**replaces** the previous one. Switching from `like` to `love` is a
+single call to this endpoint with `type: "love"` — no need to remove
+first.
+
+## Path param
+
+`{id}` is the ID of the **target** message you're reacting to. The
+reaction is sent **from** the line that originally received or sent
+that message — you don't pick the line on this endpoint, it's
+inferred.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `message_not_found` | Target message doesn't exist on your account, or older than 72 h. |
+| 422 | `reactions_imessage_only` | Target message is on SMS or RCS — tapbacks are an Apple-only feature. |
+| 422 | `validation_error` | `type` is not one of the 6 supported values. |
+
+Example:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 422,
+    "code": "reactions_imessage_only",
+    "message": "Tapbacks are supported on iMessage only; this message used SMS"
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+## Related
+
+- [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/delete-messages-id-reactions) —
+  remove your reaction.
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — send a
+  reply instead of a reaction.

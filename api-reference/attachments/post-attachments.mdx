@@ -1,4 +1,88 @@
 ---
-title: "POST /v1/attachments"
+title: "Create an attachment"
+description: "Reserve an attachment ID and a presigned upload URL — then PUT the bytes directly to storage."
 openapi: "POST /v1/attachments"
 ---
+
+Attachments use a two-step flow:
+
+1. **Reserve** — `POST /v1/attachments` returns an `id` plus a
+   presigned `upload_url`.
+2. **Upload** — `PUT` the file bytes directly to `upload_url`.
+3. **Send** — reference the attachment `id` on
+   [`POST /v1/messages`](/api-reference/messages/post-messages) via
+   the `attachments: [{ id }]` array.
+
+Bytes never pass through iSnap's API servers — the upload goes
+directly to object storage with a short-lived presigned URL.
+
+## Request shape
+
+```json
+{
+  "filename": "invoice.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 184320
+}
+```
+
+| Field | Value |
+|---|---|
+| `filename` | Display name. 1–255 chars. Stored verbatim and surfaced on inbound webhooks for context. |
+| `content_type` | MIME type. 1–100 chars. Used by recipients' clients to decide how to render. |
+| `size_bytes` | Exact byte count. Must be `> 0`. iSnap rejects the upload if the actual PUT size doesn't match. |
+
+## What the response contains
+
+| Field | What it's for |
+|---|---|
+| `id` | The `att_…` identifier. Reference it on `POST /v1/messages`. |
+| `upload_url` | Presigned PUT URL. **Single-use, 5-minute TTL.** Upload the bytes here as a raw PUT body. |
+| `upload_expires_at` | ISO timestamp of presign expiry. After this, the URL is dead — re-create the attachment if you missed the window. |
+| `required_headers` | Object of headers you MUST send on the PUT (e.g. `Content-Type`, sometimes content-MD5). Pass them verbatim. |
+| `status` | `pending` on creation; flips to `uploaded` after the bytes land. |
+| `warnings` | Soft notices (e.g. content type may be filtered on iMessage). Never errors. |
+
+## The upload
+
+```bash
+curl -X PUT "<upload_url>" \
+  -H "Content-Type: application/pdf" \
+  --data-binary @invoice.pdf
+```
+
+- **Use the exact URL returned.** Don't re-sign, don't decode.
+- **Send only the headers listed in `required_headers`.** Extra
+  headers can break the signature.
+- **No Authorization header.** The URL itself carries the auth.
+
+The PUT returns 200 / 204 on success. Anything else means the upload
+failed — typically because the URL expired, the size didn't match, or
+the content type was rejected.
+
+## Caps and limits
+
+- **Max size:** 100 MB per attachment.
+- **Total per message:** up to 10 attachments. The send fails if the
+  combined size exceeds the channel's per-message ceiling (iMessage:
+  ~100 MB total; SMS/MMS: ~1 MB; RCS: ~10 MB).
+- **Retention:** 72 hours from `uploaded_at`. After that the bytes are
+  reaped and `download_url` returns null.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 413 | `attachment_too_large` | `size_bytes` over the 100 MB cap. |
+| 422 | `validation_error` | Missing field, `filename` over 255 chars, or `size_bytes` ≤ 0. |
+| 422 | `unsupported_content_type` | `content_type` is on the deny list (executables, scripts). |
+
+## Related
+
+- [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachments-id) — read back the record + fresh download URL.
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — send a message with `attachments: [{ id }]`.

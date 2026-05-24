@@ -1,4 +1,80 @@
 ---
-title: "POST /v1/lines/assign"
+title: "Rent a line"
+description: "Claim a line of a given tier + area code in one call — billing starts immediately."
 openapi: "POST /v1/lines/assign"
 ---
+
+Allocates a line from the marketplace catalog and attaches it to your
+account in one shot. Billing starts immediately — the returned `Line`
+has `status: "active"` (or `provisioning` for BYOD slots that are
+waiting on the bridge).
+
+If you want a two-step "hold then commit" pattern (reservation,
+review, then activate), use
+[`POST /v1/lines/{id}/reserve`](/api-reference/lines/post-lines-id-reserve)
+followed by
+[`POST /v1/lines/{id}/activate`](/api-reference/lines/post-lines-id-activate).
+
+## Request shape
+
+```json
+{
+  "billing_tier": "rental_iphone",
+  "area_code": "415",
+  "metadata": {
+    "team": "sales-east"
+  }
+}
+```
+
+| Field | Value |
+|---|---|
+| `billing_tier` | Required. One of `rental_iphone`, `rental_android`, `byod_imessage`, `byod_android`. (`shared_pool` is reserved for trials and isn't a valid value here.) |
+| `area_code` | Optional. US area code (3 chars) or international prefix (3–10 chars). iSnap picks an available number from the matching pool. |
+| `metadata` | Optional. Free-form labels persisted on the line. |
+
+If no `area_code` is supplied, iSnap picks from the broadest available
+pool. Set one when phone-number aesthetics matter for your end-user.
+
+## BYOD vs rental on assign
+
+| If `billing_tier` is… | What happens |
+|---|---|
+| `rental_iphone` / `rental_android` | iSnap picks a ready line from the farm. The response carries a real `phone_number`, `status: "active"`. |
+| `byod_imessage` / `byod_android` | iSnap mints a BYOD slot. The line exists but is `status: "provisioning"` with no `phone_number` until you complete pairing via [`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair). |
+
+For BYOD, this endpoint is the "reserve the slot" half — the BYOD
+pairing endpoint is the "install the bridge and bind hardware" half.
+
+## What the response contains
+
+The full `Line` record — see
+[`GET /v1/lines/{id}`](/api-reference/lines/get-lines-id) for field
+documentation. The most useful fields right after assign:
+
+- `id` — persist it; you need it for every subsequent call.
+- `phone_number` — show it in your UI (or "pending" for BYOD).
+- `monthly_price` — surfaced for clarity. Billing is already running.
+
+A `line.connected` webhook fires shortly after for rental lines (and
+for BYOD lines once the bridge confirms).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 402 | `payment_method_required` | No active payment method on file. Add one before assigning. |
+| 402 | `no_inventory_available` | No line in the requested tier / area code right now. Retry without the `area_code` filter or pick a different tier. |
+| 409 | `subscription_limit_reached` | Your plan's line limit is exhausted. Release one or upgrade. |
+| 422 | `validation_error` | `billing_tier` not in the enum, or `area_code` too long. |
+
+## Related
+
+- [`GET /v1/lines`](/api-reference/lines/get-lines) — see what's available before assigning.
+- [`POST /v1/lines/{id}/reserve`](/api-reference/lines/post-lines-id-reserve) — two-step assign (reserve then activate).
+- [`POST /v1/byod/pair`](/api-reference/byod/post-byod-pair) — bind your hardware to a BYOD slot.

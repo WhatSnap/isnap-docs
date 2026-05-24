@@ -1,11 +1,12 @@
 ---
 title: "API Reference"
-description: "Conventions used across every endpoint — base URLs, envelopes, errors, idempotency, pagination, IDs."
+description: "Conventions used across every endpoint — base URL, authentication, envelopes, errors, idempotency, pagination, IDs."
 ---
 
-Everything below applies to **every** endpoint in the API. The
-per-endpoint reference is generated from the
-[OpenAPI spec](/api-reference/openapi.json) — use the sidebar to navigate.
+Everything below applies to **every** endpoint. The per-endpoint
+reference is generated from the
+[OpenAPI spec](/api-reference/openapi.json) — use the sidebar to
+navigate.
 
 ## Base URL
 
@@ -15,6 +16,70 @@ https://api.isnap.ai
 
 Test API keys (`isnap_test_*`) produce real-shaped responses but never
 reach a real device. Live keys (`isnap_live_*`) are production traffic.
+
+## Authentication
+
+Every `/v1/*` endpoint requires an API key in the `Authorization`
+header. The two exceptions are
+[`GET /v1/health`](/api-reference/meta/get-health) and
+[`GET /v1/version`](/api-reference/meta/get-version), which are
+unauthenticated probes.
+
+### Where to get a key
+
+In the dashboard at
+[platform.isnap.ai](https://platform.isnap.ai) → **Developers → API
+keys → Create key**. Pick `test` for sandbox or `live` for production.
+The full string is shown once at creation — store it in your secret
+manager.
+
+### How to use it
+
+<CodeGroup>
+```bash cURL
+curl https://api.isnap.ai/v1/lines/my \
+  -H "Authorization: Bearer isnap_live_aBcD..."
+```
+
+```ts TypeScript SDK
+import { ISnapClient } from '@isnap/sdk'
+
+const isnap = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY!
+})
+
+// The SDK adds the Authorization header to every request automatically.
+const lines = await isnap.lines.listMine()
+```
+
+```python Python (requests)
+import os, requests
+
+requests.get(
+  "https://api.isnap.ai/v1/lines/my",
+  headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+)
+```
+</CodeGroup>
+
+Every endpoint page below has an interactive request panel that
+includes the `Authorization` header in the code samples
+automatically — paste your key into the panel to try it live.
+
+### Verify your key
+
+The fastest way to confirm a key works:
+
+```bash
+curl https://api.isnap.ai/v1/lines/my \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+A 200 response with your lines means the key is good. A 401 means it
+isn't — check the prefix matches the environment you're hitting.
+
+See [SDK → Auth](/sdk/auth) for scoping, rotation, and the error
+catalog around authentication.
 
 ## Envelope
 
@@ -29,16 +94,17 @@ Every successful 2xx response wraps the payload:
 }
 ```
 
-`trace_id` correlates a request across iSnap's internal services;
-include it when reporting a bug. `request_id` is a stable per-request
-identifier — pass it back via the `X-Request-Id` header on retries
-to help iSnap correlate the original and the retry.
+- `trace_id` correlates the request across iSnap's internal services.
+  Include it when filing a bug.
+- `request_id` is the per-request identifier; you can pass it back on
+  retries via the `X-Request-Id` header to help iSnap correlate the
+  attempts.
 
 `204 No Content` responses have no body (no envelope).
 
 ## Errors
 
-Failures use the same envelope shape, with `success: false` and a
+Failures use the same envelope shape with `success: false` and a
 structured `error`:
 
 ```json
@@ -58,29 +124,214 @@ structured `error`:
 }
 ```
 
-The `code` field is a stable string — branch on it. The `message` field
-is human-readable and may change between releases. The
-[full error catalog](#) lists every code the API can return.
+The `code` field is a stable string — branch on it. The `message`
+field is human-readable and may change between releases.
 
-## Authentication
+### What each status means
 
-All `/v1/*` endpoints (except `/v1/health` and `/v1/version`) require
-an API key in the `Authorization` header:
+<AccordionGroup>
+  <Accordion title="400 Bad Request — malformed request shape">
+    The request body didn't parse or a query param was off-spec. Fix the
+    payload and retry.
 
-```http
-Authorization: Bearer isnap_live_aBcD...
-```
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 400,
+        "code": "invalid_json",
+        "message": "Request body is not valid JSON"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
 
-See [SDK → Auth](/sdk/auth) for key minting, scoping, and rotation.
+  <Accordion title="401 Unauthorized — missing, revoked, or wrong-env key">
+    Either no `Authorization` header, the key is revoked, or you're
+    using a `live` key against a sandbox base URL (or vice versa).
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 401,
+        "code": "invalid_api_key",
+        "message": "The API key is invalid or has been revoked"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="403 Forbidden — key valid but not allowed for this resource">
+    A scoped key tried to act on a line outside its scope, or you tried
+    a privileged action your role doesn't grant.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 403,
+        "code": "line_not_owned",
+        "message": "API key is not scoped to line line_aBc..."
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="404 Not Found — resource doesn't exist on this account">
+    The path is right but the resource isn't visible to you — either it
+    doesn't exist, or your key doesn't have access (iSnap returns 404
+    rather than 403 here to avoid leaking existence).
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 404,
+        "code": "message_not_found",
+        "message": "No message with that ID"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="409 Conflict — state collision">
+    The resource can't transition the way you asked. Most common cases:
+    same `Idempotency-Key` reused with a different body, or cancelling
+    a message that's already past the cancellable window.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 409,
+        "code": "too_late_to_cancel",
+        "message": "Message status is sent; cannot be cancelled"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="410 Gone — endpoint removed">
+    The endpoint existed in an earlier version but has been retired.
+    The `successor` field points to the replacement.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 410,
+        "code": "endpoint_removed",
+        "message": "POST /v1/legacy was removed on 2026-12-31. Use POST /v1/new.",
+        "removed_at": "2026-12-31",
+        "successor": "/v1/new"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="422 Unprocessable Entity — validation failed">
+    The request shape is well-formed but a field value is invalid.
+    `issues[]` carries per-field details.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 422,
+        "code": "validation_error",
+        "message": "to: must be E.164 format",
+        "issues": [
+          { "path": "to", "code": "invalid_format" }
+        ]
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="429 Too Many Requests — quota or rate limit hit">
+    Either a per-line quota bucket (warming, daily, hourly,
+    new-contacts, known-contacts) or the global API rate limit. The
+    `Retry-After` header (seconds) tells you how long to back off. The
+    `error.code` indicates which bucket fired.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 429,
+        "code": "new_contact_quota_exceeded",
+        "message": "Line line_aBc... has hit its new-contacts quota",
+        "retry_after": 3540
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+
+    Quota errors are **not retryable** automatically — the bucket
+    genuinely doesn't have room. Back off, audit your sending shape.
+  </Accordion>
+
+  <Accordion title="500 / 503 — server error">
+    Transient. The SDK auto-retries with exponential backoff. If you're
+    rolling your own client, treat 500/503 as retryable up to 3–4
+    attempts.
+
+    ```json
+    {
+      "success": false,
+      "data": null,
+      "error": {
+        "status": 503,
+        "code": "service_unavailable",
+        "message": "iSnap is temporarily unable to handle the request"
+      },
+      "trace_id": "tr_...",
+      "request_id": "req_..."
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
 
 ## Idempotency
 
 Every mutating request (`POST`, `PATCH`, `PUT`, `DELETE`) accepts an
-`Idempotency-Key` header. If you send the same key twice within 24h,
-iSnap returns the original response — no duplicate side effects.
+`Idempotency-Key` header. If you send the same key twice within 24 h,
+iSnap returns the **original** response — no duplicate side effects.
+
+```bash
+curl -X POST https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{ "line_id": "line_...", "to": "+1...", "body": "Hi" }'
+```
 
 The TypeScript SDK auto-generates a key per request. If you're rolling
-your own client, generate a UUIDv4 per attempt and include it on every
+your own client, generate a UUID v4 per attempt and reuse it on every
 retry of the same logical operation.
 
 ## Pagination
@@ -98,13 +349,14 @@ List endpoints return cursor-paginated results:
 }
 ```
 
-Pass `?cursor=cur_...` on the next request. Cursors are opaque — don't
-parse them, don't store them long-term (they're stable for ~24h).
+Pass `?cursor=cur_...` on the next request. Cursors are opaque —
+don't parse them, don't store them long-term (they're stable for
+~24 h).
 
 ## ID prefixes
 
-iSnap IDs are prefixed by resource type for unambiguous routing in your
-code:
+iSnap IDs are prefixed by resource type for unambiguous routing in
+your code:
 
 | Prefix | Resource |
 |---|---|
@@ -118,5 +370,5 @@ code:
 | `req_` | Request |
 | `cur_` | Pagination cursor |
 
-All IDs are base62-encoded after the prefix. They are URL-safe, opaque,
-and never reused.
+All IDs are base62-encoded after the prefix. They are URL-safe,
+opaque, and never reused.

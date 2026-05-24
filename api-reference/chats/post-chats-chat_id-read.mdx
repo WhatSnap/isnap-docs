@@ -1,4 +1,57 @@
 ---
-title: "POST /v1/chats/{chat_id}/read"
+title: "Mark chat as read"
+description: "Send a read receipt for all unread inbounds in a chat — iMessage only."
 openapi: "POST /v1/chats/{chat_id}/read"
 ---
+
+Sends a read receipt to the recipient for all currently-unread
+inbound messages in the chat. Mirrors the behavior of opening the
+chat in the native iMessage app.
+
+Read receipts are **iMessage-only and dependent on the recipient's
+settings** — if the recipient has read receipts disabled, this call
+still succeeds but no receipt is delivered. SMS and RCS have no
+equivalent read-receipt mechanism via this surface.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `chat_id` | The conversation ID. Format: `^chat_[0-9A-Za-z]{25}$`. |
+
+## Request
+
+Empty body — `POST` with `{}`.
+
+## Response
+
+`200 OK`. The receipt is fired asynchronously to the recipient. No
+inbound state on iSnap's side is tracked separately — read state is
+client-side only.
+
+## When to call
+
+- **You're a human-in-the-loop assistant.** Mark inbounds read when
+  the agent actually looks at them, not on receive.
+- **You auto-respond.** Mark read right before sending the response
+  so the recipient sees "read" then "typing…" then the message.
+
+Don't blast read receipts on every inbound webhook if there's no
+human actually reading — it degrades the "the human is engaged"
+signal that iMessage read receipts represent.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `chat_not_found` | `chat_id` doesn't match a chat on your account. |
+| 422 | `validation_error` | `chat_id` doesn't match the `chat_…` pattern. |
+
+## Related
+
+- [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/post-chats-chat_id-typing) — surface "typing…" before replying.

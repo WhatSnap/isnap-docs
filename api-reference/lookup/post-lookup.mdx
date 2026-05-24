@@ -1,4 +1,74 @@
 ---
-title: "POST /v1/lookup"
+title: "Look up a handle"
+description: "Check whether a phone number has iMessage."
 openapi: "POST /v1/lookup"
 ---
+
+Returns whether a phone number is reachable on iMessage. That's the
+core purpose — pre-send check so you don't pay for a failed iMessage
+attempt to a recipient who only has SMS.
+
+## What you get back
+
+```json
+{
+  "handle": "+15551234567",
+  "imessage": true
+}
+```
+
+The response carries two fields:
+
+| Field | Meaning |
+|---|---|
+| `handle` | Echoes back the canonicalized input (E.164 phone or normalized email). |
+| `imessage` | `true` if the recipient is reachable on iMessage. `false` if confirmed not on iMessage. `null` when the result is **unknown** — no probe data yet, or the probe couldn't conclude. Treat `null` as "fall back to SMS-safe routing" rather than poll. |
+
+That's the entire surface. No `facetime`, no `line_type`, no
+`carrier`, no `cached` / `pending` / `retry_after` — earlier drafts
+exposed them but they're not populated by any real probe, so they
+were dropped from the contract pre-launch.
+
+## Use the result on send
+
+```ts
+const probe = await isnap.lookup.check({ handle: '+15551234567' })
+
+if (probe.imessage === true) {
+  // iMessage is reachable — channel: 'auto' will route iMessage first
+} else if (probe.imessage === false) {
+  // Confirmed not on iMessage — the line's fallback chain handles
+  // SMS / RCS
+} else {
+  // null — unknown. Don't gamble on iMessage; let the line's
+  // fallback chain pick SMS/RCS by default.
+}
+```
+
+In v1, `channel` on `POST /v1/messages` is locked to `auto`, so the
+lookup is purely informational — your line's fallback chain decides
+the actual route at send time.
+
+## `from_line_id` (optional)
+
+Pass `from_line_id` to scope the probe to a specific line. Drives
+per-line rate-limiting; most callers don't need this — iMessage
+reachability is recipient-side and doesn't vary across your fleet.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 422 | `validation_error` | `handle` malformed — must be E.164 phone (e.g. `+15551234567`) or email. `error.issues[]` carries the offending field. |
+
+## Related
+
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — the
+  send endpoint that the lookup result informs.
+- [Concepts → Channels](/concepts/channels) — how iMessage / SMS / RCS
+  selection works on the send.

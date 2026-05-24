@@ -1,4 +1,72 @@
 ---
-title: "POST /v1/chats/{chat_id}/share-contact-card"
+title: "Share a contact card"
+description: "Send a vCard into the chat — name, phone numbers, emails, optional avatar."
 openapi: "POST /v1/chats/{chat_id}/share-contact-card"
 ---
+
+Sends a contact card (vCard) into the chat. The recipient sees it
+the same way as a contact shared from the iMessage app — tappable,
+addable to Contacts.
+
+Use this when you want to hand off a phone number / email cleanly,
+e.g. routing an inbound to a specific agent and dropping their
+contact card in the thread.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `chat_id` | The conversation ID. Format: `^chat_[0-9A-Za-z]{25}$`. |
+
+## Request shape
+
+```json
+{
+  "first_name": "Aisha",
+  "last_name": "Khan",
+  "avatar_url": "https://example.com/aisha.jpg",
+  "phone_numbers": ["+15551234567"],
+  "emails": ["aisha@example.com"]
+}
+```
+
+| Field | Value |
+|---|---|
+| `first_name` | Required. 1–255 chars. |
+| `last_name` | Optional. Up to 255 chars. |
+| `avatar_url` | Optional. Public HTTPS URL to a profile image. iSnap doesn't host it — make sure the URL is durable. |
+| `phone_numbers` | Optional. Array of E.164 numbers, up to 10. |
+| `emails` | Optional. Array of valid email addresses. |
+
+At least one identifier (`phone_numbers` or `emails`) is recommended
+— a contact card with just a name renders as a near-empty entry on
+the recipient side.
+
+## Channel support
+
+- **iMessage** — renders as a full contact card.
+- **SMS / RCS** — falls back to plain text (`Aisha Khan / +1 555…`).
+  Use only when iMessage routing is the active channel for the chat.
+
+## Response
+
+`202 Accepted`. The card is queued and delivered like any other
+outbound message — track its delivery via the standard
+`message.sent` / `message.failed` webhooks.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `chat_not_found` | `chat_id` doesn't match a chat on your account. |
+| 422 | `validation_error` | Missing `first_name`, malformed phone number / email, or `avatar_url` not a URI. |
+
+## Related
+
+- [`POST /v1/messages`](/api-reference/messages/post-messages) — send a regular text or attachment.
+- [Concepts → Channels](/concepts/channels) — what falls back to plain text outside iMessage.

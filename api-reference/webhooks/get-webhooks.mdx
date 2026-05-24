@@ -1,4 +1,39 @@
 ---
-title: "GET /v1/webhooks"
+title: "List webhook subscriptions"
+description: "All webhook subscriptions on the calling account."
 openapi: "GET /v1/webhooks"
 ---
+
+Returns every webhook subscription visible to the calling API key. The
+signing **secret is not** returned in the list — only at creation and
+on rotation. Each item carries enough to identify the subscription
+(URL, events, scope, active state, last-delivery health).
+
+## Use this to
+
+- **Audit what's subscribed where** from a dashboard or admin script.
+- **Avoid double-subscribing** during deploys — list first, decide
+  whether to update or create.
+- **Spot stale / inactive subscriptions** to clean up before hitting
+  the per-account subscription limit.
+
+## What's NOT in the response
+
+The `secret` (`sec_…`) shown at creation is **never returned again**
+by this endpoint. iSnap stores only a hash — there's no way to
+retrieve a forgotten secret. If you lost it, call
+[`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/post-webhooks-id-rotate-secret).
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+This endpoint has no further endpoint-specific error codes.
+
+## Related
+
+- [`POST /v1/webhooks`](/api-reference/webhooks/post-webhooks) — create
+  a new subscription.
+- [`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhooks-id) —
+  fetch a single subscription's details.

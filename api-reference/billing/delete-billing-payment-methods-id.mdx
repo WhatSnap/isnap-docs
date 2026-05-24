@@ -1,4 +1,48 @@
 ---
-title: "DELETE /v1/billing/payment-methods/{id}"
+title: "Remove a payment method"
+description: "Detach a card from your account — can't remove the only card if you have active subscriptions."
 openapi: "DELETE /v1/billing/payment-methods/{id}"
 ---
+
+Detaches a payment method from your account. The card is removed from
+Stripe's customer record and won't be used for future charges.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | Stripe payment method ID (`pm_…`) currently attached to your account. |
+
+## Response
+
+```json
+{ "message": "Payment method removed" }
+```
+
+## What happens if you remove the default
+
+If the deleted card was the default and you have other cards on file,
+Stripe **does not** auto-promote another to default. Set one
+explicitly via
+[`POST /v1/billing/payment-methods/{id}/default`](/api-reference/billing/post-billing-payment-methods-id-default).
+
+If you have **no other cards** and **active subscriptions**, this
+call is rejected — see error codes below. Add a replacement first.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `payment_method_not_found` | `id` isn't attached to your account. |
+| 409 | `cannot_remove_last_payment_method` | You have active subscriptions and this is your only card. Add a new card first, then remove this one. |
+| 422 | `validation_error` | `id` missing or empty. |
+
+## Related
+
+- [`POST /v1/billing/payment-methods`](/api-reference/billing/post-billing-payment-methods) — add a replacement card.
+- [`POST /v1/billing/payment-methods/{id}/default`](/api-reference/billing/post-billing-payment-methods-id-default) — promote another card to default before removing.

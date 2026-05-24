@@ -1,4 +1,99 @@
 ---
-title: "POST /v1/messages"
+title: "Send a message"
+description: "Queue an outbound message on one of your lines."
 openapi: "POST /v1/messages"
 ---
+
+Pick a line, pick a recipient, set a body or attach files, and iSnap
+queues the send. The response returns immediately with
+`status: "queued"` — track the rest of the lifecycle through
+[webhooks](/guides/webhooks) (`message.sent`, `message.delivered`,
+`message.failed`) or, for low-volume exploration, by polling
+[`GET /v1/messages/{id}`](/api-reference/messages/get-messages-id).
+
+## Channel
+
+`channel` is pinned to `auto`. iSnap picks the best channel for the
+recipient (`iMessage → RCS → SMS` based on reachability and the line's
+fallback chain).
+
+## Idempotency
+
+Always pass an `Idempotency-Key` header. The same key with the same
+body within 24 h returns the **original** response — retrying after a
+network blip never double-sends. Different body with the same key
+returns 409 `idempotency_key_conflict`.
+
+## Body or attachments — at least one
+
+A request with neither `body` nor `attachments` is a 422
+`body_or_attachments_required`. To send media-only, leave `body` unset
+and pass attachment IDs (minted via
+[`POST /v1/attachments`](/api-reference/attachments/post-attachments))
+in `attachments`.
+
+## iMessage-only fields
+
+`effect`, `use_typing_indicator`, and `reply_to_message_id` are
+silently ignored on SMS / RCS sends — the recipient can't see them.
+Setting them never errors; the line just delivers the plain message.
+
+## Status lifecycle
+
+```
+queued ──► sent ──► delivered
+   │        │
+   │        └─► failed
+   │
+scheduled ──► (same as above once it dispatches)
+   │
+cancelled
+```
+
+`queued` and `scheduled` are cancellable via
+[`DELETE /v1/messages/{id}`](/api-reference/messages/delete-messages-id).
+Once the device picks it up (`sent`) you can't pull it back.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 403 | `line_not_owned` | Your API key isn't scoped to the `line_id`. |
+| 404 | `line_not_found` | `line_id` doesn't exist on your account. |
+| 422 | `validation_error` | A field value is malformed (e.g. `to` not E.164). `error.issues[]` carries per-field details. |
+| 422 | `body_or_attachments_required` | Empty `body` AND empty `attachments`. At least one must be set. |
+| 409 | `idempotency_key_conflict` | Same `Idempotency-Key` reused with a different body. Mint a new key. |
+| 429 | `minute_quota_exceeded` | Per-minute send cap hit on the line. Back off. |
+| 429 | `hourly_quota_exceeded` | Per-hour send cap hit on the line. |
+| 429 | `daily_quota_exceeded` | Per-day send cap hit on the line. |
+| 429 | `new_contact_quota_exceeded` | Per-day cap on outbounds to recipients who haven't replied. |
+| 429 | `known_contact_quota_exceeded` | Per-day cap on outbounds to recipients who have replied. |
+
+Quota errors carry `Retry-After` (seconds). Example:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 429,
+    "code": "new_contact_quota_exceeded",
+    "message": "Line line_aBc... has hit its new-contacts quota",
+    "retry_after": 3540
+  },
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+## Related
+
+- [Sending messages](/guides/sending-messages) — full walkthrough with
+  attachments, errors, and the channel fallback chain.
+- [Best practices](/guides/best-practices) — quotas, warming, when to
+  send.

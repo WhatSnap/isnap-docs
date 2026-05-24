@@ -1,4 +1,86 @@
 ---
-title: "POST /v1/byod/pair"
+title: "Pair a BYOD device"
+description: "Mint a 5-minute activation code so your Mac+iPhone or Android can join the account."
 openapi: "POST /v1/byod/pair"
 ---
+
+Returns an activation code plus the bridge installer URL. You run
+the installer, enter the code, and a new line appears on your
+account once the bridge confirms it can send.
+
+This is the entry point for the BYOD flow. See
+[Concepts → BYOD vs Rental](/concepts/byod-vs-rental) for what's
+different about BYOD compared to rental lines.
+
+## Request shape
+
+```json
+{
+  "device_type": "macos_byod",
+  "device_name": "Reception Mac Mini"
+}
+```
+
+| Field | Value |
+|---|---|
+| `device_type` | `macos_byod` (Mac+iPhone for iMessage) or `android_byod` (Android handset for SMS / RCS). |
+| `device_name` | Free-form label that shows up in your dashboard. 1–255 chars. |
+
+## What the response contains
+
+| Field | What it's for |
+|---|---|
+| `activation_code` | Single-use, 5-minute TTL. Paste this into the bridge installer when prompted. |
+| `expires_at` | Activation code expiry (ISO 8601, +5 min from issue). |
+| `bridge_download_url` | Direct URL to the bridge installer (`.dmg` for macOS, `.apk` for Android). Stable URL, same for every pairing. |
+| `bridge_version` | Version string of the installer being served. Useful if you want to surface "you'll install bridge X.Y.Z" in your UI. |
+| `setup_instructions_url` | Deep link to the platform-specific setup walkthrough at `docs.isnap.ai`. Follow these steps alongside entering the activation code. |
+
+## The 5-minute window applies to the code
+
+Only the `activation_code` expires (5 minutes after issue). The
+download URL is the same for every pairing — you can cache it or
+even hardcode it if you want, though re-fetching keeps you on the
+current `bridge_version`.
+
+If you miss the 5-minute window, call this endpoint again — codes
+are cheap, no audit trail penalty for unused ones.
+
+## What happens after activation
+
+1. You run the installer.
+2. You enter the activation code.
+3. The bridge connects to iSnap and presents a device fingerprint.
+4. iSnap mints a new line on your account.
+5. A `line.connected` webhook fires with the new `line_id` and `byod: true`.
+
+From that point the line behaves like any other iSnap line — send
+via [`POST /v1/messages`](/api-reference/messages/post-messages) and
+the bridge handles the rest.
+
+## Re-pairing
+
+Each BYOD slot holds one device at a time. Calling this endpoint a
+second time on the same slot supersedes any previous pairing — use
+this when you swap iPhones or replace a Mac. To free a slot entirely
+(cancellation, swap to rental), release the line via the lines API
+and the slot frees up.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 402 | `no_byod_slot_available` | Your BYOD subscription has no free slot. Release an existing pairing first or upgrade your plan. |
+| 422 | `validation_error` | `device_type` not in the enum, or `device_name` empty / too long. |
+
+## Related
+
+- [BYOD pairing guide](/guides/byod-pairing) — end-to-end walkthrough
+  including the bridge install steps.
+- [Concepts → BYOD vs Rental](/concepts/byod-vs-rental) — what events
+  you receive on BYOD vs rental, when to mix.

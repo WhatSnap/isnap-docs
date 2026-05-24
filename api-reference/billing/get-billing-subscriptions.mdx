@@ -1,4 +1,62 @@
 ---
-title: "GET /v1/billing/subscriptions"
+title: "List subscriptions"
+description: "Every Stripe subscription on your account — one per line."
 openapi: "GET /v1/billing/subscriptions"
 ---
+
+Returns every Stripe subscription attached to your account. There's
+one subscription per line (rental or BYOD slot), so this list mirrors
+your active fleet's billing side.
+
+For the line records themselves, use
+[`GET /v1/lines/my`](/api-reference/lines/get-lines-my). Join on
+`line_id` to pair the two views.
+
+## Response shape
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "sub_...",
+      "status": "active",
+      "current_period_start": 1714521600,
+      "current_period_end": 1717113599,
+      "cancel_at_period_end": false,
+      "line_id": "line_aBc...",
+      "price_id": "price_...",
+      "amount": 25000,
+      "currency": "usd",
+      "created_at": 1714521600
+    }
+  ],
+  "trace_id": "tr_...",
+  "request_id": "req_..."
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | Stripe subscription ID. Use it as the path param for `DELETE /v1/billing/subscriptions/{id}`. |
+| `status` | Stripe status — `active`, `past_due`, `canceled`, `incomplete`, etc. |
+| `current_period_start` / `current_period_end` | Unix epoch seconds. Convert to ISO in your client. |
+| `cancel_at_period_end` | `true` after `DELETE /v1/billing/subscriptions/{id}` — cancellation queued, line still works through the end of the month. |
+| `line_id` | Which iSnap line this subscription pays for. `null` for account-level subscriptions (rare). |
+| `price_id` | Stripe price ID. Maps to a tier internally. |
+| `amount` | Subscription amount in cents. |
+| `currency` | ISO 4217 lowercase (e.g. `usd`). |
+| `created_at` | Unix epoch seconds. |
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors). This
+endpoint has no endpoint-specific error codes.
+
+## Related
+
+- [`DELETE /v1/billing/subscriptions/{id}`](/api-reference/billing/delete-billing-subscriptions-id) — cancel at end-of-period.
+- [`GET /v1/billing/invoices`](/api-reference/billing/get-billing-invoices) — what you've been billed.
+- [`GET /v1/lines/my`](/api-reference/lines/get-lines-my) — lines view, joins on `line_id`.

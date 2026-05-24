@@ -1,4 +1,66 @@
 ---
-title: "POST /v1/chats/{chat_id}/typing"
+title: "Start typing indicator"
+description: "Show 'typing…' on the recipient's screen — iMessage only, ~7 second auto-expire."
 openapi: "POST /v1/chats/{chat_id}/typing"
 ---
+
+Surfaces the "typing…" indicator on the recipient's device. Useful
+for human-in-the-loop UX where you want the recipient to know
+something is being composed.
+
+Typing indicators are **iMessage-only** — SMS and RCS chats accept
+the call but it's a silent no-op (carriers have no equivalent
+mechanism). The 202 response is the same in both cases.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `chat_id` | The conversation ID. Format: `^chat_[0-9A-Za-z]{25}$`. Obtain from inbound webhooks or from `GET /v1/messages` (message's `chat_id`). |
+
+## Request
+
+The body is empty — `POST` with `{}`.
+
+## Response
+
+`202 Accepted`. The indicator fires asynchronously and the call
+returns immediately.
+
+## Auto-expire and explicit stop
+
+The indicator auto-clears after **~7 seconds** with no follow-up
+activity. If you want to stop sooner (e.g. the human cancelled out of
+the compose UI), call
+[`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/delete-chats-chat_id-typing).
+
+Sending an actual message via
+[`POST /v1/messages`](/api-reference/messages/post-messages) also
+implicitly clears the indicator on the recipient side.
+
+## When to use it (and not)
+
+- **Use it** for a human-in-the-loop assistant: surface "typing…"
+  while the human is composing, fire the message when they hit send.
+- **Don't use it** as a "thinking" indicator during bot processing —
+  it has a hard ~7s ceiling and an over-eager loop is the kind of
+  pattern Apple flags. The warming model exists for a reason.
+- **Don't pretend** — fake typing indicators when nothing is being
+  composed degrades the chat surface for everyone.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `chat_not_found` | `chat_id` doesn't match a chat on your account. |
+| 422 | `validation_error` | `chat_id` doesn't match the `chat_…` pattern. |
+
+## Related
+
+- [`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/delete-chats-chat_id-typing) — clear before auto-expire.
+- [`POST /v1/chats/{chat_id}/read`](/api-reference/chats/post-chats-chat_id-read) — mark unread inbounds as read.

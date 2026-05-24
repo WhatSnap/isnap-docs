@@ -12,47 +12,47 @@ sees the noise when something goes sideways.
 
 | | Rental | BYOD |
 |---|---|---|
-| Hardware ownership | iSnap | You / your customer |
+| Hardware ownership | iSnap | You |
 | Monthly price | ~$175 (Android) / ~$250 (iMessage) | ~$15 / device |
 | Setup time | iSnap operator picks a line off the shelf | 4-step bridge install |
-| Failure recovery | iSnap ops handles it | You / customer handles it |
+| Failure recovery | iSnap ops handles it | You handle it |
 | Health visibility | Durable events only | Full health surface |
-| Best for | Hands-off integrators, businesses scaling fast | Cost-sensitive, customers comfortable with hardware |
+| Best for | Hands-off integrators, scaling fast | Cost-sensitive, comfortable with hardware |
 
-Both share one API, one billing relationship, one customer account.
-Mix freely.
+Both share one API, one billing relationship, one account. Mix freely.
 
 ## What iSnap shields rental from
 
-Rental customers have **no access to the hardware**. Surfacing
+On rental, you have **no access to the hardware**. Surfacing
 transient state (`line.offline` for 30 seconds during a Mac restart,
-`line.degraded` for missed heartbeats) creates support-ticket floods
-with no actionable resolution — the customer can't fix anything because
-the device is in iSnap's farm.
+`line.degraded` for missed heartbeats) creates alert noise with no
+actionable resolution — you can't fix anything because the device
+is in iSnap's farm.
 
 So rental lines emit only **durable, actionable** events:
 
+- `line.connected` — the line is live and able to send (fires on
+  activation; for BYOD also on bridge re-connect after an outage).
 - `line.apple_id_flagged` — Apple flagged the iMessage line (real
   problem, real recovery time, you should know).
-- `line.permanently_blocked` — the line has been removed from rotation
-  due to compliance / abuse (rare).
 - `line.quota_warning` / `line.quota_exceeded` — bucket fired.
-- `line.released` — the line is no longer attached to your account
-  (cancellation, transfer).
 
 `GET /v1/lines/{id}/health` returns `403 rental_health_not_exposed`
 for rental tiers.
 
 ## What BYOD exposes
 
-Customer owns the hardware → customer can act on issues → iSnap exposes
-the full state machine:
+You own the hardware → you can act on issues → iSnap exposes the full
+state machine:
 
-- `line.offline` — bridge lost connectivity.
-- `line.online` — bridge regained connectivity.
+- `line.connected` — bridge online (also fires on the initial pair
+  completion).
+- `line.disconnected` — bridge dropped its long-lived connection.
+- `line.offline` — bridge has been unreachable past the offline
+  threshold.
 - `line.degraded` — bridge online but missing heartbeats.
 - `line.apple_id_flagged` — same as rental, BUT the recovery path
-  differs (customer re-auths via the bridge).
+  differs (you re-auth via the bridge).
 - `line.quota_warning` / `line.quota_exceeded` — same as rental.
 - `GET /v1/lines/{id}/health` returns the current state, last-seen-at,
   recent error history.
@@ -66,12 +66,12 @@ the API gates `/health` and the rental-suppressed events on
 
 | Event | Rental | BYOD |
 |---|:---:|:---:|
+| `line.connected` | ✓ | ✓ |
 | `line.apple_id_flagged` | ✓ | ✓ |
-| `line.permanently_blocked` | ✓ | ✓ |
 | `line.quota_warning` | ✓ | ✓ |
 | `line.quota_exceeded` | ✓ | ✓ |
+| `line.disconnected` | ✗ | ✓ |
 | `line.offline` | ✗ | ✓ |
-| `line.online` | ✗ | ✓ |
 | `line.degraded` | ✗ | ✓ |
 | `message.received` | ✓ | ✓ |
 | `message.sent` / `delivered` / `failed` | ✓ | ✓ |
@@ -84,34 +84,34 @@ same account) gets the union of events scoped per `line_id`. Branch on
 
 There's no penalty for mixing. Common patterns:
 
-- **Rental for production, BYOD for dev.** Rental lines for the live
-  customer; a BYOD Mac in the office paired to a test API key for
+- **Rental for production, BYOD for dev.** Rental lines for live
+  traffic; a BYOD Mac in the office paired to a test API key for
   integration work.
-- **BYOD for high-touch accounts, rental for the rest.** Big-customer
-  account managers get a BYOD line they own; everyone else uses rental.
-- **Trial → BYOD → rental.** Prospects start on a trial, convert into
-  BYOD (low monthly), upgrade to rental once volume justifies the
-  hardware-management hand-off.
+- **BYOD for some accounts, rental for the rest.** Mix freely across
+  the same iSnap account.
+- **Trial → BYOD → rental.** Start on a trial, move to BYOD (low
+  monthly), upgrade to rental once volume justifies handing off the
+  hardware management.
 
 Billing aggregates across tiers — one account, one invoice.
 
-## When to switch a customer
+## When to switch from BYOD to rental
 
-Triggers to recommend rental over BYOD:
+Triggers to consider rental over BYOD:
 
-- The customer is shipping &gt; the BYOD line's effective warming-stage
-  cap consistently (saturating the daily bucket).
-- The customer is calling support every other day about offline state
-  on their Mac (hardware reliability is the wrong abstraction for
-  them).
-- The customer's BYOD line keeps catching Apple flags despite clean
-  sending patterns (a managed iSnap pool of Apple IDs has more rotation
-  options than a single customer-owned ID).
+- You're saturating the BYOD line's daily warming-stage cap
+  consistently — rental tiers run with more headroom and a managed
+  warming pool.
+- You're spending real time troubleshooting offline state on your Mac
+  — hardware reliability is no longer the right abstraction.
+- Your BYOD line keeps catching Apple flags despite clean sending
+  patterns — iSnap's managed Apple ID pool has more rotation options
+  than a single self-owned ID.
 
-The migration is "release the BYOD line, assign a rental line, transfer
-ownership of any conversation history." iSnap doesn't auto-migrate
-conversation state because the underlying number changes — surface it
-to the end-user.
+The migration is: release the BYOD line, assign a rental line, and
+re-attach any downstream identity (e.g. the recipient list in your own
+system). The underlying phone number changes, so conversation history
+keyed by number doesn't auto-carry over.
 
 ## Related
 

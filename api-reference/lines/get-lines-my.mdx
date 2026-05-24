@@ -1,4 +1,67 @@
 ---
-title: "GET /v1/lines/my"
+title: "List your lines"
+description: "Every line currently attached to your account — rental, BYOD, and any trial pool lines you've reserved."
 openapi: "GET /v1/lines/my"
 ---
+
+Returns every line on your account, regardless of tier or status.
+This is the inventory call — use it to render "your fleet" in a
+dashboard, drive routing logic, or audit what you're paying for.
+
+For the marketplace catalog of lines you could rent, see
+[`GET /v1/lines`](/api-reference/lines/get-lines).
+
+## Response shape
+
+```json
+{
+  "lines": [
+    {
+      "id": "line_aBc...",
+      "phone_number": "+15551234567",
+      "billing_tier": "rental_iphone",
+      "status": "active",
+      "monthly_price": 250,
+      "activated_at": "2026-04-12T08:00:00Z",
+      "metadata": { "label": "Sales East" }
+    }
+  ]
+}
+```
+
+Wrapped under `lines` (consistent with the rest of the listing
+endpoints). Each item is a full `Line` record.
+
+## Useful status values
+
+| `status` | What it means |
+|---|---|
+| `reserved` | You claimed the line but haven't activated it yet. Billing is paused. Activate within the reservation window or it auto-releases. |
+| `active` | Live and sending. Billing is on. |
+| `suspended` | Temporarily disabled (compliance hold, payment failure, abuse review). No sends. |
+| `released` | Removed from your account. Won't appear here for long — the row is reaped. |
+
+Filter client-side or sort by `activated_at` to surface newest lines
+first.
+
+## What this doesn't return
+
+- **Trials.** Trials are a separate resource — see
+  [`GET /v1/trial/activity`](/api-reference/trial/get-trial-activity).
+- **Pool lines you don't control.** Shared pool lines used for trials
+  surface only via the trial endpoints; this endpoint is "my owned
+  lines" specifically.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors). This
+endpoint has no endpoint-specific error codes.
+
+## Related
+
+- [`GET /v1/lines`](/api-reference/lines/get-lines) — marketplace catalog.
+- [`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) — claim a new line.
+- [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release) — give a line back.
+- [Concepts → Line lifecycle](/concepts/line-lifecycle) — full state machine.

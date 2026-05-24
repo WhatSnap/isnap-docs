@@ -1,4 +1,96 @@
 ---
-title: "GET /v1/lines/{id}/quota"
+title: "Get line quota snapshot"
+description: "5-bucket usage view — what's been sent, what's still allowed, and which buckets are at 80% headroom."
 openapi: "GET /v1/lines/{id}/quota"
 ---
+
+Returns the current quota usage across iSnap's 5 buckets:
+
+1. **Daily new-contact** — distinct new recipients today.
+2. **Daily known-contact** — recipients you've already exchanged
+   with.
+3. **Daily total** — sum cap.
+4. **Hourly** — rolling 60-minute window.
+5. **Minute** — rolling 60-second window.
+
+Use this to render send-headroom in your UI, throttle your own
+scheduler before iSnap rate-limits you, or alert when warming-stage
+caps are about to bite.
+
+For the underlying limits (not just the current usage), see
+[`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config).
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID. |
+
+## What the response contains
+
+```json
+{
+  "line_id": "line_aBc...",
+  "daily_new_contacts_used": 12,
+  "daily_new_contact_limit": 40,
+  "daily_known_contacts_used": 88,
+  "daily_known_contact_limit": 200,
+  "daily_messages_used": 100,
+  "daily_total_message_limit": 500,
+  "hourly_messages_used": 18,
+  "hourly_message_limit": 60,
+  "minute_messages_used": 0,
+  "minute_message_limit": 5,
+  "buckets_warning": {
+    "new_contacts_at_80_percent": false,
+    "known_contacts_at_80_percent": true,
+    "messages_at_80_percent": false,
+    "hourly_at_80_percent": false,
+    "minute_at_80_percent": false
+  }
+}
+```
+
+Each bucket has a `*_used` (current count) and a `*_limit` (max for
+the window). Subtract for headroom: `daily_new_contact_limit -
+daily_new_contacts_used`.
+
+## `buckets_warning`
+
+The 5 booleans flip to `true` when usage crosses **80%** of the
+respective limit. Use them to:
+
+- Surface a "you're close to the daily new-contact cap" banner in
+  your UI before sends start failing.
+- Trigger your own back-off / batch-shrinking logic.
+- Drive a webhook subscription elsewhere — the
+  `line.quota_warning` webhook fires off the same threshold.
+
+## Window resets
+
+- **Daily** buckets reset at midnight in the line's configured
+  timezone (see
+  [`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config)
+  `timezone` field).
+- **Hourly** and **minute** buckets are rolling windows, not
+  fixed-grid — they don't reset on the clock; they age out 60 minutes
+  / 60 seconds after each send.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `line_not_found` | Line ID isn't on your account. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`GET /v1/lines/{id}/config`](/api-reference/lines/get-lines-id-config) — the underlying limits these usages are measured against.
+- [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-lines-id-queue) — messages parked because they hit a bucket (when `quota_overflow_behavior: "queue"`).
+- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — design rationale.
+- [Webhooks → `line.quota_warning`](/guides/webhooks) — push instead of poll.

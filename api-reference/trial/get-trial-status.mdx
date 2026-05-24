@@ -1,4 +1,88 @@
 ---
-title: "GET /v1/trial/status"
+title: "Get trial status"
+description: "Poll the lifecycle of a trial by its opaque token — pairing, paired handle, streak counter, scoped API key."
 openapi: "GET /v1/trial/status"
 ---
+
+Returns the current state of a trial keyed by the opaque `token`
+returned from [`POST /v1/trial/init`](/api-reference/trial/post-trial-init).
+Use it to render the prospect's progress in your UI, or to poll for
+pairing before kicking off the rest of your onboarding flow.
+
+This endpoint is **token-authenticated, not API-key-authenticated** —
+the token is the credential. That's deliberate: it lets your client
+poll for status without leaking your account API key into a public
+flow.
+
+## Query parameters
+
+| Param | Value |
+|---|---|
+| `token` | The opaque token returned from `POST /v1/trial/init`. Required. 1–64 chars. |
+
+## What the response contains
+
+| Field | What it's for |
+|---|---|
+| `trial_id` | iSnap-side identifier. |
+| `token` | Echo of the input token. |
+| `status` | `pairing_pending` → `active` → `dormant`/`revoked`. See lifecycle below. |
+| `pairing_expires_at` | ISO timestamp. Only populated while `status: "pairing_pending"`. |
+| `pool_line_number` | The number to text. Populated until the trial is revoked. |
+| `paired_handle` | The prospect's phone number, captured the moment they text in. `null` until pairing succeeds. |
+| `trial_api_key` | The scoped API key for sending **from** the pool line **to** the paired handle. `null` until pairing succeeds; redacted in the response once revoked. |
+| `activity_rule` | `{ max_outbound_without_inbound, outbound_since_last_inbound }`. Use it to render "X messages remaining before dormancy" in the UI. |
+
+## The status lifecycle
+
+```
+pairing_pending  ── prospect texts pool_line_number ──►  active
+       │                                                   │
+       │ (15 min, no inbound)                              │ (24h, no traffic in either direction)
+       ▼                                                   ▼
+    revoked                                             dormant
+                                                            │
+                                                            │ new inbound from paired_handle
+                                                            ▼
+                                                         active
+```
+
+`revoked` is terminal — call `POST /v1/trial/init` again for a fresh
+trial. `dormant` is recoverable: any new inbound from
+`paired_handle` flips it back to `active` and emits
+`trial.reactivated`.
+
+## What to do with `trial_api_key`
+
+Once `status: "active"`, the response carries a scoped API key. Two
+hard guarantees on it:
+
+- **Self-echo only.** Server-side enforcement: this key can only send
+  to the `paired_handle` on this trial. Any other `to:` value gets
+  `403 trial_self_echo_only`.
+- **Streak-capped.** Each outbound increments
+  `activity_rule.outbound_since_last_inbound`. Hitting
+  `max_outbound_without_inbound` returns
+  `429 trial_outbound_streak_exceeded`. An inbound from
+  `paired_handle` resets the counter.
+
+The key is safe to embed in a client-side demo — the self-echo
+guarantee means a leaked key can only message the same prospect's
+phone, not arbitrary numbers.
+
+## Errors
+
+Universal codes (`500`, `503`) and the envelope shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `trial_not_found` | The `token` doesn't match any trial. Often a copy-paste error or a trial that was revoked and reaped. |
+| 422 | `validation_error` | `token` missing, empty, or longer than 64 chars. |
+
+## Related
+
+- [`POST /v1/trial/init`](/api-reference/trial/post-trial-init) — how the trial got minted.
+- [`GET /v1/trial/activity`](/api-reference/trial/get-trial-activity) — account-wide activity snapshot of trials you've issued.
+- [Concepts → Trial architecture](/concepts/trials) — design rationale.

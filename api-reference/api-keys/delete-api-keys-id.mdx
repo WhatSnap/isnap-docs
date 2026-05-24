@@ -1,4 +1,52 @@
 ---
-title: "DELETE /v1/api-keys/{id}"
+title: "Revoke an API key"
+description: "Immediately invalidate a key — every request using it returns 401 from now on."
 openapi: "DELETE /v1/api-keys/{id}"
 ---
+
+Revokes an API key. Effective immediately — every subsequent request
+using that key returns `401 invalid_api_key`. There is no soft revoke
+or grace period.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | The API key's UUID (from `GET /v1/api-keys`). Not the prefix, not the full secret. |
+
+## Response
+
+```json
+{ "message": "API key revoked" }
+```
+
+## Pre-revoke checklist
+
+1. **Deploy the replacement.** Make sure the new key is live in the
+   services that used the old one before revoking.
+2. **Watch `last_used_at`.** Call
+   [`GET /v1/api-keys`](/api-reference/api-keys/get-api-keys) and
+   confirm the old key's timestamp isn't moving — otherwise some
+   service is still using it.
+3. **Then revoke.** Once the old key has been idle for at least a few
+   minutes, call this endpoint.
+
+If you suspect a key has leaked, revoke immediately — accept the
+short downtime on services still using it. Leaked > broken.
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 404 | `api_key_not_found` | `id` isn't on your account, or already revoked. |
+| 422 | `validation_error` | `id` not a valid UUID. |
+
+## Related
+
+- [`POST /v1/api-keys`](/api-reference/api-keys/post-api-keys) — mint a replacement.
+- [`GET /v1/api-keys`](/api-reference/api-keys/get-api-keys) — verify revocation.

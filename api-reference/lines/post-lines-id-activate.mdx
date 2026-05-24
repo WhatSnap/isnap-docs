@@ -1,4 +1,73 @@
 ---
-title: "POST /v1/lines/{id}/activate"
+title: "Activate a reserved line"
+description: "Commit a reservation — start billing and put the line into the active state."
 openapi: "POST /v1/lines/{id}/activate"
 ---
+
+Completes the two-step rental flow by activating a line you previously
+reserved with
+[`POST /v1/lines/{id}/reserve`](/api-reference/lines/post-lines-id-reserve).
+Billing starts the moment this call returns 200.
+
+If you're using the one-shot
+[`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign)
+flow, you don't need this endpoint — assign reserves and activates in
+one step.
+
+## Path parameters
+
+| Param | Value |
+|---|---|
+| `id` | `line_…` ID of the line you reserved. Must currently be in `status: "reserved"` on your account. |
+
+## What the response contains
+
+The full `Line` record with:
+
+- `status: "active"`
+- `activated_at` set to now
+- `stripe_subscription_id` populated (rental tiers) — the monthly
+  subscription that just started
+
+Billing begins at `activated_at`. The first invoice covers the rest of
+the current calendar month.
+
+## A `line.connected` webhook fires
+
+Almost immediately after this call returns, a `line.connected` webhook
+arrives on every active subscription. The payload carries the full
+line including the newly assigned `phone_number` — useful if your
+backend driver waits on the webhook before exposing the line in your
+own product.
+
+## BYOD note
+
+For BYOD slots, `/activate` registers the slot as billable but the
+**`active` state is only reached after the bridge confirms it can
+send**. The lifecycle in that case is:
+
+1. `/reserve` → `status: "reserved"`
+2. `/activate` → `status: "provisioning"` (billing on)
+3. `POST /v1/byod/pair` returns an activation code
+4. Bridge connects → `status: "active"` + `line.connected` webhook
+
+## Errors
+
+Universal codes (`401 invalid_api_key`, `500`, `503`) and the envelope
+shape are documented in
+[Conventions → Errors](/api-reference/introduction#errors).
+Endpoint-specific codes:
+
+| HTTP | `error.code` | Cause |
+|---|---|---|
+| 402 | `payment_method_required` | No active payment method. Add one and retry. |
+| 404 | `line_not_found` | Line ID isn't on your account, or the reservation already expired and was reaped. |
+| 409 | `reservation_expired` | Reservation TTL elapsed. Re-reserve and try again. |
+| 409 | `line_already_active` | Already activated — idempotency hint, not an error you need to recover from. |
+| 422 | `validation_error` | `id` doesn't match the `line_…` pattern. |
+
+## Related
+
+- [`POST /v1/lines/{id}/reserve`](/api-reference/lines/post-lines-id-reserve) — the other half of the two-step flow.
+- [`POST /v1/lines/assign`](/api-reference/lines/post-lines-assign) — one-shot version.
+- [`POST /v1/lines/{id}/release`](/api-reference/lines/post-lines-id-release) — give the line back when you're done with it.

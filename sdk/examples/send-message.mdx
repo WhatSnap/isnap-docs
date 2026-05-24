@@ -44,17 +44,13 @@ interface SendFailure {
 
 export async function sendMessage(input: SendInput): Promise<SendResult | SendFailure> {
   try {
-    // 1. Probe the recipient (cached server-side for 7 days, cheap).
+    // 1. Optional: probe the recipient. The result informs which line
+    //    you might pick (iMessage vs Android), not the `channel` —
+    //    `channel: 'auto'` is the only value v1 accepts.
     const probe = await isnap.lookup.check({ handle: input.to })
+    // probe.imessage is `true | false | null` — null means unknown.
 
-    // 2. Pick the channel. `auto` is fine 95% of the time, but explicit
-    //    SMS for landlines / VOIP saves a failed iMessage attempt.
-    const channel: 'auto' | 'iMessage' | 'SMS' =
-      probe.imessage === false ? 'SMS' :
-      probe.line_type === 'landline' ? 'SMS' :
-      'auto'
-
-    // 3. Upload attachment if provided.
+    // 2. Upload attachment if provided.
     const attachments: string[] = []
     if (input.attachmentPath) {
       const bytes = await readFile(input.attachmentPath)
@@ -70,12 +66,12 @@ export async function sendMessage(input: SendInput): Promise<SendResult | SendFa
       attachments.push(upload.attachment_id)
     }
 
-    // 4. Send. SDK auto-generates Idempotency-Key per call; same key
+    // 3. Send. SDK auto-generates Idempotency-Key per call; same key
     //    survives the SDK's internal retries on APIConnectionError.
     const message = await isnap.messages.send({
       line_id: input.lineId,
       to: input.to,
-      channel,
+      channel: 'auto',
       body: input.body,
       attachments
     })
@@ -137,14 +133,8 @@ async function cancelIfPossible(messageId: string): Promise<boolean> {
 }
 ```
 
-## Schedule for later
-
-To send at a specific time, set `send_at` on the request (Phase 2 doc
-— TODO; the field is on the OpenAPI spec). The message lands in
-`status: scheduled` and dispatches at the requested time.
-
 ## Related
 
 - [Sending messages](/guides/sending-messages) — full request reference.
 - [SDK → Errors](/sdk/errors) — class hierarchy used in `classifyError`.
-- [Best practices](/guides/best-practices) — when to override `auto` channel.
+- [Best practices](/guides/best-practices) — sending discipline + lookup before cold outbound.

@@ -1,11 +1,10 @@
 ---
 title: "Look up a handle"
-description: "Check if a phone number is iMessage-eligible, handle the cache miss, pick the right channel."
+description: "Check if a phone number is reachable on iMessage before cold outbound."
 ---
 
-`isnap.lookup.check()` is the cheap, cached probe you should run before
-any cold outbound. It tells you what channel will actually reach the
-recipient.
+`isnap.lookup.check()` is the synchronous pre-send probe — call it on any
+handle you've never messaged to find out whether iMessage is an option.
 
 ## Basic call
 
@@ -15,122 +14,93 @@ import { ISnapClient } from '@isnap/sdk'
 const isnap = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY! })
 
 const probe = await isnap.lookup.check({ handle: '+15551234567' })
+console.log(probe.handle)      // echoes the canonicalised input
 console.log(probe.imessage)    // true | false | null
-console.log(probe.facetime)    // true | false | null
-console.log(probe.line_type)   // 'mobile' | 'landline' | 'voip' | null
-console.log(probe.carrier)     // 'AT&T' | 'Verizon' | ... | null
-console.log(probe.cached)      // true if served from the 7-day cache
 ```
 
-## The cache-hit vs cache-miss split
+## The shape
 
-iSnap caches lookup results for 7 days per handle. Two response shapes
-to handle:
+The response carries two fields:
 
-### 200 — cache hit
+| Field | Meaning |
+|---|---|
+| `handle` | The canonicalised E.164 phone or normalised email you queried. |
+| `imessage` | `true` reachable, `false` confirmed not on iMessage, `null` unknown (no probe data — treat as SMS-safe). |
 
-Full result, immediately. Use it.
+That's it. No `facetime`, no `line_type`, no `carrier`, no `cached` /
+`pending` / `retry_after` — the schema was trimmed pre-launch to only
+the signal we reliably populate. See
+[`POST /v1/lookup`](/api-reference/lookup/post-lookup) for the
+underlying contract.
+
+## Example response
 
 ```json
 {
   "handle": "+15551234567",
-  "imessage": true,
-  "facetime": true,
-  "line_type": "mobile",
-  "carrier": "AT&T",
-  "checked_at": "2026-05-03T10:15:00Z",
-  "cached": true
+  "imessage": true
 }
 ```
 
-### 202 — cache miss / pending
-
-iSnap is dispatching a probe to a real device. The result isn't ready
-yet. Body returns `pending: true` with a `retry_after` (seconds):
+When the probe can't conclude (recipient never reached on iMessage,
+provider lookup timed out, etc.) you get `imessage: null` and treat
+it as "play it safe":
 
 ```json
 {
   "handle": "+15551234567",
-  "imessage": null,
-  "facetime": null,
-  "line_type": "mobile",
-  "carrier": null,
-  "checked_at": null,
-  "cached": false,
-  "pending": true,
-  "retry_after": 8
+  "imessage": null
 }
 ```
 
-Wait `retry_after` seconds and call again. After the cache populates
-(usually 5–15 seconds), subsequent calls hit the cache.
+## Use it to inform routing
 
-## Wait helper
-
-```ts
-async function lookupWithWait(
-  handle: string,
-  maxWaitMs = 30_000
-): Promise<LookupResult> {
-  const deadline = Date.now() + maxWaitMs
-  while (Date.now() < deadline) {
-    const probe = await isnap.lookup.check({ handle })
-    if (!probe.pending) return probe
-    const wait = Math.min(probe.retry_after! * 1000, deadline - Date.now())
-    if (wait <= 0) break
-    await new Promise((r) => setTimeout(r, wait))
-  }
-  throw new Error(`Lookup for ${handle} timed out after ${maxWaitMs}ms`)
-}
-
-// Usage:
-const probe = await lookupWithWait('+15551234567')
-```
-
-The wait is bounded — never poll forever. If you need true
-fire-and-forget lookup, mint a webhook subscription on
-`lookup.completed` (Phase 2 doc — TODO).
-
-## Use it to pick a channel
+`channel` on `POST /v1/messages` is locked to `auto` in v1, so lookup
+doesn't change what you pass — it changes which **line** you send from.
+Send from an iMessage-first line (`rental_iphone` / `byod_imessage`)
+when iMessage is reachable; otherwise use an Android line so the
+fallback chain starts on SMS / RCS.
 
 ```ts
-async function bestChannel(to: string): Promise<'iMessage' | 'SMS' | 'auto'> {
+async function pickLineFor(to: string): Promise<string> {
   const probe = await isnap.lookup.check({ handle: to })
 
-  if (probe.pending) return 'auto'                       // unknown, let the line decide
-  if (probe.imessage === true) return 'iMessage'
-  if (probe.line_type === 'landline') {
-    throw new Error(`${to} is a landline; SMS will fail too. Skip.`)
+  if (probe.imessage === true) {
+    return MY_IMESSAGE_LINE_ID
   }
-  return 'SMS'                                            // mobile, no iMessage
+  // false or null — assume SMS-safe routing
+  return MY_ANDROID_LINE_ID
 }
 ```
 
 ## Pre-validating a list
 
-For batch outreach, lookup is your friend — drop the unreachable handles
-before you queue sends:
+For batch outreach, drop the unreachable handles before you queue sends:
 
 ```ts
-async function validateBatch(handles: string[]) {
-  const reachable: string[] = []
-  const skipped: string[] = []
+async function partitionByImessage(handles: string[]) {
+  const imessage: string[] = []
+  const smsOnly: string[] = []
+  const unknown: string[] = []
 
   // Lookup is per-call; the SDK doesn't bulk-batch (server-side limit).
   // Run with a small concurrency budget to avoid hammering rate limits.
   const concurrency = 5
   for (let i = 0; i < handles.length; i += concurrency) {
     const batch = handles.slice(i, i + concurrency)
-    const results = await Promise.all(batch.map((h) => isnap.lookup.check({ handle: h })))
+    const results = await Promise.all(
+      batch.map((h) => isnap.lookup.check({ handle: h }))
+    )
     for (let j = 0; j < batch.length; j++) {
       const probe = results[j]
       const handle = batch[j]
-      if (probe.line_type === 'landline') skipped.push(handle)
-      else reachable.push(handle)
+      if (probe.imessage === true) imessage.push(handle)
+      else if (probe.imessage === false) smsOnly.push(handle)
+      else unknown.push(handle)
     }
   }
 
-  return { reachable, skipped }
+  return { imessage, smsOnly, unknown }
 }
 ```
 
@@ -139,12 +109,12 @@ async function validateBatch(handles: string[]) {
 | HTTP | `error.code` | What |
 |---|---|---|
 | 422 | `validation_error` | `handle` malformed (must be E.164 or email). |
-| 429 | `lookup_rate_limit_exceeded` | You're calling lookup too aggressively. Back off; cache should absorb most repeat calls. |
+| 429 | `lookup_rate_limit_exceeded` | You're calling lookup too aggressively. Back off. |
 
 `lookup_rate_limit_exceeded` is a `QuotaExceededError` — see
 [SDK → Errors](/sdk/errors). Honour `retryAfter`.
 
 ## Related
 
-- [Concepts → Channels](/concepts/channels) — how lookup informs `channel` selection.
+- [Concepts → Channels](/concepts/channels) — how lookup informs line selection.
 - [Best practices](/guides/best-practices#5-lookup-before-cold-outbound) — when to lookup vs skip.

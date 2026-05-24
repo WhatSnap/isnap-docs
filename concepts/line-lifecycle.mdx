@@ -1,0 +1,103 @@
+---
+title: "Line lifecycle"
+description: "The states a line walks through from marketplace listing to active to released — what triggers each transition and what events fire."
+---
+
+A line is iSnap's atomic billing + capability unit: one phone number, one device, one Stripe subscription. This page is the state-machine reference for the API surface — what `status` values you'll see in `GET /v1/lines/{id}`, what transitions are reachable, and which webhooks fire on the edges.
+
+For SKU choice see [BYOD vs Rental](/concepts/byod-vs-rental). For when subscriptions get charged on each transition see [Billing](/concepts/billing).
+
+## The states
+
+```
+                 reserve (15-min TTL)
+   ┌──────────────────────────────────┐
+   ▼                                  │
+available ──────── reserved ─────── active ─────── released
+   ▲                  │                │              │
+   │                  │                │              │
+   │           reservation expires     │     `POST /v1/lines/{id}/release`
+   │           (auto-release worker)   │
+   └──────────────────────────────────┘
+                                  device-side disconnect
+                                  ↓
+                              disconnected
+```
+
+| Status | Meaning | Visible to | Next transitions |
+|---|---|---|---|
+| `available` | In the marketplace inventory, unassigned | Public (via `GET /v1/lines`) + ops | `reserved` (via `POST /v1/lines/{id}/reserve`), `assign` short-circuit |
+| `reserved` | Held for a specific user for 15 minutes | Owner + ops | `active` (via checkout completion), `available` (auto-release on TTL or `POST /v1/lines/{id}/release`) |
+| `active` | Paid for, billing, can send messages | Owner + ops | `released` (via `POST /v1/lines/{id}/release`), `disconnected` (device-side), subscription cancellation at period end |
+| `disconnected` | The paired device session went offline durably | Owner (BYOD only) + ops | `active` on reconnect; otherwise auto-release at next billing boundary |
+| `released` | Surrendered back to the marketplace | Owner sees the line drop off `GET /v1/lines/my`; the row resets to `available` after ops clears it | back to `available` |
+
+`fleet_provisioning` is an internal-only intermediate set by the cancellation-during-procurement path (see [Billing](/concepts/billing)). Partners shouldn't see it via the public API.
+
+## The reservation window
+
+`POST /v1/lines/{id}/reserve` puts the line in `reserved` for 15 minutes. A background worker (`line-release.worker`) auto-releases the reservation if no checkout completes by the deadline. While reserved:
+
+- The line is hidden from public `GET /v1/lines` listings
+- Only the reserving user can read it via `GET /v1/lines/{id}` with API key auth
+- Activation (`POST /v1/billing/checkout`) flips it to `active` and stops the release timer
+- Manual release (`POST /v1/lines/{id}/release`) flips it back to `available` immediately
+
+The 15-min window exists to let partners drive an embedded Stripe Checkout flow without race conditions — long enough for a customer to fill out card details, short enough that abandoned reservations don't starve the marketplace. The window is not configurable.
+
+## Atomic assign
+
+`POST /v1/lines/assign` is the single-call alternative to `reserve → checkout → activate`. The server picks an available line matching `billing_tier` (and optional `area_code`), reserves it, mints a Stripe subscription, and activates it — all in one round-trip. Useful when the partner doesn't care which specific number they get.
+
+Scoped API keys are rejected on `assign` — by design. A scoped key has a fixed allowlist of lines; letting it claim a brand-new one would grant ownership outside the scope.
+
+## Activation and device pairing
+
+Activation just flips the row to `active` and stores the Stripe subscription id. The line is *billable* immediately. It's not yet *usable* — partners still need a device session before outbound messages can leave iSnap.
+
+- **Rental tiers** (`rental_iphone` / `rental_android`): ops assigns a device via the internal fulfillment flow. The first `line.connected` webhook fires once the device session heartbeats. Partners do not see provisioning detail; the `fulfillment_status` field on the line surfaces a high-level summary.
+- **BYOD tiers** (`byod_imessage` / `byod_android`): partners call `POST /v1/byod/pair` to mint an activation code, the customer runs the bridge installer, and the device-side `POST /device/activate` consumes the code to mint the line + session in one shot. `line.connected` fires the moment activation completes.
+
+The bridge / device pairing flow is documented in [BYOD pairing](/guides/byod-pairing).
+
+## Transfer of ownership
+
+`POST /v1/lines/{id}/transfer-ownership` moves the line between iSnap users without dropping it back to `available`. The device session stays paired by default (set `preserve_device_session: false` to force re-pair). The Stripe subscription stays on the original payer until the next period rolls over — see [Billing → Transfer of ownership](/concepts/billing) for the timing.
+
+Status stays `active` throughout — transfer is not a state transition, it's an ownership swap.
+
+## Release vs cancellation
+
+These do different things:
+
+- `POST /v1/lines/{id}/release` — immediate. The line drops back to `available`, the device session unpairs, ongoing sends complete but no new ones are accepted. The Stripe subscription is scheduled for end-of-period cancellation; you forfeit the unused portion.
+- `DELETE /v1/billing/subscriptions/{id}` — deferred. The line stays `active` and usable until the period rolls over. Then the subscription cancels and the line drops to `available`. Use this when you want to keep sending through the paid month and only stop billing the *next* one.
+
+Most partners use release for immediate offboarding and subscription cancel for graceful churn.
+
+## Events on the edges
+
+| Transition | Webhook |
+|---|---|
+| `reserved → active` (rental, after checkout) | `line.connected` once the device session heartbeats |
+| `→ active` (BYOD, after `POST /device/activate`) | `line.connected` |
+| device session goes offline durably | `line.offline` (BYOD only — rental tiers suppress transient device noise) |
+| device reconnects after `line.offline` | `line.connected` |
+| Apple ID flagged on the paired device | `line.apple_id_flagged` (both rental + BYOD) |
+| Quota bucket crosses the 80% threshold | `line.quota_warning` |
+| Quota bucket hits the cap | `line.quota_exceeded` |
+| Subscription cancels at period end | `line.disconnected` |
+| Pre-order completes provisioning + setup | `pre_order.fulfilled` (carries the new `line_id`) |
+
+The BYOD-only events (`line.offline`, `line.connected` for transient state, `line.degraded`) are deliberately suppressed for rental tiers — the customer doesn't own the hardware and shouldn't see transient state noise. Durable, actionable events (`apple_id_flagged`, `quota_*`) fire for both tiers because they carry decisions the customer needs to take.
+
+## Where to look
+
+- `GET /v1/lines` — public marketplace listing (filter by `billing_tier`, `area_code`)
+- `GET /v1/lines/{id}` — single line state + metadata
+- `GET /v1/lines/my` — owned lines (active + reserved)
+- `GET /v1/lines/{id}/health` — BYOD-only health rollup (`active | degraded | offline`)
+- `GET /v1/lines/{id}/quota` — five-bucket snapshot for the line
+- `GET /v1/lines/{id}/queue` — queued and scheduled outbounds
+
+Every line response carries `byod: boolean` (derived from `billing_tier`) so partners can branch on ownership without prefix-matching the enum.

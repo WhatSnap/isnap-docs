@@ -80,18 +80,16 @@ makes this measurable:
 Pull the snapshot at `GET /v1/lines/{id}/quota` — `new_contacts.used`
 vs `known_contacts.used` over a 30-day window approximates the ratio.
 
-## 4. Use `auto` channel by default
+## 4. Channel is always `auto`
 
-`channel: 'auto'` tries `iMessage → RCS → SMS` per the line's fallback
-chain. Force a specific channel only when:
+`channel: 'auto'` is the only value accepted on `POST /v1/messages`.
+The line's fallback chain (`iMessage → RCS → SMS`) decides at dispatch
+time; the resolved transport comes back on the response as `service`.
 
-- **Force `SMS`** for OTPs / receipts that must hit the SMS inbox
-  (delivery beats UX).
-- **Force `iMessage`** only after you've confirmed reachability via
-  `POST /v1/lookup`. Otherwise you're paying for a failed iMessage send
-  that should have been SMS.
-- **Force `RCS`** only if you're shipping rich cards (image + suggested
-  replies). Plain text doesn't need it.
+If you want a specific channel routed differently, pick a different
+line: rental Android / BYOD Android lines have an SMS-first chain,
+rental iPhone / BYOD iMessage lines have an iMessage-first chain. The
+choice is at the line level, not the per-message level.
 
 ## 5. Lookup before cold outbound
 
@@ -99,14 +97,17 @@ For any number you've never messaged, `POST /v1/lookup` first:
 
 ```ts
 const probe = await isnap.lookup.check({ handle: '+15551234567' })
-if (probe.imessage) {
-  // Send via iMessage; Android lines aren't relevant here.
+if (probe.imessage === true) {
+  // Reachable on iMessage — your iMessage line's chain will route there first.
+} else if (probe.imessage === false) {
+  // Not on iMessage — route via an Android line so the chain starts on SMS / RCS.
 } else {
-  // Force SMS. Skip iMessage attempt; saves the round-trip.
+  // null — unknown. Default to SMS-safe routing.
 }
 ```
 
-Lookups are cached server-side for 7 days. Cheap. Use them.
+The probe is synchronous and returns immediately. Use it for any
+unfamiliar handle before cold outbound.
 
 ## 6. Smart-overflow vs reject
 
@@ -155,7 +156,7 @@ Pulling status via `GET /v1/messages/{id}` works for the quickstart and
 nothing else. Production:
 
 - Webhooks for state changes (`message.delivered`, `line.quota_warning`).
-- Server-Sent Events for real-time inbound (Phase 2 doc — TODO).
+- Webhooks for inbound (`message.received`, `reaction.received`).
 - `GET /v1/lines/{id}/quota` for periodic dashboard refresh, not per-send.
 
 Polling burns rate limit and adds unnecessary latency. Webhook

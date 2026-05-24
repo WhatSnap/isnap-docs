@@ -77,12 +77,11 @@ You own the Apple ID, so you'll need to re-auth via the bridge:
    ID via the bridge to restore it."*
 2. Open the bridge — it presents Apple's re-auth flow (web view → 2FA
    on the trusted device).
-3. Once re-auth succeeds, the bridge tells iSnap and a follow-up event
-   fires.
-
-The **bridge SDK** ships a deep link — you can open the bridge's
-re-auth screen directly via
-`isnap-bridge://auth/reauth?line_id=line_aBc...` (Phase 2 doc — TODO).
+3. Once re-auth succeeds, the bridge resumes sending. Confirm by
+   sending a test iMessage or by checking
+   [`GET /v1/lines/{id}/health`](/api-reference/lines/get-lines-id-health)
+   — the health snapshot clears the Apple flag once the bridge
+   reports success.
 
 ## Communicating downstream
 

@@ -15,7 +15,7 @@ goes through.
     const message = await isnap.messages.send({
       line_id: 'line_aBcDeF',           // required
       to: '+15551234567',                // required, E.164 (max 30 chars)
-      channel: 'auto',                   // 'auto' | 'iMessage' | 'SMS' | 'RCS'
+      channel: 'auto',                   // only accepted value in v1
       body: 'Hello from iSnap.',         // up to 5000 chars
       attachments: ['att_xYz...'],       // 0–10 attachment IDs
       reply_to_message_id: 'msg_...',    // optional thread anchor
@@ -45,7 +45,7 @@ goes through.
 
 | Field | Type | Notes |
 |---|---|---|
-| `line_id` | string | The iSnap line that sends. `line_<base62>` or UUID. Caller must own / be scoped to it. |
+| `line_id` | string | The iSnap line that sends. Format: `line_<base62>` (25 chars). Caller must own / be scoped to it. |
 | `to` | string | Recipient handle. E.164 phone (`+15551234567`) or email (for iMessage Business). 1–30 chars. |
 
 `body` is optional but you must supply at least one of `body` or
@@ -56,7 +56,7 @@ goes through.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `body` | string | — | Text body, max 5000 characters. UTF-8. |
-| `channel` | enum | `auto` | `auto` lets the line's fallback chain decide (`iMessage → RCS → SMS`). Force a specific channel only when you have a reason. |
+| `channel` | enum | `auto` | `auto` is the only accepted value. The line's fallback chain decides (`iMessage → RCS → SMS`) at dispatch time; the resolved transport surfaces on the response as `service`. |
 | `attachments` | string[] | `[]` | Up to 10 attachment IDs from `POST /v1/attachments`. See [Attachments](#attachments). |
 | `effect` | object | — | iMessage native bubble or screen effects. Silently ignored on SMS / RCS. |
 | `reply_to_message_id` | string | — | Quote-reply to an existing message in the same conversation. |
@@ -140,8 +140,7 @@ await isnap.messages.send({
 
 iMessage accepts images, video, audio, vCards, and arbitrary files up
 to the 100 MB R2 ceiling (carriers cap MMS lower; iSnap surfaces the
-real cap per line in the line's `config`). RCS supports rich cards
-(image + title + body + suggested replies) — see Phase 2 docs (TODO).
+real cap per line in the line's `config`).
 
 ## Idempotency
 

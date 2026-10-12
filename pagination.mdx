@@ -1,0 +1,172 @@
+---
+title: "Pagination"
+description: "Gives the rules of each list operation of the iSnap API: cursors, page numbers, limits, order, filters and timestamps in queries."
+---
+
+Eleven operations return a list. Six page with a cursor, one pages with a page number, and four return the whole list in one response. This page gives the rules of each, so that a walk of a list neither skips nor repeats an item.
+
+## List operations
+
+| Operation | Pagination | Parameters | `limit`: default, maximum | Order | Filters | A cursor that cannot be read |
+| --- | --- | --- | --- | --- | --- | --- |
+| [`GET /v1/messages`](/api-reference/messages/list-messages) | Cursor | `cursor`, `limit`, `sort`, `order` | 25, 100 | By `created_at`, newest first. With `sort=scheduled_for`: by `scheduled_for`, soonest first, and messages without one last. `order` is `asc` or `desc`. | `line_id`, `status`, `direction`, `kind`, `since`, `until` | The list restarts from the first page, with `200`. |
+| [`GET /v1/chats`](/api-reference/chats/list-chats) | Cursor | `cursor`, `limit` | 20, 100 | By latest activity, newest first. | `line_id`, `since`, `until` | The list restarts from the first page, with `200`. |
+| [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders) | Cursor | `cursor`, `limit` | 25, 100 | Newest first. | `status` | The list restarts from the first page, with `200`. |
+| [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-line-queue) | Cursor | `cursor`, `limit` | 50, 100 | By planned send time, soonest first. | `status` | The list restarts from the first page, with `200`. |
+| [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) | Cursor | `cursor`, `limit` | 20, 100 | Newest first. | `status`, `event`, `since`, `until` | `400 invalid_cursor` |
+| [`GET /v1/webhooks/events`](/api-reference/webhooks/list-webhook-events) | Cursor | `cursor`, `limit` | 100, 100 | Newest first. | `since` (required), `until`, `event`, `line_id` | `400 invalid_cursor` |
+| [`GET /v1/lines`](/api-reference/lines/list-available-lines) | Page number | `page`, `limit` | 20, 100 | By `area_code`, then `phone_number`. | `billing_tier`, `area_code`, `country_code`, `state`, `country`, `status`, `metadata.<key>` | Not applicable. |
+| [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) | None: the whole list | None | Not applicable. | By `created_at`, oldest first. | None | Not applicable. |
+| [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) | None: the whole list | None | Not applicable. | Newest first. | None | Not applicable. |
+| [`GET /v1/attention`](/api-reference/lines/list-attention) | None: the whole list | None | Not applicable. | By `since`, oldest first, then by `line_id`. Entries without a `since` come last. | None | Not applicable. |
+| [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes) | None: the whole list | None | Not applicable. | By `country_code`, then `area_code`. | `country` | Not applicable. |
+
+`limit` is between 1 and 100. A value outside that range returns `400 validation_failed`: it is not brought back into the range.
+
+A query parameter that the operation does not define is ignored, without an error: a misspelled filter returns the list unfiltered.
+
+Where the items are in `data`:
+
+| Operations | Shape of `data` |
+| --- | --- |
+| The six cursor lists | `items`, `has_more`, `next_cursor`. `GET /v1/lines/{id}/queue` adds `line_id` and `summary`. |
+| `GET /v1/lines` | `lines`, `total`, `page`, `limit`. `total` is the number of lines that match the filters. `page` starts at 1. |
+| `GET /v1/lines/my` | `lines` |
+| `GET /v1/webhooks` | `webhooks` |
+| `GET /v1/attention` | `entries` |
+| `GET /v1/area-codes` | `area_codes`, `countries` |
+
+The four operations without pages set no bound on the size of their response.
+
+## Cursors
+
+To walk a cursor list, call it without `cursor`, then pass the `next_cursor` of each response as the `cursor` of the next request, with the same filters. Stop when `has_more` is `false`: `next_cursor` is then `null`.
+
+A cursor is an opaque string. It does not expire. It marks a position in the list, so that items with the same timestamp are neither repeated nor skipped. Use a cursor only with the operation that returned it.
+
+What a cursor is bound to differs by operation:
+
+| Operation | A cursor is valid with | When the query changes, or the cursor cannot be read |
+| --- | --- | --- |
+| `GET /v1/messages` | The `sort`, `order`, `line_id`, `status`, `direction`, `kind`, `since` and `until` of the request that returned it. `limit` can change between pages. | The list restarts from the first page, with `200`. Nothing in the response says so. |
+| `GET /v1/chats`, `GET /v1/pre-orders`, `GET /v1/lines/{id}/queue` | Any filters: the cursor is not tied to them. | A cursor that cannot be read restarts the list from the first page, with `200`. A cursor used with other filters is accepted, and the walk then skips items. |
+| `GET /v1/webhooks/{id}/deliveries`, `GET /v1/webhooks/events` | Any filters: the cursor is not tied to them. | A cursor that cannot be read returns `400 invalid_cursor`. A cursor used with other filters is accepted. |
+
+Four rules follow:
+
+- **Keep the query of a walk.** Send the same filters, `sort` and `order` on every page. On `GET /v1/messages`, write `since` and `until` the same way on every page: `2026-10-08T00:00:00Z` and `2026-10-08T00:00:00.000Z` count as two values.
+- **Deduplicate on `id`.** On every cursor list, track the ids you have processed and skip an item you have already seen. Such an item means one of two things: the list restarted, or the place of the item in the order changed during the walk. On `GET /v1/lines/{id}/queue`, and on `GET /v1/messages` with `sort=scheduled_for`, an item can come back on a later page when iSnap holds its message again with a later `scheduled_for`. On `GET /v1/messages` sorted by `created_at`, and on `GET /v1/pre-orders`, the order never changes: an item you have already seen means that the list restarted. On `GET /v1/webhooks/events`, the id of an item is its `event_id`.
+- **Expect chats to move.** `GET /v1/chats` orders by latest activity. A chat that sends or receives a message during a walk moves to the front: the walk can miss it or return it twice. Deduplicate on the chat id, and walk again to catch the chats that moved.
+- **Expect the events feed to end.** `GET /v1/webhooks/events` covers the last 72 hours. A cursor that points past that window returns an empty page with `has_more: false`, not an error. See [Events feed](/webhooks/pulling-events).
+
+Each page is one request. It counts against the [request-rate limit](/errors-and-rate-limits#rate-limits), and a page of `GET /v1/messages` also counts against the message-operations limit, which it shares with `POST /v1/messages`.
+
+<CodeGroup>
+
+```bash curl
+# First page.
+curl -sS -G https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "line_id=line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd" \
+  --data-urlencode "since=2026-10-08T00:00:00Z" \
+  --data-urlencode "limit=100"
+
+# Next page: the same query, plus the next_cursor of the previous response.
+curl -sS -G https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "line_id=line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd" \
+  --data-urlencode "since=2026-10-08T00:00:00Z" \
+  --data-urlencode "limit=100" \
+  --data-urlencode "cursor=$NEXT_CURSOR"
+```
+
+```typescript TypeScript
+import { client } from './isnap.js'
+
+// The iterator requests the next page when the current one is consumed,
+// with the same filters on every page.
+for await (const message of client.messages.list({
+  line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+  since: '2026-10-08T00:00:00Z',
+  limit: 100
+})) {
+  console.log(message.id, message.direction, message.status)
+}
+```
+
+```python Python
+from isnap import isnap_request
+
+query = {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "since": "2026-10-08T00:00:00Z",
+    "limit": 100,
+}
+seen = set()
+cursor = None
+while True:
+    page = isnap_request("GET", "/v1/messages", params={**query, "cursor": cursor})
+    for message in page["items"]:
+        if message["id"] in seen:
+            continue  # The list restarted, or the item was already returned.
+        seen.add(message["id"])
+        print(message["id"], message["direction"], message["status"])
+    if not page["has_more"]:
+        break
+    cursor = page["next_cursor"]
+```
+
+</CodeGroup>
+
+The samples import the helpers of [Authentication](/authentication#helpers). The SDK iterators do not expose the cursor: [SDK pagination](/sdk/pagination) shows how to page by hand.
+
+The items of `GET /v1/messages`, `GET /v1/chats` and `GET /v1/lines/{id}/queue` carry personal data: handles and message text. Request them only when needed. Do not copy them into logs, tickets or other tools. Refer to a contact by an id of your own.
+
+## Page numbers
+
+`GET /v1/lines` is the one list that pages by number. `page` starts at 1 and defaults to 1. Read `total` to know how many lines match the filters, and request pages until you have them all.
+
+```bash
+curl -sS -G https://api.isnap.ai/v1/lines \
+  --data-urlencode "billing_tier=rental_iphone" \
+  --data-urlencode "page=2" \
+  --data-urlencode "limit=50"
+```
+
+The marketplace changes between two requests: a line can leave the list and come back. Read the list again before you take a line. See [Getting a line](/guides/getting-a-line).
+
+## Filters
+
+A filter is a query parameter. Its name is in `snake_case`. An invalid value returns `400 validation_failed`, and `error.issues` names the parameter.
+
+| Filter | Where | Rule |
+| --- | --- | --- |
+| `line_id` | `GET /v1/messages` | A line id that does not exist, or that belongs to another account, returns an empty page, not `404`. |
+| `line_id` | `GET /v1/webhooks/events` | Keeps the events tied to that line. Events tied to no line are left out. |
+| `status` | `GET /v1/messages` | One of the seven [message statuses](/concepts#message-statuses). |
+| `status` | `GET /v1/lines` | Only `available`. Any other value returns `400 validation_failed`. |
+| `event` | `GET /v1/webhooks/{id}/deliveries` | One exact event type. A wildcard is not interpreted. |
+| `event` | `GET /v1/webhooks/events` | One exact event type, a family wildcard such as `line.*`, or `*`. |
+| `metadata.<key>` | `GET /v1/lines` | An exact match on the string value of one metadata key. |
+| `since`, `until` | Four lists | See [Timestamps in queries](#timestamps-in-queries). |
+
+The reference page of each operation lists the values every filter takes.
+
+## Timestamps in queries
+
+`since` and `until` are inclusive bounds.
+
+| Operation | `since` and `until` bound | Accepted form |
+| --- | --- | --- |
+| `GET /v1/messages` | `created_at`, the time iSnap recorded the message | ISO 8601 with a `Z` suffix or an explicit offset, such as `2026-10-08T12:00:00Z` or `2026-10-08T14:00:00+02:00` |
+| `GET /v1/chats` | The time of the last activity of the chat | ISO 8601 with a `Z` suffix or an explicit offset |
+| `GET /v1/webhooks/{id}/deliveries` | `created_at` of the delivery | ISO 8601 in UTC with a `Z` suffix. An offset, a missing `Z` or a date without a time returns `400 validation_failed`. |
+| `GET /v1/webhooks/events` | The time iSnap recorded the event | ISO 8601 in UTC with a `Z` suffix. An offset, a missing `Z` or a date without a time returns `400 validation_failed`. |
+
+Three rules:
+
+- URL-encode the value. A `+` in an offset must be sent as `%2B`.
+- On `GET /v1/messages`, `since` and `until` bound the time iSnap recorded the message. For a message that the line's device reported late, that time is later than `delivered_at`.
+- On `GET /v1/webhooks/events`, `since` is required and `until` defaults to the time of the request. A `since` older than 72 hours is raised to 72 hours ago, without an error. A `since` later than `until` returns an empty page.
+
+Timestamps in responses are ISO 8601 in UTC with milliseconds: see [Timestamps](/concepts#timestamps).

@@ -1,86 +1,70 @@
 ---
-title: "Welcome to iSnap"
-description: "Hardware-as-a-Service telephony — real iPhones and Androids, exposed through a single API."
+title: "Introduction"
+description: "The iSnap API sends and receives iMessage, RCS and SMS from real devices, manages the lines that carry them, and reports events by webhook."
 ---
 
-iSnap is a Hardware-as-a-Service telephony platform. Real iPhones, real
-Macs, real Androids — exposed through a single API so your messages
-originate from real handsets with real SIMs. That's how iSnap reaches
-recipients that bulk-shaped traffic from generic A2P providers can't.
+The iSnap API sends and receives iMessage, RCS and SMS from real devices. It is for developers who add messaging to their own product, and for the coding agents and AI agents that work with them. You obtain lines, send and receive messages on them, and learn what happened to each message by webhook.
 
-## What you can do with iSnap
+The API serves lines, messages, chats, attachments, recipient lookups, trials, BYOD pairing, pre-orders, hosted macOS sessions and webhook subscriptions. Two things are done outside the API:
 
-<CardGroup cols={2}>
-  <Card title="Send iMessage" icon="apple">
-    Real iPhone + Apple ID + Mac — blue bubbles, end-to-end encrypted,
-    typing indicators, read receipts, native effects, reactions.
-  </Card>
-  <Card title="Send SMS / RCS" icon="message">
-    Real Android handsets on real carrier SIMs. RCS is the modern
-    default; SMS is the universal fallback.
-  </Card>
-  <Card title="Receive replies" icon="inbox">
-    Inbound messages stream back through webhooks with a stable iSnap
-    message ID and signed delivery you can verify.
-  </Card>
-  <Card title="Look up handles" icon="magnifying-glass">
-    Check whether a number is iMessage-eligible before you send. Cached
-    server-side so repeat lookups are free.
-  </Card>
-</CardGroup>
+- API keys are created and revoked in the [iSnap dashboard](https://platform.isnap.ai).
+- A direct account cannot pay through the API: it buys lines, BYOD slots and hosted macOS sessions, and pays the first month of a [pre-order](/guides/pre-orders#confirm-and-payment), by writing to [support@isnap.ai](mailto:support@isnap.ai). See [Accounts](/concepts#accounts).
 
-## Three line types
+For what only iSnap can do, such as granting wholesale partner status or lifting the suspension of a line, write to [support@isnap.ai](mailto:support@isnap.ai).
 
-You'll pick one (or mix — they coexist on the same account):
+## What you can do
 
-<AccordionGroup>
-  <Accordion title="Rental iMessage line — ~$250 / mo" icon="apple">
-    iSnap provisions and operates a Mac mini and iPhone for you. The
-    hardware lives in our data center; you consume the line via API.
-    Best when you want zero device management.
-  </Accordion>
-  <Accordion title="Rental Android line — ~$175 / mo" icon="android">
-    iSnap provisions and operates an Android handset on a carrier SIM.
-    SMS and RCS native. Same "we own the hardware" model as the
-    iMessage rental.
-  </Accordion>
-  <Accordion title="BYOD bridge — ~$15 / mo per device" icon="link">
-    Bring your own Mac + iPhone, or your own Android. Install the iSnap
-    bridge, pair with an activation code, and the line shows up in your
-    account. Same API, much lower cost — at the price of you owning the
-    hardware reliability.
-  </Accordion>
-</AccordionGroup>
+| Task | Page |
+| --- | --- |
+| Send a message and track its status | [Sending messages](/guides/sending-messages) |
+| Receive messages and read chats | [Receiving messages](/guides/receiving-messages) |
+| Send and receive files | [Attachments](/guides/attachments) |
+| Send reactions, typing indicators, read receipts and contact cards | [Chat features](/guides/conversations) |
+| Check whether a handle can receive iMessage | [Recipient lookup](/guides/lookup) |
+| Know what a line can send, and why a message is held | [Sending limits](/guides/sending-limits) |
+| Get a line from the marketplace, or create a shared line | [Getting a line](/guides/getting-a-line) |
+| Order a rented line and state the area codes you prefer | [Pre-orders](/guides/pre-orders) |
+| Run a line on your own Mac and iPhone, or Android phone | [BYOD lines](/guides/byod) |
+| Rent a hosted macOS session | [Hosted macOS sessions](/guides/hosted-macos-sessions) |
+| Configure, monitor, cancel or transfer a line | [Managing lines](/guides/managing-lines) |
+| Let a prospect exchange messages with a line before they buy | [Trials](/guides/trials) |
+| Receive events at your endpoint | [Webhooks overview](/webhooks/overview) |
+| List the events your subscriptions received in the last 72 hours | [Events feed](/webhooks/pulling-events) |
+| Call the API from TypeScript | [SDK overview](/sdk/overview) |
+| Find an operation, the credential it takes and its errors | [API reference](/api-reference/introduction#operations) |
 
-## Channels
+## The path to a first call
 
-iSnap covers **iMessage**, **SMS**, and **RCS**. On a send, you pick a
-`channel` (`auto | iMessage | SMS | RCS`); on the response and on
-inbound webhooks, the `service` field reports which one was actually
-used. RCS is a capability of the Android line and the modern fallback
-target for `iMessage → RCS → SMS`, not a separate line type.
+1. Sign up at [platform.isnap.ai/signup](https://platform.isnap.ai/signup), then create an API key in the [iSnap dashboard](https://platform.isnap.ai). The full key is shown once.
+2. Call `GET /v1/version`, which needs no key, to check that you reach `https://api.isnap.ai`.
+3. Call `GET /v1/lines/my` with your key to list your lines.
+4. Send a message from an active line to a phone number of your own, then read its status.
 
-## What iSnap is not
+A new account has no line, and `GET /v1/lines/my` returns an empty `lines`: see [Getting a line](/guides/getting-a-line).
 
-- **Not a CRM.** Messages are retained for 72 hours. Attachments live
-  on short-lived signed URLs. Persist your own conversation history.
-- **Not a marketing blast tool.** Real-device delivery is high-trust
-  by design; the warming and quota model exists to keep it that way.
-  Volumes are capped by line health, not by your plan tier.
+The [Quickstart](/quickstart) runs these four steps, in curl, TypeScript and Python.
 
-## Where to next
+Know this before the first send. An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. Every send is a real message to a real recipient. See [Test keys](/authentication#test-keys).
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Sign up, mint an API key, send your first message in under 5 minutes.
+  <Card title="Quickstart" href="/quickstart">
+    Create a key, call the API, send a message and track it.
   </Card>
-  <Card title="Send a message" icon="paper-plane" href="/guides/sending-messages">
-    Full request walkthrough — fields, channels, attachments, errors.
+  <Card title="Core concepts" href="/concepts">
+    Lines, line kinds, statuses, services and identifiers, each defined once.
   </Card>
-  <Card title="Set up webhooks" icon="webhook" href="/guides/webhooks">
-    Receive inbound messages and status events; verify signatures.
+  <Card title="Authentication" href="/authentication">
+    The three kinds of key, the order of the checks, and every refusal.
   </Card>
-  <Card title="Pair a BYOD device" icon="link" href="/guides/byod-pairing">
-    Connect your own Mac+iPhone or Android in 4 steps.
+  <Card title="Errors and rate limits" href="/errors-and-rate-limits">
+    The error format, what to retry, and the request-rate limit.
+  </Card>
+  <Card title="AI agents" href="/ai-agents">
+    Rules for an agent that calls the API, and a checklist for one that writes a client.
+  </Card>
+  <Card title="API reference" href="/api-reference/introduction">
+    Every operation, its credential, and the conventions of the API.
   </Card>
 </CardGroup>

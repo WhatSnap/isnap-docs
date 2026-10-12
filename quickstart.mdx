@@ -1,166 +1,353 @@
 ---
 title: "Quickstart"
-description: "Sign up, mint an API key, send your first message — in under 5 minutes."
+description: "Takes you from an API key to a message you sent, read and followed by webhook, on a real line of your account."
 ---
 
-This walkthrough takes you from zero to a delivered message. Pick the
-SDK flow if you're integrating from a Node, Bun, or Deno service; pick
-the cURL flow if you're exploring or wiring from a non-TypeScript
-environment.
-
-## 1. Create an account
-
-Sign up at [platform.isnap.ai/signup](https://platform.isnap.ai/signup),
-verify your email, and complete the onboarding form. You'll land on the
-dashboard with a default test environment ready to use.
-
-## 2. Mint an API key
-
-In the dashboard: **Developers → API keys → Create key**.
-
-- **Environment:** pick `test` for sandboxing, `live` for production.
-  Test keys produce real-looking responses but never hit a real device.
-- **Scope:** leave unscoped for the quickstart.
-
-Copy the key. It looks like `isnap_test_aBcD…` or `isnap_live_xYz…`.
-**This is the only time iSnap shows you the full string** — store it in
-your secret manager now.
+This page takes you from an API key to a message that you sent and tracked. You need an iSnap account ([sign up](https://platform.isnap.ai/signup)) and one line whose status is `active`. A new account has no line, and `GET /v1/lines/my` returns an empty `lines`: see [Getting a line](/guides/getting-a-line).
 
 <Warning>
-API keys grant the ability to send messages billed to your account.
-Treat them like passwords: never commit them to git, never log them in
-plaintext, never put them in a frontend bundle.
+  iSnap has no test environment. Every send on this page is a real message to a real recipient, from a real line of your account. An `isnap_test_` account key sends too: see [Test keys](/authentication#test-keys). Send to a phone number of your own.
 </Warning>
 
-## 3. Send a message
+## Create an API key
 
-<Tabs>
-  <Tab title="TypeScript SDK">
-    Install:
+Create an API key in the [iSnap dashboard](https://platform.isnap.ai). The dashboard shows the full key once: store it in a secret manager. The samples of every page read it from the environment variable `ISNAP_API_KEY`.
 
-    ```bash
-    bun add @isnap/sdk
-    # or: npm install @isnap/sdk
-    ```
+```bash
+# Paste the key at the prompt: it is not shown and not written to your shell history.
+read -rs ISNAP_API_KEY && export ISNAP_API_KEY
+```
 
-    Send:
+Set the variable yourself. Never paste a key into a prompt for an AI agent: start the agent in an environment that already holds the variable.
 
-    ```ts
-    import { ISnapClient } from '@isnap/sdk'
+The key is `isnap_live_` or `isnap_test_` followed by 64 hexadecimal characters. [Authentication](/authentication) describes the keys and every refusal.
 
-    const isnap = new ISnapClient({
-      apiKey: process.env.ISNAP_API_KEY!
-    })
+## Make a first call
 
-    // Pick one of your active lines (`isnap.lines.listMine()`).
-    // `channel: 'auto'` lets the line pick iMessage → RCS → SMS based
-    // on what reaches the recipient.
-    const message = await isnap.messages.send({
-      line_id: 'line_aBcDeF',
-      to: '+15551234567',
-      channel: 'auto',
-      body: 'Hello from iSnap.'
-    })
+`GET /v1/version` needs no key. It tells you that you reach the API.
 
-    console.log(message.id)         // 'msg_01HX…'
-    console.log(message.status)     // 'queued'
-    ```
-  </Tab>
-  <Tab title="cURL">
-    ```bash
-    curl -X POST https://api.isnap.ai/v1/messages \
-      -H "Authorization: Bearer $ISNAP_API_KEY" \
-      -H "Content-Type: application/json" \
-      -H "Idempotency-Key: $(uuidgen)" \
-      -d '{
-        "line_id": "line_aBcDeF",
-        "to": "+15551234567",
-        "channel": "auto",
-        "body": "Hello from iSnap."
-      }'
-    ```
+```bash
+curl -sS https://api.isnap.ai/v1/version
+```
 
-    Response:
+The response contains the version of the API, for example:
 
-    ```json
+```json
+{
+  "success": true,
+  "data": { "version": "2.39.0" },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
+}
+```
+
+The result of a call is in `data`: see [Conventions](/api-reference/introduction#conventions). Keep `trace_id` and `request_id` when you report a problem.
+
+Then list your lines with your key. The TypeScript samples use the SDK (`npm install @isnap/sdk`), which needs Node.js 20 or later and is ESM only: see the [SDK overview](/sdk/overview). The Python samples use `requests` (`pip install requests`).
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.isnap.ai/v1/lines/my \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const { lines } = await client.lines.listMine()
+for (const line of lines) {
+  console.log(line.id, line.billing_tier, line.status, line.inbound_only)
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/lines/my",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+body = response.json()
+if response.status_code != 200:
+    raise SystemExit(f"{body['error']['status']} {body['error']['code']}: {body['error']['message']}")
+for line in body["data"]["lines"]:
+    print(line["id"], line["billing_tier"], line["status"], line["inbound_only"])
+```
+
+</CodeGroup>
+
+`GET /v1/lines/my` returns your lines whose status is `active` or `reserved`. Note the `id` of a line whose `status` is `active`: only an active line sends. If `inbound_only` is `true`, the line can message a contact only after that contact wrote to it: see [Line kinds](/concepts#line-kinds).
+
+## Send a message
+
+`POST /v1/messages` sends one message to one phone number from one line. Replace the line id with yours, and `to` with a phone number of your own.
+
+<CodeGroup>
+
+```bash curl
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
+
+curl -sS https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "to": "+14155550123",
+    "body": "Hello from iSnap"
+  }'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const idempotencyKey = randomUUID() // Store it with your record of the message: reuse it to retry.
+
+try {
+  const message = await client.messages.send(
     {
-      "success": true,
-      "data": {
-        "id": "msg_01HX...",
-        "line_id": "line_aBcDeF",
-        "direction": "outbound",
-        "to": "+15551234567",
-        "from": "+15559998888",
-        "channel": "auto",
-        "service": null,
-        "body": "Hello from iSnap.",
-        "status": "queued",
-        "created_at": "2026-05-05T14:32:00Z"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
+      line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+      to: '+14155550123',
+      body: 'Hello from iSnap'
+    },
+    { idempotencyKey }
+  )
+  console.log(message.id, message.status, message.scheduled_for, message.schedule_reason)
+} catch (err) {
+  if (!(err instanceof APIError)) throw err
+  console.error(err.status, err.code, err.message, `trace_id=${err.traceId}`, `request_id=${err.requestId}`)
+  process.exitCode = 1
+}
+```
 
-    `service` is `null` until iSnap dispatches: it commits to
-    `iMessage`, `SMS`, or `RCS` at send time based on recipient
-    reachability and the line's fallback chain.
-  </Tab>
-</Tabs>
+```python Python
+import os
+import time
+import uuid
 
-The response wraps the payload in a standard envelope (`success`,
-`data`, `trace_id`, `request_id`). This shape is identical for every
-successful response — see [API Reference → Conventions](/api-reference/introduction).
+import requests
 
-## 4. Watch it deliver
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the message: reuse it to retry.
 
-The `status` field starts as `queued` and progresses through
-`sent → delivered` (or `failed`) over the next few seconds. Two ways
-to track it:
+for attempt in range(3):
+    try:
+        response = requests.post(
+            "https://api.isnap.ai/v1/messages",
+            headers={
+                "Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}",
+                "Idempotency-Key": idempotency_key,
+            },
+            json={
+                "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+                "to": "+14155550123",
+                "body": "Hello from iSnap",
+            },
+            timeout=30,
+        )
+        break
+    except (requests.ConnectionError, requests.Timeout):
+        # No response: iSnap may have accepted the message. Retry with the same key, up to 2 times.
+        if attempt == 2:
+            raise
+        time.sleep(2**attempt)
+body = response.json()
+if response.status_code != 202:
+    error = body["error"]
+    raise SystemExit(
+        f"{error['status']} {error['code']}: {error['message']} "
+        f"(trace_id={body['trace_id']}, request_id={body['request_id']})"
+    )
+message = body["data"]
+print(message["id"], message["status"], message["scheduled_for"], message["schedule_reason"])
+```
 
-<Tabs>
-  <Tab title="Webhook (recommended)">
-    Register a webhook subscription in **Developers → Webhooks → New
-    subscription**. Point it at an endpoint you control, subscribe to
-    `message.sent` and `message.delivered`.
+</CodeGroup>
 
-    Every event POSTs to your URL with an HMAC-SHA256 signature in the
-    `X-iSnap-Signature` header. **Verify it** before trusting the
-    payload — see [Set up webhooks](/guides/webhooks).
-  </Tab>
-  <Tab title="Polling (for the quickstart only)">
-    ```ts
-    let m = await isnap.messages.get(message.id)
-    while (m.status === 'queued' || m.status === 'sent') {
-      await new Promise((r) => setTimeout(r, 1000))
-      m = await isnap.messages.get(message.id)
-    }
-    console.log(m.status)
-    ```
+The API returns `202` with the message. A `202` means that iSnap accepted the message, never that it was sent. These are the fields to read first, out of the whole message object:
 
-    <Warning>
-    Polling is fine for exploration. **Never poll in production** — it
-    burns rate limit and adds delivery latency. Use webhooks.
-    </Warning>
-  </Tab>
-</Tabs>
+```json
+{
+  "success": true,
+  "data": {
+    "id": "msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "direction": "outbound",
+    "to": "+14155550123",
+    "from": "+14155550124",
+    "body": "Hello from iSnap",
+    "status": "queued",
+    "service": null,
+    "queued_at": "2026-10-08T14:22:57.392Z",
+    "scheduled_for": "2026-10-08T14:22:57.392Z",
+    "schedule_reason": null
+  },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
+}
+```
 
-## You're integrated
+Send `Content-Type: application/json` with every body. The `Idempotency-Key` header makes a retry safe: a second request with the same key and the same body sends nothing and, while the line is `active`, returns the same message, for as long as iSnap keeps that message, at least 72 hours. Generate one key per message, and reuse it only to retry that message. See [Idempotency](/idempotency#operations-that-honor-the-key).
 
-That's the whole loop: API key → send → receive event. Everything else
-in these docs is depth on the same primitives.
+The responses to a first send:
+
+| Response | Meaning | What to do |
+| --- | --- | --- |
+| `202` with `status: queued` | iSnap accepted the message. It waits for the line's device, which sends it when it takes it. | Track it: see the next section. |
+| `202` with `status: scheduled` | iSnap holds the message until `scheduled_for`. `schedule_reason` says why. With `quiet_hours`, the message was accepted outside the hours in which the line sends, by default 08:00 to 20:59 in the recipient's local time. | Nothing. When the time arrives, iSnap releases the message, or holds it again with a new `scheduled_for`. A message still held 48 hours after iSnap accepted it fails, even when its `scheduled_for` is later. See [Held messages](/guides/sending-limits#held-messages) and [Quiet hours](/guides/sending-limits#quiet-hours). |
+| `400 bad_request` | `to` is not a valid phone number, or is an email address. | Send to a phone number. A number without a country code is read as a US number. |
+| `400 line_not_active` | The line is neither `active` nor `suspended`, for example `reserved`. | Send from an active line. |
+| `403 line_suspended` | The line is suspended. | See [Line statuses](/concepts#line-statuses). |
+| `403 outbound_first_forbidden` | The line is inbound-only and this recipient never wrote to it. | Write to the line from the recipient's phone first, or send from a two-way line. |
+| `404 not_found` | The line does not exist or is not yours. | Check `line_id` against `GET /v1/lines/my`. |
+| `401 unauthorized`, `403 forbidden` | iSnap refused the credential. | See [Troubleshooting](/authentication#troubleshooting). |
+
+[Sending messages](/guides/sending-messages) describes the whole request and every refusal.
+
+## Read its status
+
+Read the message by its id. `status` moves from `queued` to `sent` when the line's device reports that it sent the message, then to `delivered` and `read` when the device reports them. `service` then says what the device used: `iMessage`, `SMS` or `RCS`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.isnap.ai/v1/messages/msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const message = await client.messages.get('msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz')
+console.log(message.status, message.service, message.sent_at, message.delivered_at, message.error_code)
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/messages/msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+body = response.json()
+if response.status_code != 200:
+    raise SystemExit(f"{body['error']['status']} {body['error']['code']}: {body['error']['message']}")
+message = body["data"]
+print(message["status"], message["service"], message["sent_at"], message["delivered_at"], message["error_code"])
+```
+
+</CodeGroup>
+
+Three rules to know before you build on `status`:
+
+- iSnap learns "delivered" and "read" only from the line's device. With no report, a message stays `sent`.
+- A message stays `queued` while it waits for the line's device.
+- iSnap deletes a message at least 72 hours after it recorded it. Once deleted, `GET /v1/messages/{id}` returns `404 not_found`.
+
+[Message statuses](/concepts#message-statuses) lists every status, what sets it, and which ones are final.
+
+A message carries personal data: the handles in `to` and `from`, and the text in `body`. Request it only when needed. Do not copy it into logs, tickets or other tools. Refer to a contact by an id of your own.
+
+## Receive its events
+
+Reading a message repeatedly uses your request-rate limit. Let iSnap call you: create a webhook subscription with the URL of your endpoint and the event types you want.
+
+The response contains the signing secret: run the command where its output is not logged, and store the secret in your secret manager.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.isnap.ai/v1/webhooks \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://hooks.your-domain.example/isnap",
+    "events": ["message.*"]
+  }'
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// maxRetries: 0, because this operation does not honor Idempotency-Key:
+// a retry after a lost response would create a second subscription.
+const subscription = await client.webhooks.create(
+  { url: 'https://hooks.your-domain.example/isnap', events: ['message.*'] },
+  { maxRetries: 0 }
+)
+console.log(subscription.id)
+// Store subscription.secret now as ISNAP_WEBHOOK_SECRET: no other call returns it.
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.isnap.ai/v1/webhooks",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    json={"url": "https://hooks.your-domain.example/isnap", "events": ["message.*"]},
+    timeout=30,
+)
+body = response.json()
+if response.status_code != 201:
+    raise SystemExit(f"{body['error']['status']} {body['error']['code']}: {body['error']['message']}")
+subscription = body["data"]
+print(subscription["id"])
+# Store subscription["secret"] now as ISNAP_WEBHOOK_SECRET: no other call returns it.
+```
+
+</CodeGroup>
+
+The response contains the signing secret of the subscription, once. Do not send this request twice: `POST /v1/webhooks` does not honor `Idempotency-Key`, and a second request creates a second subscription that receives every event too. If the response does not arrive, list your subscriptions with [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) and look for your URL before you create one again. If the subscription exists, call [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/rotate-webhook-secret) to get a signing secret: no other call returns the secret of the first response.
+
+For the message you sent, iSnap sends these events to your endpoint:
+
+| Event | When |
+| --- | --- |
+| `message.queued` | iSnap accepted the message without holding it, or released a held message. |
+| `message.scheduled` | iSnap accepted the message and holds it. |
+| `message.sent` or `message.failed` | The line's device reported that it sent the message, or the message failed. |
+| `message.delivered`, `message.read` | The device reported a delivery receipt or a read receipt. |
+
+Each event carries the whole message in `data.message`. Before you rely on events:
+
+- Verify the signature of every delivery: see [Verifying signatures](/webhooks/verifying-signatures).
+- Deduplicate on `event_id`. See [Duplicates](/webhooks/delivery#duplicates).
+- Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. See [Order](/webhooks/delivery#order).
+- Events do not announce every change, and an event can be missed: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). Reconcile from `GET /v1/messages/{id}` and `GET /v1/messages`.
+
+[Webhooks overview](/webhooks/overview) says what your endpoint must do.
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Send messages — full reference" icon="paper-plane" href="/guides/sending-messages">
-    Channels, attachments, idempotency, the error catalog.
+  <Card title="Core concepts" href="/concepts">
+    The terms every page uses: lines, line kinds, statuses, services, identifiers.
   </Card>
-  <Card title="Set up production webhooks" icon="webhook" href="/guides/webhooks">
-    Signature verification, event catalog, retries, deduplication.
+  <Card title="Sending messages" href="/guides/sending-messages">
+    The whole send request, the statuses over time, failures and cancellation.
   </Card>
-  <Card title="Channels" icon="signal-stream" href="/concepts/channels">
-    When `auto` is the right pick, when to force a channel.
+  <Card title="Sending limits" href="/guides/sending-limits">
+    Why a message is held, and when it leaves.
   </Card>
-  <Card title="Quotas + warming" icon="gauge" href="/concepts/quotas-and-warming">
-    How iSnap protects line health, the 5-bucket gate, the warming model.
+  <Card title="Receiving messages" href="/guides/receiving-messages">
+    Inbound messages, chats, and messages typed on the line's device.
   </Card>
 </CardGroup>

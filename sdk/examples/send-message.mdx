@@ -1,140 +1,122 @@
 ---
-title: "Send a message"
-description: "End-to-end TypeScript example: lookup, fallback, attachment, error handling."
+title: "Example: sending a message"
+sidebarTitle: "Sending a message"
+description: "Gives a complete script that sends one message with the SDK, with an idempotency key to reuse on a retry and the handling of each error class."
 ---
 
-A drop-in `sendMessage` helper that pulls together everything covered
-elsewhere in the SDK docs: lookup-driven channel selection, attachment
-upload, retry-safe idempotency, and the full error catch.
+This script sends one message from one of your lines and prints the id and the status of the message. Use it as the starting point of your own send path. [Sending messages](/guides/sending-messages) explains the request and what happens to a message after the API accepts it.
 
-```ts
+<Warning>
+The script acts on your real account. It sends a real message to the recipient you give, and the message counts against the sending limits of the line. An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key.
+</Warning>
+
+## The script
+
+```typescript send-message.ts
+import { randomUUID } from 'node:crypto'
 import {
-  ISnapClient,
+  APIConnectionError,
   APIError,
-  AuthenticationError,
-  PermissionDeniedError,
-  NotFoundError,
+  ISnapClient,
   QuotaExceededError,
-  APIConnectionError
+  RateLimitError
 } from '@isnap/sdk'
-import { readFile } from 'node:fs/promises'
-import { lookup as mimeLookup } from 'mime-types'
 
-const isnap = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY! })
+const apiKey = process.env.ISNAP_API_KEY
+const [lineId, to, text, key] = process.argv.slice(2)
 
-interface SendInput {
-  lineId: string
-  to: string
-  body: string
-  attachmentPath?: string
+if (!apiKey || !lineId || !to || !text) {
+  console.error('Set ISNAP_API_KEY, then run: send-message.ts <line id> <recipient> <text> [idempotency key]')
+  process.exit(1)
 }
 
-interface SendResult {
-  ok: true
-  messageId: string
-  status: 'queued' | 'scheduled'
-}
+const client = new ISnapClient({ apiKey, maxRetries: 2 })
 
-interface SendFailure {
-  ok: false
-  reason: 'quota' | 'auth' | 'permission' | 'not_found' | 'transient' | 'unknown'
-  error: APIError | Error
-  retryAfter?: number
-}
+// One key per message. Store it with your record of the message: reuse it to retry.
+const idempotencyKey = key || randomUUID()
 
-export async function sendMessage(input: SendInput): Promise<SendResult | SendFailure> {
-  try {
-    // 1. Optional: probe the recipient. The result informs which line
-    //    you might pick (iMessage vs Android), not the `channel` —
-    //    `channel: 'auto'` is the only value v1 accepts.
-    const probe = await isnap.lookup.check({ handle: input.to })
-    // probe.imessage is `true | false | null` — null means unknown.
-
-    // 2. Upload attachment if provided.
-    const attachments: string[] = []
-    if (input.attachmentPath) {
-      const bytes = await readFile(input.attachmentPath)
-      const filename = input.attachmentPath.split('/').pop() ?? 'attachment'
-      const contentType = mimeLookup(filename) || 'application/octet-stream'
-
-      const upload = await isnap.attachments.create({
-        filename,
-        content_type: contentType,
-        size_bytes: bytes.byteLength
-      })
-      await isnap.attachments.upload(upload, bytes)
-      attachments.push(upload.attachment_id)
-    }
-
-    // 3. Send. SDK auto-generates Idempotency-Key per call; same key
-    //    survives the SDK's internal retries on APIConnectionError.
-    const message = await isnap.messages.send({
-      line_id: input.lineId,
-      to: input.to,
-      channel: 'auto',
-      body: input.body,
-      attachments
-    })
-
-    return {
-      ok: true,
-      messageId: message.id,
-      status: message.status as 'queued' | 'scheduled'
-    }
-  } catch (err) {
-    return classifyError(err)
+try {
+  const message = await client.messages.send(
+    { line_id: lineId, to, body: text },
+    { idempotencyKey }
+  )
+  if (message.status === 'scheduled') {
+    console.log(`${message.id} is held until ${message.scheduled_for} (${message.schedule_reason})`)
+  } else {
+    console.log(`${message.id} is ${message.status}`)
   }
-}
-
-function classifyError(err: unknown): SendFailure {
+} catch (err) {
+  process.exitCode = 1
   if (err instanceof QuotaExceededError) {
-    return {
-      ok: false,
-      reason: 'quota',
-      error: err,
-      retryAfter: err.retryAfter
-    }
-  }
-  if (err instanceof AuthenticationError) {
-    return { ok: false, reason: 'auth', error: err }
-  }
-  if (err instanceof PermissionDeniedError) {
-    return { ok: false, reason: 'permission', error: err }
-  }
-  if (err instanceof NotFoundError) {
-    return { ok: false, reason: 'not_found', error: err }
-  }
-  if (err instanceof APIConnectionError) {
-    return { ok: false, reason: 'transient', error: err }
-  }
-  if (err instanceof APIError) {
-    // Catch-all for HTTP-level errors not specialized above.
-    return { ok: false, reason: 'unknown', error: err }
-  }
-  return { ok: false, reason: 'unknown', error: err as Error }
-}
-```
-
-## Cancel a queued message
-
-If you decide not to send before iSnap dispatches:
-
-```ts
-async function cancelIfPossible(messageId: string): Promise<boolean> {
-  try {
-    const cancelled = await isnap.messages.cancel(messageId)
-    return cancelled.status === 'cancelled'
-  } catch (err) {
-    if (err instanceof ConflictError && err.code === 'too_late_to_cancel') {
-      return false   // already on the carrier; can't pull back
-    }
+    // A sending limit of the line is reached, or the line already has its maximum of held messages.
+    console.error(`Not sent: ${err.code}. Read the counters with client.lines.quota().`)
+  } else if (err instanceof RateLimitError) {
+    const wait = typeof err.retryAfter === 'number' ? ` Wait ${err.retryAfter} seconds.` : ''
+    console.error(`Not sent: ${err.code}.${wait}`)
+  } else if (err instanceof APIError && err.status >= 500) {
+    console.error(`Outcome unknown: ${err.status} ${err.code} (trace ${err.traceId}).`)
+    console.error(`Run the script again with the key ${idempotencyKey}`)
+  } else if (err instanceof APIError) {
+    console.error(`Refused: ${err.status} ${err.code} (request ${err.requestId}).`)
+  } else if (err instanceof APIConnectionError) {
+    console.error('Outcome unknown: no response.')
+    console.error(`Run the script again with the key ${idempotencyKey}`)
+  } else {
     throw err
   }
 }
 ```
 
-## Related
+## Run it
 
-- [Sending messages](/guides/sending-messages) — full request reference.
-- [SDK → Errors](/sdk/errors) — class hierarchy used in `classifyError`.
-- [Best practices](/guides/best-practices) — sending discipline + lookup before cold outbound.
+Install the SDK, and `typescript` and `@types/node` as development dependencies. Set `"type": "module"` in the `package.json` of the project, then save the script as `send-message.ts` with the [`tsconfig.json` of the overview](/sdk/overview#typescript-settings), and set `ISNAP_API_KEY` in the environment. The arguments are the id of one of your lines, the phone number of the recipient, and the text.
+
+<CodeGroup>
+
+```bash Bun
+bun send-message.ts line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd +14155550123 "Your order has shipped."
+```
+
+```bash Node.js
+npx tsc
+node send-message.js line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd +14155550123 "Your order has shipped."
+```
+
+</CodeGroup>
+
+The line id and the phone number above are placeholders: replace them with yours.
+
+## What it prints
+
+A call that resolves means the API accepted the message. It does not mean the message was sent. A first call prints one of two results:
+
+| `status` | Meaning |
+| --- | --- |
+| `queued` | The message leaves now. |
+| `scheduled` | iSnap holds the message. `scheduled_for` is the planned departure time, and `schedule_reason` names why. |
+
+A retry with the same key prints the status the message has now, which can be any [message status](/concepts#message-statuses).
+
+To follow the message after the send, read it with `client.messages.get(id)`. [Held messages](/guides/sending-limits#held-messages) explains the holds.
+
+## Errors it handles
+
+| Error | Meaning | What the script does |
+| --- | --- | --- |
+| `QuotaExceededError` | A `429` with `new_contact_quota_exceeded`, `known_contact_quota_exceeded`, `total_message_quota_exceeded` or `queue_full`. The SDK never retries it. | Prints the code. The message was not accepted. |
+| `RateLimitError` | Any other `429`, after the SDK waited and retried when the delay allowed it. | Prints the code and the delay the API states. |
+| `APIError` with a status of 500 or more | The API failed, and the automatic retries of the SDK failed too. | Prints the idempotency key to reuse. |
+| Any other `APIError` | The API refused the request, for example `400 validation_failed`, `403 line_suspended` or `404 not_found`. Fix the request. | Prints the status, the code and the `requestId`. |
+| `APIConnectionError` | No usable response arrived. The API may have accepted the message. | Prints the idempotency key to reuse. |
+
+[Errors and retries](/sdk/errors) describes the classes, and [`POST /v1/messages`](/api-reference/messages/send-message) lists the codes of the operation.
+
+## Retry with the same key
+
+The script passes its own `idempotencyKey`, so that you can retry after an unknown outcome. Run it again with the same line, the same recipient, the same text, and the key it printed as a fourth argument. The API then returns the message already created, in its current state, and sends no second message. With the same key and a different text, the call throws `ConflictError` with code `idempotency_conflict`.
+
+Send retries one after the other. [Idempotency](/idempotency#operations-that-honor-the-key) says how long a key stays valid.
+
+## Personal data
+
+The recipient and the text are personal data. The script prints the message id and the status only. Do not copy a handle or a message text into logs, tickets or other tools, and refer to a contact by an id of your own.

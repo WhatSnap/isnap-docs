@@ -1,0 +1,24 @@
+---
+title: "Get a webhook subscription"
+description: "Returns one webhook subscription of your account, without its secret."
+openapi: "GET /v1/webhooks/{id}"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key reads any subscription of the account.
+- **`Idempotency-Key`:** not needed: the operation changes nothing. See
+  [Retrying safely](/idempotency#retrying-safely).
+- **Events:** none.
+- **Guide:** [Subscription states](/webhooks/overview#subscription-states). This operation does not
+  return `failure_count`, `last_success_at` and `last_failure_at`: read them with
+  [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `wh_` followed by 25 letters or digits. |
+| 404 | `not_found` | Your account has no subscription with this id. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,404 @@
+---
+title: "Verifying signatures"
+description: "Explains how to verify the signature of every request iSnap sends to your endpoint, with the SDK, Node.js or Python, and gives a test vector to check your code."
+---
+
+Every request iSnap sends to your endpoint is signed with the signing secret of the subscription:
+deliveries, retries, replays and probes. Verify the signature before you trust the body. iSnap
+promises no `User-Agent` value and no list of source addresses: the signature is the only proof that
+a request comes from iSnap. This page gives the scheme, code in three forms, and a test vector to
+check your code before you go live.
+
+The scheme is Standard Webhooks. A Standard Webhooks library in any language verifies a request with
+the secret string exactly as iSnap returned it.
+
+## The three headers
+
+| Header | Value |
+| --- | --- |
+| `webhook-id` | The `event_id` of the event. The same on every attempt, on a replay, and for every subscription that receives the event. |
+| `webhook-timestamp` | The time this attempt is sent, in Unix seconds. It changes on every attempt. |
+| `webhook-signature` | `v1,` followed by the signature of this attempt, in base64. The header carries one signature. |
+
+No other header takes part in the signature. The `X-iSnap-*` headers are not signed.
+
+## How the signature is computed
+
+<Steps>
+  <Step title="The signed content">
+    The string `<webhook-id>.<webhook-timestamp>.<body>`: the two header values and the body, joined
+    by periods. `<body>` is the request body exactly as received. The body is compact JSON in UTF-8.
+  </Step>
+  <Step title="The key">
+    The base64 decoding of the secret without its `whsec_` prefix: 48 bytes. It is not the
+    hexadecimal decoding of those 64 characters, and it is not the secret string itself.
+  </Step>
+  <Step title="The signature">
+    HMAC-SHA256 of the signed content with that key, encoded in base64, after the prefix `v1,`.
+  </Step>
+</Steps>
+
+Four rules make a verification correct:
+
+- **Use the raw body.** Compute the signature over the bytes you received, before any JSON parsing.
+  A body that was parsed and serialized again does not verify.
+- **Compare in constant time.** Use the comparison function of your cryptography library, not `==`.
+- **Check the timestamp.** Refuse a request whose `webhook-timestamp` is more than 300 seconds away
+  from your clock, earlier or later. The timestamp is renewed on every attempt, so this tolerance
+  never refuses a legitimate retry or replay. Keep the clock of your server synchronized.
+- **Return a status outside `2xx` when the verification fails**, and never `410`: a `410` response
+  turns the subscription off. iSnap retries the delivery: see [Retries](/webhooks/delivery#retries).
+
+In a web framework, read the raw body before any JSON middleware parses it:
+
+| Framework | The raw body |
+| --- | --- |
+| Node.js `http` | The concatenation of the `data` chunks of the request. |
+| Express | `req.body` with the `express.raw({ type: 'application/json' })` middleware on the route. |
+| Fetch API handlers | `await request.text()` |
+| Flask | `request.get_data()` |
+| FastAPI, Starlette | `await request.body()` |
+| Django | `request.body` |
+
+## Verify with the SDK
+
+`verifyWebhook(rawBody, headers, secret, options)` checks the signature and the timestamp of a
+request, then returns the parsed event. It is synchronous. It throws `WebhookSignatureError` on any
+failure: a missing header, a malformed timestamp, a timestamp outside the tolerance, a signature
+that does not match, or a body that is not an event.
+
+| Argument | Value |
+| --- | --- |
+| `rawBody` | The request body exactly as received, as a string. Convert a `Buffer` with `.toString('utf8')`. |
+| `headers` | A `Headers` object or a plain object, such as the `req.headers` of Node.js. Header names are case-insensitive. |
+| `secret` | The secret exactly as the API returned it. It can be an array: the request is accepted when one entry matches. An empty array is refused. |
+| `options.tolerance` | The tolerance on `webhook-timestamp`, in seconds. Default `300`. `0` does not turn the check off: it accepts only the same second. |
+
+`verifyWebhook` does not deduplicate: deduplicate on `event_id`. It accepts an event type the SDK
+does not know. See [SDK webhooks](/sdk/webhooks) for the type guards that narrow `data`.
+
+```typescript receiver.ts
+import { createServer } from 'node:http'
+import { verifyWebhook, WebhookSignatureError, type WebhookEventBase } from '@isnap/sdk'
+
+const secret = process.env.ISNAP_WEBHOOK_SECRET
+if (!secret) throw new Error('ISNAP_WEBHOOK_SECRET is not set')
+
+createServer((req, res) => {
+  const chunks: Buffer[] = []
+  req.on('data', (chunk: Buffer) => chunks.push(chunk))
+  req.on('end', () => {
+    // The raw body, exactly as received, as a string. Do not parse it before you verify it.
+    const rawBody = Buffer.concat(chunks).toString('utf8')
+    let event: WebhookEventBase
+    try {
+      event = verifyWebhook(rawBody, req.headers, secret, { tolerance: 300 })
+    } catch (err) {
+      if (!(err instanceof WebhookSignatureError)) throw err
+      res.writeHead(400).end()
+      return
+    }
+    // Respond first, process later.
+    res.writeHead(204).end()
+    setImmediate(() => handle(event))
+  })
+}).listen(Number(process.env.PORT ?? 3000))
+
+function handle (event: WebhookEventBase) {
+  // Process the event unless its event_id is recorded, then record its event_id.
+  console.log(event.event_id, event.event_type)
+}
+```
+
+The SDK runs on a server: Node.js 20 or later, or Bun 1.2 or later.
+
+## Verify with Node.js
+
+The module below uses `node:crypto` and nothing else. Save it as `verify.mjs`.
+
+```javascript verify.mjs
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
+const TOLERANCE_SECONDS = 300
+
+/**
+ * Verifies one delivery and returns the parsed event. Throws otherwise.
+ *   rawBody  the request body exactly as received, as a Buffer or a string
+ *   headers  Node's `req.headers`: header names in lowercase
+ *   secret   the signing secret, or an array of secrets during a rotation
+ *   now      the current time in Unix seconds
+ */
+export function verifyDelivery (rawBody, headers, secret, now = Math.floor(Date.now() / 1000)) {
+  const id = headers['webhook-id']
+  const timestamp = headers['webhook-timestamp']
+  const signatures = headers['webhook-signature']
+  if (!id || !timestamp || !signatures) throw new Error('missing signature header')
+
+  if (!/^\d+$/.test(timestamp) || Math.abs(now - Number(timestamp)) > TOLERANCE_SECONDS) {
+    throw new Error('timestamp outside the tolerance')
+  }
+
+  const given = signatures
+    .split(' ')
+    .filter((entry) => entry.startsWith('v1,'))
+    .map((entry) => Buffer.from(entry.slice(3), 'base64'))
+
+  for (const candidate of [secret].flat()) {
+    // The key is the base64 decoding of the secret without its prefix, not its hexadecimal decoding.
+    const key = Buffer.from(candidate.slice('whsec_'.length), 'base64')
+    const expected = createHmac('sha256', key).update(`${id}.${timestamp}.`).update(rawBody).digest()
+    // Constant-time comparison.
+    if (given.some((signature) => signature.length === expected.length && timingSafeEqual(signature, expected))) {
+      return JSON.parse(rawBody)
+    }
+  }
+  throw new Error('signature mismatch')
+}
+```
+
+A receiver that uses it:
+
+```javascript receiver.mjs
+import { createServer } from 'node:http'
+import { verifyDelivery } from './verify.mjs'
+
+const secret = process.env.ISNAP_WEBHOOK_SECRET
+if (!secret) throw new Error('ISNAP_WEBHOOK_SECRET is not set')
+
+createServer((req, res) => {
+  const chunks = []
+  req.on('data', (chunk) => chunks.push(chunk))
+  req.on('end', () => {
+    let event
+    try {
+      // The raw body, exactly as received. Do not parse it before you verify it.
+      event = verifyDelivery(Buffer.concat(chunks), req.headers, secret)
+    } catch {
+      res.writeHead(400).end()
+      return
+    }
+    // Respond first, process later.
+    res.writeHead(204).end()
+    setImmediate(() => handle(event))
+  })
+}).listen(Number(process.env.PORT ?? 3000))
+
+function handle (event) {
+  // Process the event unless its event_id is recorded, then record its event_id.
+  console.log(event.event_id, event.event_type)
+}
+```
+
+## Verify with Python
+
+The module below uses the standard library and nothing else. It needs Python 3.9 or later. Save it as
+`verify.py`.
+
+```python verify.py
+import base64
+import hashlib
+import hmac
+import json
+import time
+
+TOLERANCE_SECONDS = 300
+
+
+def verify_delivery(raw_body: bytes, headers, secret, now=None) -> dict:
+    """Verifies one delivery and returns the parsed event. Raises ValueError otherwise.
+
+    raw_body  the request body exactly as received, as bytes
+    headers   a mapping of header names in lowercase to their values
+    secret    the signing secret, or a list of secrets during a rotation
+    now       the current time in Unix seconds
+    """
+    message_id = headers.get("webhook-id")
+    timestamp = headers.get("webhook-timestamp")
+    signatures = headers.get("webhook-signature")
+    if not message_id or not timestamp or not signatures:
+        raise ValueError("missing signature header")
+
+    now = time.time() if now is None else now
+    if not (timestamp.isascii() and timestamp.isdigit()):
+        raise ValueError("malformed timestamp")
+    if abs(now - int(timestamp)) > TOLERANCE_SECONDS:
+        raise ValueError("timestamp outside the tolerance")
+
+    signed = f"{message_id}.{timestamp}.".encode() + raw_body
+    given = [entry[3:] for entry in signatures.split(" ") if entry.startswith("v1,")]
+
+    for candidate in [secret] if isinstance(secret, str) else secret:
+        # The key is the base64 decoding of the secret without its prefix, not its hexadecimal decoding.
+        key = base64.b64decode(candidate.removeprefix("whsec_"))
+        expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+        # Constant-time comparison.
+        if any(hmac.compare_digest(expected.encode(), signature.encode()) for signature in given):
+            return json.loads(raw_body)
+    raise ValueError("signature mismatch")
+```
+
+A receiver that uses it:
+
+```python receiver.py
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from verify import verify_delivery
+
+SECRET = os.environ["ISNAP_WEBHOOK_SECRET"]
+
+
+class Receiver(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # The raw body, exactly as received. Do not parse it before you verify it.
+        raw_body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        headers = {name.lower(): value for name, value in self.headers.items()}
+        try:
+            event = verify_delivery(raw_body, headers, SECRET)
+        except ValueError:
+            self.send_response(400)
+            self.end_headers()
+            return
+        # Respond first, process later.
+        self.send_response(204)
+        self.end_headers()
+        self.wfile.flush()
+        handle(event)
+
+
+def handle(event):
+    # Process the event unless its event_id is recorded, then record its event_id.
+    print(event["event_id"], event["event_type"])
+
+
+HTTPServer(("", int(os.environ.get("PORT", "3000"))), Receiver).serve_forever()
+```
+
+The three receivers listen on the port of the `PORT` environment variable, 3000 by default, and
+read the secret from `ISNAP_WEBHOOK_SECRET`.
+
+## During a secret rotation
+
+A rotation takes effect immediately, and iSnap never signs with the previous secret after it: see
+[Secret rotation](/webhooks/delivery#secret-rotation). To rotate without refusing deliveries, give
+your receiver both secrets for the time of the change. `verifyWebhook`, `verifyDelivery` and
+`verify_delivery` all accept a list of secrets in place of one secret.
+
+## Test your verification
+
+Check your code against this vector before you point a subscription at it. Every value is fake.
+
+| Input | Value |
+| --- | --- |
+| Secret | `whsec_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff` |
+| `webhook-id` | `evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D` |
+| `webhook-timestamp` | `1760000000` |
+| Body | The line below: 288 bytes, with no line break at the end. |
+
+```json
+{"api_version":"v1","event_id":"evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D","event_type":"webhook.test","created_at":"2025-10-09T08:53:20.000Z","trace_id":"0af7651916cd43dd8448eb211c80319c","data":{"webhook_id":"11111111-2222-3333-4444-555555555555","probe":true,"metadata":null,"line_metadata":null}}
+```
+
+The expected header:
+
+```text
+webhook-signature: v1,ushTjsgTdwRRBRQL1d56b6HFFwfVHNqiwwtkAn0HlsI=
+```
+
+If your code computes `v1,29SNUfgyZggRY4lxdCHTW2jcxTEA11sbup1oHxq0F0c=`, it decoded the 64
+characters of the secret as hexadecimal. iSnap never sends that value: decode them as base64.
+
+The timestamp of the vector is in the past. Each test below sets the clock of the verification, or
+widens its tolerance, for the test only. Each one checks three things: the vector is accepted, the
+signature of the hexadecimal mistake is refused, and a request older than the tolerance is refused.
+
+<CodeGroup>
+
+```typescript test-vector.ts
+import assert from 'node:assert/strict'
+import { verifyWebhook, WebhookSignatureError } from '@isnap/sdk'
+
+const secret = 'whsec_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+const body = '{"api_version":"v1","event_id":"evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D","event_type":"webhook.test","created_at":"2025-10-09T08:53:20.000Z","trace_id":"0af7651916cd43dd8448eb211c80319c","data":{"webhook_id":"11111111-2222-3333-4444-555555555555","probe":true,"metadata":null,"line_metadata":null}}'
+const headers = {
+  'webhook-id': 'evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D',
+  'webhook-timestamp': '1760000000',
+  'webhook-signature': 'v1,ushTjsgTdwRRBRQL1d56b6HFFwfVHNqiwwtkAn0HlsI='
+}
+
+// The timestamp of the vector is in the past: widen the tolerance, in this test only.
+const tolerance = Math.floor(Date.now() / 1000) - 1760000000 + 300
+const event = verifyWebhook(body, headers, secret, { tolerance })
+assert.equal(event.event_type, 'webhook.test')
+
+// The signature a hexadecimal decoding of the secret gives must be refused.
+const wrong = { ...headers, 'webhook-signature': 'v1,29SNUfgyZggRY4lxdCHTW2jcxTEA11sbup1oHxq0F0c=' }
+assert.throws(() => verifyWebhook(body, wrong, secret, { tolerance }), WebhookSignatureError)
+
+// With the default tolerance of 300 seconds, the vector is too old and must be refused.
+assert.throws(() => verifyWebhook(body, headers, secret), WebhookSignatureError)
+console.log('test vector ok')
+```
+
+```javascript test-vector.mjs
+import assert from 'node:assert/strict'
+import { verifyDelivery } from './verify.mjs'
+
+const secret = 'whsec_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'
+const body = '{"api_version":"v1","event_id":"evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D","event_type":"webhook.test","created_at":"2025-10-09T08:53:20.000Z","trace_id":"0af7651916cd43dd8448eb211c80319c","data":{"webhook_id":"11111111-2222-3333-4444-555555555555","probe":true,"metadata":null,"line_metadata":null}}'
+const headers = {
+  'webhook-id': 'evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D',
+  'webhook-timestamp': '1760000000',
+  'webhook-signature': 'v1,ushTjsgTdwRRBRQL1d56b6HFFwfVHNqiwwtkAn0HlsI='
+}
+
+// The clock is set to the timestamp of the vector.
+const event = verifyDelivery(body, headers, secret, 1760000000)
+assert.equal(event.event_type, 'webhook.test')
+
+// The signature a hexadecimal decoding of the secret gives must be refused.
+const wrong = { ...headers, 'webhook-signature': 'v1,29SNUfgyZggRY4lxdCHTW2jcxTEA11sbup1oHxq0F0c=' }
+assert.throws(() => verifyDelivery(body, wrong, secret, 1760000000))
+
+// A request older than the tolerance must be refused.
+assert.throws(() => verifyDelivery(body, headers, secret, 1760000000 + 301))
+console.log('test vector ok')
+```
+
+```python test_vector.py
+from verify import verify_delivery
+
+secret = "whsec_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+body = b'{"api_version":"v1","event_id":"evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D","event_type":"webhook.test","created_at":"2025-10-09T08:53:20.000Z","trace_id":"0af7651916cd43dd8448eb211c80319c","data":{"webhook_id":"11111111-2222-3333-4444-555555555555","probe":true,"metadata":null,"line_metadata":null}}'
+headers = {
+    "webhook-id": "evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D",
+    "webhook-timestamp": "1760000000",
+    "webhook-signature": "v1,ushTjsgTdwRRBRQL1d56b6HFFwfVHNqiwwtkAn0HlsI=",
+}
+
+# The clock is set to the timestamp of the vector.
+event = verify_delivery(body, headers, secret, now=1760000000)
+assert event["event_type"] == "webhook.test"
+
+
+def refused(headers, now):
+    try:
+        verify_delivery(body, headers, secret, now=now)
+    except ValueError:
+        return True
+    return False
+
+
+# The signature a hexadecimal decoding of the secret gives must be refused.
+wrong = {**headers, "webhook-signature": "v1,29SNUfgyZggRY4lxdCHTW2jcxTEA11sbup1oHxq0F0c="}
+assert refused(wrong, 1760000000)
+
+# A request older than the tolerance must be refused.
+assert refused(headers, 1760000000 + 301)
+print("test vector ok")
+```
+
+</CodeGroup>
+
+Each test prints `test vector ok`. A real probe has the shape of this body: see
+[`webhook.test`](/webhooks/events/webhook#webhook-test).

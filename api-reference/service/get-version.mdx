@@ -1,0 +1,15 @@
+---
+title: "Get the version of the API"
+description: "Returns the version of the iSnap API, without a credential."
+openapi: "GET /v1/version"
+---
+
+- **Credential:** none. See [Operations without a credential](/authentication#operations-without-a-credential). The request counts against the [request-rate limit](/errors-and-rate-limits#rate-limits) like any other.
+- **`Idempotency-Key`:** ignored. See [Idempotency](/idempotency#operations-that-honor-the-key).
+- **Events:** none.
+
+`data.version` is the version of the API, a `MAJOR.MINOR.PATCH` number. It is the same value as `info.version` of the [OpenAPI document](/api-reference/introduction#openapi-document). [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) says what each part of the number means, and how iSnap announces a deprecation.
+
+## Errors
+
+This operation has no error of its own. It takes no parameter and no body, so it does not return `400`. The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

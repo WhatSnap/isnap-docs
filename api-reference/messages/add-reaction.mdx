@@ -1,0 +1,30 @@
+---
+title: "Add a reaction"
+description: "Puts the line's reaction on a message of the line, or replaces the reaction already there."
+openapi: "POST /v1/messages/{id}/reactions"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Reactions](/guides/conversations#reactions).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `404 not_found` for a message on a line outside its list.
+- **Test keys:** a reaction sent with an `isnap_test_` account key reaches the real contact: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored. The key shares the space of the line with `POST /v1/messages`. See [Retrying a reaction](/guides/conversations#retrying-a-reaction).
+- **Events:** sends `reaction.added` when the line's device confirms the reaction. Sends nothing when the device fails to place it.
+- **Response:** `202` means requested, not placed. `reactions` shows the reaction as soon as the API accepts it, and keeps showing it when the line's device fails to place it. Wait for `reaction.added`.
+- **The line's device:** the reaction needs a device that supports reactions. See [What reaches the contact](/guides/conversations#what-reaches-the-contact).
+- **Sending limits:** a reaction counts against none, and is never held.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `type` is not `love`, `like`, `dislike`, `laugh`, `emphasize` or `question`, or the id is malformed. |
+| 400 | `line_not_active` | The message's line is neither `active` nor `suspended`. |
+| 403 | `line_suspended` | The message's line is suspended. |
+| 404 | `not_found` | The message is unknown, belongs to another account, or is on a line outside the list of a line-scoped key. |
+| 409 | `idempotency_conflict` | The `Idempotency-Key` was already used on this line for another call, or for this call when a later call has changed the type of the reaction. |
+| 422 | `sms_reactions_not_supported` | The message was sent or received as SMS or RCS. |
+| 422 | `multi_attachment_reaction` | The message has more than one attachment. |
+| 422 | `parent_not_yet_acked` | The line's device has not confirmed the message, or the message was typed on the line's device. |
+| 422 | `reaction_recipient_unsupported` | The contact's handle is longer than 20 characters, as most email addresses are. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,110 @@
+---
+title: "Example: listing messages"
+sidebarTitle: "Listing messages"
+description: "Gives a complete script that walks the outbound messages of the last 24 hours with the list iterator of the SDK and counts them by status."
+---
+
+This script walks the outbound messages your account created in the last 24 hours, counts them by status, and prints the ones that failed. Use it as the starting point of a report or of a reconciliation job. [SDK pagination](/sdk/pagination) describes the iterator it uses.
+
+<Note>
+The script reads the real messages of your account. It changes nothing. Messages carry handles and message text: the script prints ids, statuses and error codes only.
+</Note>
+
+## The script
+
+```typescript list-messages.ts
+import { APIConnectionError, APIError, ISnapClient } from '@isnap/sdk'
+
+const apiKey = process.env.ISNAP_API_KEY
+if (!apiKey) {
+  console.error('Set ISNAP_API_KEY, then run: list-messages.ts [line id]')
+  process.exit(1)
+}
+
+// Optional: the id of one line. Without it, the script walks every line the key reaches.
+const lineId: string | undefined = process.argv[2]
+
+const client = new ISnapClient({ apiKey, maxRetries: 2 })
+
+const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+const maxMessages = 1_000
+
+const byStatus = new Map<string, number>()
+let count = 0
+
+try {
+  // Newest first, 100 messages per request. An undefined filter is left out.
+  const messages = client.messages.list({
+    line_id: lineId,
+    direction: 'outbound',
+    kind: 'message',
+    since,
+    limit: 100
+  })
+
+  for await (const message of messages) {
+    count += 1
+    byStatus.set(message.status, (byStatus.get(message.status) ?? 0) + 1)
+    if (message.status === 'failed') {
+      const cause = message.error_code ?? 'reported by the device'
+      console.log(`${message.id} failed at ${message.failed_at}: ${cause}`)
+    }
+    if (count === maxMessages) break
+  }
+} catch (err) {
+  process.exitCode = 1
+  if (err instanceof APIError) {
+    console.error(`Stopped after ${count} messages: ${err.status} ${err.code} (request ${err.requestId})`)
+  } else if (err instanceof APIConnectionError) {
+    console.error(`Stopped after ${count} messages: no usable response`)
+  } else {
+    throw err
+  }
+}
+
+for (const [status, total] of byStatus) {
+  console.log(`${status}: ${total}`)
+}
+```
+
+## Run it
+
+Install the SDK, and `typescript` and `@types/node` as development dependencies. Set `"type": "module"` in the `package.json` of the project, then save the script as `list-messages.ts` with the [`tsconfig.json` of the overview](/sdk/overview#typescript-settings), and set `ISNAP_API_KEY` in the environment. The line id is optional.
+
+<CodeGroup>
+
+```bash Bun
+bun list-messages.ts line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd
+```
+
+```bash Node.js
+npx tsc
+node list-messages.js line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd
+```
+
+</CodeGroup>
+
+The line id above is a placeholder: replace it with yours.
+
+## What it does
+
+| Part | Behavior |
+| --- | --- |
+| Filters | `direction`, `kind`, `since` and the optional `line_id` go in the filters argument of `messages.list`. `kind: 'message'` leaves out the entries that are reactions or voice notes. |
+| Page size | `limit: 100` asks for 100 messages per request, the maximum. The default is 25. |
+| Order | The iterator yields the newest message first. |
+| Stop | The script stops after 1,000 messages with `break`: no further page is fetched. It therefore requests at most 10 pages. |
+| Failed messages | `error_code` is filled when iSnap failed the message itself. It is `null` when the line's device reported the failure. |
+
+Each page is one request. It counts against the request-rate limit, and a page of `messages.list` also counts against the message-operations limit: 60 requests per rolling 60 seconds for `GET` and `POST /v1/messages` together. See [Rate limits](/errors-and-rate-limits#rate-limits). [`GET /v1/messages`](/api-reference/messages/list-messages) lists the filters, and [Message statuses](/concepts#message-statuses) lists the statuses the script counts.
+
+## Errors it handles
+
+| Error | Meaning | What the script does |
+| --- | --- | --- |
+| `APIError` | The API refused or failed a page request, after the automatic retries of that request. For example `401 unauthorized` when the key is refused, or `400 validation_failed` when a filter is invalid. | Prints the number of messages already counted, the status, the code and the `requestId`. |
+| `APIConnectionError` | No usable response arrived for a page request, after the automatic retries. | Prints the number of messages already counted. |
+
+An error is thrown from the loop. The messages already received stay counted, and the iterator cannot be resumed: to resume a walk, [page by hand](/sdk/pagination#page-by-hand) and store the cursor.
+
+When a page request exceeds the request-rate limit or the message-operations limit, the API returns `429 rate_limit_exceeded`, and the SDK waits 60 seconds and retries by itself: the loop pauses. [How long a call can last](/sdk/errors#how-long-a-call-can-last) explains the wait and how to shorten it.

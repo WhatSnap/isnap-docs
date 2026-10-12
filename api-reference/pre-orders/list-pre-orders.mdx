@@ -1,0 +1,20 @@
+---
+title: "List pre-orders"
+description: "Lists the pre-orders of your account, newest first, one page at a time."
+openapi: "GET /v1/pre-orders"
+---
+
+- **Credential:** an API key.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Events:** none.
+- **Pages:** the response has `items`, `has_more` and `next_cursor`. A cursor that cannot be read restarts the list from the first page with `200`, and the cursor does not carry the `status` filter: see [Listing](/guides/pre-orders#listing) and [Cursors](/pagination#cursors).
+- **Secret:** `stripe_client_secret` is `null` on every item: only the `confirm` response returns it.
+- **Caching:** the response carries `Cache-Control: no-store`, whatever its status.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `status` is not `draft`, `provisioning`, `fulfilled` or `cancelled`, or `limit` is outside 1 to 100. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

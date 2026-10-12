@@ -1,0 +1,273 @@
+---
+title: "BYOD lines"
+description: "Create a BYOD line by pairing a Mac and iPhone, or an Android phone, that you or your user own, with an activation code."
+---
+
+A BYOD line runs on a device that you or your user own: a Mac paired with an iPhone, or an Android phone. The bridge app, installed on that device, sends and receives for the line. This page shows how to create a BYOD line: you issue an activation code, the user enters it in the bridge app, and a new line appears on your account. Read it when your users bring their own devices.
+
+## BYOD slots
+
+Whether you can issue an activation code depends on your [account](/concepts#accounts).
+
+- **Direct account.** You need a free BYOD slot. No operation that an API key can call buys one: to buy slots, write to [support@isnap.ai](mailto:support@isnap.ai). See [Accounts](/concepts#accounts). Each BYOD line of your account that is not terminated uses one slot, a `suspended` line included. A slot counts until the end of the period it is paid for, even while its payment is past due and after its cancellation is scheduled.
+- **Wholesale partner.** You need no slot. Your BYOD lines are counted on your monthly invoice, and each line gets its [anniversary](/guides/managing-lines#anniversary-and-billing-anchor) when it is paired.
+
+A direct account with no slot at all receives `402 payment_required` from [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing). A direct account whose slots are all used receives `404 no_slot_available`.
+
+When your slots stop covering a BYOD line, that line ends without a call from you: see [Ends you do not request](/guides/managing-lines#ends-you-do-not-request).
+
+## Before you pair
+
+- The bridge app for macOS runs on macOS 14 or later, on the Mac that is paired with the iPhone of the line.
+- The Mac must grant the bridge app the two permissions it asks for: Full Disk Access, to read messages, and Automation, to control Messages. Without Full Disk Access, the line can neither send nor report what it receives.
+- To send SMS or RCS, the iPhone forwards its text messages to the Mac: see [Services and fallback](/guides/sending-messages#services-and-fallback).
+- The bridge app for Android is offered only when `GET /v1/apps` reports `available: true` for `android`.
+
+## Pairing a device
+
+<Steps>
+
+<Step title="Check that an installer is available">
+
+Call [`GET /v1/apps`](/api-reference/byod/get-app-downloads). It needs no credential. The response has one entry for `macos` and one for `android`, each with `url`, `version`, `version_status` and `available`.
+
+Offer a platform to your user only when its `available` is `true`. When it is `false`, no installer is offered for that platform and its `url` returns `404`.
+
+</Step>
+
+<Step title="The user installs the bridge app">
+
+The user installs the bridge app from the `url` of their platform: on their Mac, which is paired with their iPhone, or on their Android phone. The app decides the kind of line: the bridge app for macOS creates an iMessage line (`byod_imessage`), and the bridge app for Android creates an Android line (`byod_android`). The request has no field for the platform.
+
+</Step>
+
+<Step title="Issue an activation code">
+
+Call [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing) with an API key. The code is valid for 5 minutes: issue it when the bridge app is installed and open. The only field of the body is `metadata`, and it is optional. Any other field, such as `device_type` or `device_name`, returns `400 validation_failed`.
+
+The response is `201` with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `activation_code` | The code that the user enters in the bridge app. It starts with `act_`, works once, and is valid for 5 minutes. |
+| `expires_at` | The end of those 5 minutes. |
+| `download_urls.macos`, `download_urls.android` | The same links as `url` in `GET /v1/apps`: stable links that redirect to the installer of the bridge app. |
+| `bridge_version` | A version that iSnap sets. See [Versions of the bridge app](#versions-of-the-bridge-app). |
+
+</Step>
+
+<Step title="The user enters the code">
+
+The user enters the activation code in the bridge app. A code that is unknown, already used or expired is refused in the bridge app. The refusal is not returned to your backend: issue a new code.
+
+</Step>
+
+<Step title="A new line appears on your account">
+
+When the user enters a valid code, iSnap creates a new BYOD line on the account that issued the code. The line is `active` immediately, and it carries the `metadata` that you sent with the code.
+
+iSnap sends `line.connected` with `data.line`, `data.device_session_id` and `data.connected_at`. `connected_at` equals the `activated_at` of the line. To find the line without the event, call [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) and match the `metadata` that you sent. A line-scoped key does not see the new line in `GET /v1/lines/my`, since the line is not in its list: read the line id from the event, or list with a key that has no list of lines.
+
+</Step>
+
+<Step title="Read the number of the line">
+
+`phone_number` is `""` until the device reports its number. No event announces the number when it arrives: read the line with [`GET /v1/lines/{id}`](/api-reference/lines/get-line) until `phone_number` is not empty.
+
+</Step>
+
+</Steps>
+
+### Issue an activation code
+
+<CodeGroup>
+
+```bash curl
+# No credential needed.
+curl -sS "https://api.isnap.ai/v1/apps"
+
+curl -sS -X POST "https://api.isnap.ai/v1/byod/pair" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"crm_account_id":"acct_1042"}}'
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const apps = await client.apps.manifest()
+if (!apps.macos.available) {
+  throw new Error('No installer of the bridge app is offered for macOS.')
+}
+
+// Issue the code when the user has installed and opened the bridge app: it is valid for 5 minutes.
+try {
+  // The operation does not honor Idempotency-Key: a retry issues another code.
+  // Give the user the code of the response you received.
+  const pairing = await client.byod.pair({ metadata: { crm_account_id: 'acct_1042' } })
+  // Show pairing.activation_code to the user who pairs the device. Do not log it.
+  console.log(pairing.download_urls.macos, pairing.expires_at)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'payment_required') {
+    console.error('This account has no BYOD slot.')
+  } else if (err instanceof APIError && err.code === 'no_slot_available') {
+    console.error('Every BYOD slot is used: terminate a BYOD line to free one.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+
+apps = requests.get(f"{API}/v1/apps", timeout=30)
+apps.raise_for_status()
+if not apps.json()["data"]["macos"]["available"]:
+    raise SystemExit("No installer of the bridge app is offered for macOS.")
+
+# Issue the code when the user has installed and opened the bridge app: it is valid for 5 minutes.
+# The operation does not honor Idempotency-Key: a retry issues another code.
+# Give the user the code of the response you received.
+response = requests.post(
+    f"{API}/v1/byod/pair",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    json={"metadata": {"crm_account_id": "acct_1042"}},
+    timeout=30,
+)
+payload = response.json()
+
+if response.status_code == 201:
+    pairing = payload["data"]
+    # Show pairing["activation_code"] to the user who pairs the device. Do not log it.
+    print(pairing["download_urls"]["macos"], pairing["expires_at"])
+elif payload["error"]["code"] == "payment_required":
+    print("This account has no BYOD slot.")
+elif payload["error"]["code"] == "no_slot_available":
+    print("Every BYOD slot is used: terminate a BYOD line to free one.")
+else:
+    response.raise_for_status()
+```
+
+</CodeGroup>
+
+### Find the new line and its number
+
+<CodeGroup>
+
+```bash curl
+# Lists your lines that are active or reserved. Match the metadata you sent with the code.
+curl -sS "https://api.isnap.ai/v1/lines/my" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const { lines } = await client.lines.listMine()
+const paired = lines.filter(
+  (line) =>
+    (line.billing_tier === 'byod_imessage' || line.billing_tier === 'byod_android') &&
+    line.metadata?.crm_account_id === 'acct_1042'
+)
+
+for (const line of paired) {
+  // phone_number is "" until the device reports its number: read the line again later.
+  console.log(line.id, line.status, line.phone_number === '' ? 'number not reported' : 'number known')
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/lines/my",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+response.raise_for_status()
+
+for line in response.json()["data"]["lines"]:
+    if line["billing_tier"] not in ("byod_imessage", "byod_android"):
+        continue
+    if (line["metadata"] or {}).get("crm_account_id") != "acct_1042":
+        continue
+    # phone_number is "" until the device reports its number: read the line again later.
+    print(line["id"], line["status"], "number known" if line["phone_number"] else "number not reported")
+```
+
+</CodeGroup>
+
+## The activation code is a credential
+
+<Warning>
+Whoever enters an activation code in the bridge app within its 5 minutes creates a line on your account. Show the code only to the user who pairs the device, and do not copy it into logs, tickets or other tools.
+</Warning>
+
+A code works once. To pair another device, issue another code.
+
+`POST /v1/byod/pair` does not honor `Idempotency-Key`: a repeated call issues another activation code. Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt. The SDK retries this call on its own after a failed attempt, and then returns the code of the last attempt: give the user the code that you received.
+
+## One pairing, one line
+
+Every successful pairing creates a new line, with a new id. No operation moves an existing BYOD line to another device.
+
+When a user replaces their Mac or their phone, pair the new device, which creates a new line, then terminate the old line. Until you terminate it, the old line keeps its slot: a direct account whose slots are all used receives `404 no_slot_available` when it issues the code, and terminates the old line before it pairs the new device.
+
+## Ending a BYOD line
+
+[`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) ends a BYOD line and frees its slot. [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) does not apply to a BYOD line: it only gives back a line that you have reserved from the marketplace. [Terminate](/guides/managing-lines#terminate) describes what a termination does to the line, its messages and its billing, and [Ending a line](/guides/managing-lines#ending-a-line) lists the other ways a line ends.
+
+## Versions of the bridge app
+
+`GET /v1/apps` reports, for each platform, the `version` of the bridge app and a `version_status` that explains it. `version` is not `null` exactly when `version_status` is `published`.
+
+| `version_status` | Meaning |
+| --- | --- |
+| `published` | `version` is the published version of the bridge app for the platform. |
+| `none_published` | No version is published. |
+| `unreachable` | The version could not be read. Call again. The API does not say when the version becomes readable. |
+| `misconfigured`, `not_configured` | No version can be given for the platform. |
+
+`bridge_version`, in the response of `POST /v1/byod/pair`, is a separate value that iSnap sets. It can differ from the `version` that `GET /v1/apps` reports for the same platform: do not compare the two.
+
+## Health and connectivity
+
+A BYOD line reports the state of its device. [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) returns that state, and the events `line.offline`, `line.degraded`, `line.capability_changed` and `line.connected` are sent for a BYOD line. See [Health](/guides/managing-lines#health), [Connectivity events](/guides/managing-lines#connectivity-events) and [Attention](/guides/managing-lines#attention).
+
+On a BYOD line, reactions, typing indicators, read receipts, effects, threaded replies, voice notes, lookups and SMS or RCS to non-iMessage recipients depend on the device: read `runtime_capabilities` on [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) before you rely on one. See [Device features](/guides/sending-messages#device-features).
+
+## Metadata
+
+The `metadata` of `POST /v1/byod/pair` becomes the `metadata` of the line that the pairing creates. It contains at most 20 keys and 8,192 bytes once serialized. Every read of the line returns it, and so does every `line.*` event. Change it afterward with [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line): see [Metadata](/guides/managing-lines#metadata).
+
+Line `metadata` is readable by anyone who holds the line id. Never put personal data or secrets in it: refer to your user by an id of your own.
+
+## Events
+
+Pairing sends one event: [`line.connected`](/webhooks/events/line#line-connected), when the device completes pairing. No event announces the number of the line when the device reports it, and no event is sent when an activation code is issued.
+
+The line events have limits: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). To know your BYOD lines and their state, read them with `GET /v1/lines/my` and `GET /v1/lines/{id}/health`.
+
+## Keys and accounts
+
+- **Test keys.** An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. An activation code issued with a test key creates a real line. See [Test keys](/authentication#test-keys).
+- **Line-scoped keys.** The list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied to `POST /v1/byod/pair`: such a key can issue activation codes.
+
+## Errors
+
+The refusals of each operation are on its reference page: [`GET /v1/apps`](/api-reference/byod/get-app-downloads) and [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+The line object, and the `line` object inside `line.connected`, carry `phone_number`. On a BYOD line, it is the number of the device that the user paired. Request it only when you need it. Do not copy it into logs, tickets or other tools. Refer to your user by an id of your own.

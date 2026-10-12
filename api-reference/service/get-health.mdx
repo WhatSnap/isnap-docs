@@ -1,0 +1,19 @@
+---
+title: "Get the health of the API"
+description: "Reports whether the iSnap API and its dependencies respond, without a credential."
+openapi: "GET /v1/health"
+---
+
+- **Credential:** none. See [Operations without a credential](/authentication#operations-without-a-credential). The request counts against the [request-rate limit](/errors-and-rate-limits#rate-limits) like any other.
+- **`Idempotency-Key`:** ignored. See [Idempotency](/idempotency#operations-that-honor-the-key).
+- **Events:** none.
+
+The response is not wrapped in the standard envelope: on `200` and on `503`, the body is the health object itself. `status` is `ok` when every check passes, and `degraded` otherwise. `checks` contains one entry per dependency, and each value is `ok` or `error`. See [Conventions](/api-reference/introduction#conventions).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 503 | None. The body is the health object, with `status: degraded`. | A dependency check fails. |
+
+The operation takes no parameter and no body, so it does not return `400`. Its `429` and its `500` use the standard error format. The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

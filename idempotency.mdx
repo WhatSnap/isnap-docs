@@ -1,0 +1,177 @@
+---
+title: "Idempotency and retries"
+description: "Lists the operations of the iSnap API that read the Idempotency-Key header, what each does with a repeated request, and how to retry a write safely."
+---
+
+A write whose response you did not receive leaves a question: did it run? An idempotency key answers it on the operations that honor the key. Eight operations read the key. Seven of them replay a repeated request, in three different ways, and `POST /v1/chats/{chat_id}/share-contact-card` refuses a repeat once the card's message exists. Every other operation ignores the header. Read this page before you write a retry.
+
+The key travels in the `Idempotency-Key` request header. `X-Idempotency-Key` is read when the first is absent. The key is a string of your choice: use a random UUID.
+
+```http
+Idempotency-Key: <key>
+```
+
+## Operations that honor the key
+
+| | Lines and hosted macOS sessions | Messages and reactions | Attachments |
+| --- | --- | --- | --- |
+| Operations | [`POST /v1/lines/assign`](/api-reference/lines/assign-line), [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line), [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) | [`POST /v1/messages`](/api-reference/messages/send-message), [`POST`](/api-reference/messages/add-reaction) and [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction) | [`POST /v1/attachments`](/api-reference/attachments/create-attachment) |
+| The key belongs to | The API key that sent it. Two API keys of one account do not share idempotency keys. | The line. Every API key of the account shares it, and sends and reactions share it. | The account. |
+| A repeat of the same request | Returns the first successful response again: same status, same body. Nothing runs again. | Returns the message already created, as it is now. No second message is sent. Exceptions: see [Messages, reactions and contact cards](#messages-reactions-and-contact-cards). | Returns the same attachment with a new upload URL, within 15 minutes of the last call and while the attachment is still `awaiting_upload`. |
+| The same key with another request | `409 idempotency_key_collision` | `409 idempotency_conflict` | The request is not compared with the first. |
+| How long the key is remembered | 24 hours from the request that succeeded. After that, the same request runs again. | On a send: as long as the message exists, at least 72 hours from its creation. After that, the same key creates a new message. On a reaction: at most until the message reacted to is deleted. | Never forgotten: the key never creates a second attachment. Once the attachment is no longer `awaiting_upload`, or 15 minutes after the last call that returned it, the key returns `409 idempotency_terminal_state`, with no time limit. |
+| A repeat while the first request runs | `503 idempotency_in_flight` | Send retries one after the other. | Send retries one after the other. |
+| Key length | At most 255 characters. Longer returns `400 validation_failed`. | At most 255 characters. | At most 255 characters. |
+
+`POST /v1/chats/{chat_id}/share-contact-card` reads the key and never replays. Once a request has created the card's message, a repeat with the same key returns `409 idempotency_conflict`. When no message was created, the repeat sends the card. See [Contact cards](/guides/conversations#contact-cards).
+
+### Lines and hosted macOS sessions
+
+`POST /v1/lines/assign`, `POST /v1/lines/shared` and `POST /v1/macos-sessions/rent` each take or create something billable. Without a key, every retry takes one more line or rents one more session. Always send a key to these three operations.
+
+- **Replay.** A request repeated with the same key, the same method, the same path and the same body within 24 hours returns the first successful response again. The body is the first one, with the `trace_id` and the `request_id` of the first request. The `X-Request-Id` header belongs to the new request, so it differs from `request_id` in the body. No header marks a replay.
+- **Same body.** The body is compared byte for byte. A request with no body and a request with the body `{}` are two different requests.
+- **Collision.** The same key with another method, path or body returns `409 idempotency_key_collision`.
+- **In flight.** While the first request is still running, a repeat returns `503 idempotency_in_flight`: retry with the same key. A request that was abandoned midway frees its key after 60 seconds.
+- **Failures.** Only a `2xx` response is recorded. A request that failed leaves no trace: a retry with the same key runs again.
+- **Lifetime.** The key is remembered for 24 hours from the request that succeeded. After that, the same request with the same key runs again: it takes or creates another line, or rents another session.
+- **Length.** A key longer than 255 characters returns `400 validation_failed`, with an issue on `idempotency-key` and the code `too_big`.
+
+One case does not replay. `POST /v1/lines/assign` with `as_test_line: true` assigns the line first and converts it second. When the conversion alone fails, the response is the error, the line stays assigned to you as a rented line, and the key is not recorded: a retry with the same key assigns another line. Before you retry, read your lines with `GET /v1/lines/my`.
+
+### Messages, reactions and contact cards
+
+`POST /v1/messages` and the two reaction operations recognize a request repeated with the same key on the same line and with the same content. The key belongs to the line: on a send, the line that sends the message, and on a reaction, the line of the message.
+
+- **Replay.** A repeated send returns `202` with the message already created, in its state at the time of the repeat: `status` can have moved to `sent` or `delivered`, and `queue_info` is `null`. A repeated `POST` of a reaction returns the entry of the first call as it is now, and does not add the reaction again: after a later `DELETE`, the repeat returns that entry although the reaction is removed. Read the `reactions` field of the message to know what is in place. When the first call added the reaction, the repeat returns `409 idempotency_conflict` once a later call has changed its type. When the first call changed the type of an existing reaction, or found that type in place, iSnap does not record its key: a repeat after a later change of type changes the reaction again. A repeated `DELETE` returns the response of the first call. The `trace_id` and the `request_id` are new. Apart from that case, nothing is sent a second time.
+- **Checks before the key.** On a send, the checks on the line, and with a trial key the checks on the trial, run before the key is read. A repeat returns `400 line_not_active` or `403 line_suspended` once the line is no longer `active` (`403 line_not_active` with a trial key), and `402 trial_needs_inbound` once the trial is `dormant`, which the last send a trial accepts makes it. Such a refusal does not mean that the first request was refused: look for the message with `GET /v1/messages`.
+- **Same content.** The content is compared after parsing: the order of the JSON fields does not matter.
+- **Collision.** The same key on the same line with different content returns `409 idempotency_conflict`. The same key with another `line_id` is a separate request: nothing is compared, and a new message is created. A reaction and a send share the keys of their line. A `POST /v1/messages` with the key of a reaction is not refused: it returns `202` with the reaction entry and sends nothing. Use a new key for every action.
+- **Lifetime.** On a send, the key is remembered as long as its message exists: at least 72 hours from the creation of the message. Once the message is deleted, the same key creates a new message. On a reaction, the key is remembered at most until the message reacted to is deleted: the reaction entry is deleted with that message, which can be less than 72 hours after the reaction. The reaction call then returns `404 not_found`, and the key can be used again on the line.
+- **One at a time.** Send retries one after the other, not in parallel, and keep the key at 255 characters or fewer. Two simultaneous requests with one new key, or a longer key, can end in `500 internal_error`. Two requests with one key never create two messages: one of them can end in `500 internal_error`, and a retry with the same key then returns the message.
+- **Trial keys.** With a trial key, the key belongs to the trial's pool line, which other trials can share. Use keys that are unique everywhere, such as random UUIDs.
+
+A repeat of `POST /v1/chats/{chat_id}/share-contact-card` with the same key is not replayed: it returns `409 idempotency_conflict` once the card's message exists, and sends the card when no message was created. The key belongs to the line of the chat, and is remembered as long as the card's message exists, at least 72 hours from its creation: once that message is deleted, a repeat sends the card. Send a key with every call: without a key, every repeat sends the card. A key that a reaction already used on the chat's line is not refused: the call returns `202` with the id of the reaction entry in `message_id`, and sends nothing. Use a new key for every call. When you did not receive the response of this call, look for the message with `GET /v1/messages` before you resend the card.
+
+### Attachments
+
+On `POST /v1/attachments`, a repeat with the same key returns the same attachment `id` with a new `upload_url` and a new upload deadline, as long as the first attachment is still `awaiting_upload` and its deadline has not passed. The deadline is 15 minutes after the call, and each repeat that returns the attachment sets a new one. The body of the repeat is not compared with the first. In any other state, the key returns `409 idempotency_terminal_state`: create the attachment again with a new key. The key is never forgotten: once it has created an attachment, it never creates another one, and the `409` has no time limit. See [Attachments](/guides/attachments).
+
+## Retrying safely
+
+Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt.
+
+1. Generate the key before the first attempt, one per action, and store it with your own record of the action: the message to send, the line to assign.
+2. Send the request. When the response does not arrive, or is a `500` or a `503`, resend the same request with the same key, up to 2 times, with exponential backoff.
+3. Send retries one after the other. Never send two requests with the same key at the same time.
+4. To send a new message after a `failed` one, use a new key: iSnap never resends a failed message, and the old key returns the failed message.
+5. Retry while the key is remembered: within 24 hours of the first attempt on the three line and session operations, within 72 hours on a send, and while the message reacted to exists on a reaction. Later, the key can be forgotten, and the same request to a line or session operation, or the same send, then runs again: see the row "How long the key is remembered" of [Operations that honor the key](#operations-that-honor-the-key).
+
+What each response to a keyed request means:
+
+| Response | Meaning | What to do |
+| --- | --- | --- |
+| `2xx` | The request ran, now or on the first attempt. | Record the result. On a send, read `status`: it is the status at the time of the repeat. |
+| `409 idempotency_key_collision`, `409 idempotency_conflict` | The key was already used for another request. On a reaction, the first request can also have run, and a later call changed the type of the reaction. | Do not retry with this key. Read the resource, find what used the key, then send a new action with a new key. |
+| `409 idempotency_terminal_state` | The attachment of this key can no longer be uploaded. | Create the attachment again with a new key. |
+| `503 idempotency_in_flight` | The first request with this key is still running. | Retry with the same key, with backoff. |
+| `429` | The request was refused before it ran. | Retry after `Retry-After` seconds, with the same key. |
+| `500` | An unexpected error. | Retry with the same key, up to 2 times. |
+| Another `4xx` | The request was refused. On a repeat of `POST /v1/messages`, `400 line_not_active`, `403 line_suspended`, `403 line_not_active` with a trial key and `402 trial_needs_inbound` do not mean that the first request was refused. | Fix the request. On a send, look for the message with `GET /v1/messages` before you resend it with a new key. On the three line and session operations, a request that failed records nothing: the same key can carry the corrected request. |
+
+<CodeGroup>
+
+```bash curl
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
+
+# To retry, rerun the command below with the same IDEMPOTENCY_KEY: the second request
+# returns the message of the first.
+curl -sS https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "to": "+14155550123",
+    "body": "Your order has shipped."
+  }'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { APIError } from '@isnap/sdk'
+import { client } from './isnap.js'
+
+const idempotencyKey = randomUUID() // Store it with your record of the message: reuse it to retry.
+
+try {
+  // The SDK reuses the key on its own retries of this call.
+  const message = await client.messages.send(
+    {
+      line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+      to: '+14155550123',
+      body: 'Your order has shipped.'
+    },
+    { idempotencyKey }
+  )
+  console.log(message.id, message.status)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'idempotency_conflict') {
+    console.error('The key was already used for another message on this line.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import uuid
+
+from isnap import ISnapError, isnap_request
+
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the message: reuse it to retry.
+
+try:
+    # The helper retries a lost response, a 500 or a 503 with the same key, because a key is passed.
+    message = isnap_request(
+        "POST",
+        "/v1/messages",
+        json={
+            "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+            "to": "+14155550123",
+            "body": "Your order has shipped.",
+        },
+        idempotency_key=idempotency_key,
+    )
+    print(message["id"], message["status"])
+except ISnapError as err:
+    if err.code != "idempotency_conflict":
+        raise
+    print("The key was already used for another message on this line.")
+```
+
+</CodeGroup>
+
+The samples import the helpers of [Authentication](/authentication#helpers).
+
+## Operations that ignore the key
+
+Every operation that [Operations that honor the key](#operations-that-honor-the-key) does not list ignores the header. A repeated request acts again:
+
+| Operation | A repeat |
+| --- | --- |
+| `POST /v1/webhooks` | Creates a second webhook subscription. Each event is then delivered twice to the same URL. |
+| `POST /v1/webhooks/{id}/rotate-secret` | Replaces the secret again. Only the secret of the last response verifies deliveries. |
+| `POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay` | Creates one more delivery of the event. |
+| `POST /v1/byod/pair` | Issues another activation code. |
+| `POST /v1/trial/init` | Starts another trial, or returns `409 trial_already_active`. |
+| `POST /v1/pre-orders` | Creates another draft. |
+| `POST /v1/pre-orders/{id}/confirm` | Returns `400 pre_order_not_draft`: the pre-order is already confirmed. What only the first response carried is not returned again. See [Pre-orders](/guides/pre-orders). |
+
+When you did not receive the response of one of these writes, do not resend it blindly. Read the resource first: list your webhook subscriptions, your pre-orders or your lines, and resend the write only when the first one did not run.
+
+A repeat of a write that already succeeded can return an error instead of acting twice: a second cancel of a message returns `409 too_late_to_cancel`, a second withdrawal of a variant change `404 no_pending_variant_change`, a second release `404 not_found`, and a second cancel of a pre-order `400 pre_order_already_confirmed`. Read the resource before you report a failure.
+
+Some writes are safe to repeat because the second request finds the work done. `POST /v1/lines/{id}/terminate` on a line that is already `cancelled` returns `200` with the line unchanged. `POST /v1/lines/{id}/cancel` on a line that already has a `cancel_at` returns the same `cancel_at`. The guide of each operation says so where it holds.
+
+By default, the SDK adds an `Idempotency-Key` to every write. It retries every method, the ones of this section included. Pass `{ maxRetries: 0 }` to a method whose operation ignores the key: see [SDK errors](/sdk/errors). A client created with `idempotencyKey: "manual"` sends a key only when the call passes one, and still retries.

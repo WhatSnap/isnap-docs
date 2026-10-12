@@ -1,0 +1,200 @@
+---
+title: "Trial events"
+description: "Gives the data of trial.linked, trial.dormant, trial.reactivated, trial.bind_conflict and trial.revoked, with an example of each and the personal data they carry."
+---
+
+The `trial.*` events follow a trial from the moment a prospect pairs with it. For each of the five
+event types, this page says when it is sent and when it is not, lists the fields of `data`, and
+shows a full event. See [Trials](/guides/trials) for the trial flow.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial (`trl_`). |
+| `metadata` | object | Yes | The `metadata` of the trial. |
+| `line_metadata` | object | Yes | The `metadata` of the trial's pool line, when you own that line. `null` otherwise. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+Trial events are tied to the trial's pool line, which is `pool_line_id`. A subscription with a
+line filter receives them only if it lists that line id. The same holds for the message, reaction
+and typing events of the trial's messages, which carry the `metadata` of the message, not of the
+trial.
+
+No event announces that a trial is created or updated, or that its pairing window expires, and a
+trial event can be lost: see
+[What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+[`GET /v1/trial/status`](/api-reference/trials/get-trial-status) remains the way to check a pairing.
+
+**Personal data.** `paired_handle` is the handle of the prospect: a phone number or an email
+address. Do not copy it into logs, tickets or other tools. Refer to a prospect by an id of your own.
+
+## `trial.linked`
+
+Sent when a prospect pairs with a trial by sending its pairing code to the trial's pool line.
+The text that carries the pairing code produces no `message.received`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial. |
+| `token` | string | No | The pairing code of the trial. |
+| `pool_line_id` | string | No | The id of the trial's pool line. |
+| `paired_handle` | string | No | The handle of the prospect. |
+| `max_outbound_without_inbound` | integer | No | The number of messages the trial can send to the prospect without a reply. |
+| `linked_at` | string | No | The time of the pairing. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_xvGqwXTL25zKZPK7mRedsLgRm",
+  "event_type": "trial.linked",
+  "created_at": "2026-10-08T14:05:33.241Z",
+  "trace_id": "dcc75530314ec66c92d5d6f12034061e",
+  "data": {
+    "trial_id": "trl_2Wd7Hx4Qn9Kb6Tc3Lm8Vz5Ry1",
+    "token": "K7M2QXR",
+    "pool_line_id": "line_3Qc7Vn2Kx8Wd5Tb9Hm4Lz6Ry1",
+    "paired_handle": "+14155550123",
+    "max_outbound_without_inbound": 10,
+    "linked_at": "2026-10-08T14:05:33.208Z",
+    "metadata": { "signup_id": "su_7731" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: `paired_handle`.
+
+## `trial.dormant`
+
+Sent when the number of messages sent to the prospect without any reply reaches the limit of the
+trial. A trial does not become dormant with time: only this count moves it.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial. |
+| `outbound_count` | integer | No | The number of messages sent without a reply. |
+| `dormant_at` | string | No | The time the trial became dormant. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_3laaOt6utFg6Jka3nVemtny6Q",
+  "event_type": "trial.dormant",
+  "created_at": "2026-10-08T14:40:02.649Z",
+  "trace_id": "f4c66a1092e736088a8ba6187516b10b",
+  "data": {
+    "trial_id": "trl_2Wd7Hx4Qn9Kb6Tc3Lm8Vz5Ry1",
+    "outbound_count": 10,
+    "dormant_at": "2026-10-08T14:40:02.615Z",
+    "metadata": { "signup_id": "su_7731" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.
+
+## `trial.reactivated`
+
+Sent when a dormant trial becomes active again. A reply on a trial that is already active sends
+nothing.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial. |
+| `reactivation_reason` | string | No | What the prospect did: `inbound_message`, `reaction` or `read_receipt`. |
+| `reactivated_at` | string | No | The time the trial became active again. |
+
+On an iMessage line, a read by the prospect is not a signal: it neither sets the counter back to 0
+nor reactivates the trial. Only a reply or a reaction does.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_0M0ZR2qaHSoaJjp9zf8tfNqYV",
+  "event_type": "trial.reactivated",
+  "created_at": "2026-10-08T15:12:48.966Z",
+  "trace_id": "1e2138aa2e8d31f1861bffa377b7048c",
+  "data": {
+    "trial_id": "trl_2Wd7Hx4Qn9Kb6Tc3Lm8Vz5Ry1",
+    "reactivation_reason": "inbound_message",
+    "reactivated_at": "2026-10-08T15:12:48.930Z",
+    "metadata": { "signup_id": "su_7731" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.
+
+## `trial.bind_conflict`
+
+Sent when a prospect sends a valid pairing code, but their handle is already paired with this pool
+line, or with as many pool lines of the pool as its limit allows. The trial stays unpaired, and the
+prospect gets no reply.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial that could not be paired. |
+| `pool_line_id` | string | No | The id of the trial's pool line. |
+| `paired_handle` | string | No | The handle that sent the pairing code. |
+| `reason` | string | No | Always `already_bound_elsewhere`. |
+| `conflict_at` | string | No | The time of the conflict. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_LfbkaUWQSb9d5maFrrxNJMFYx",
+  "event_type": "trial.bind_conflict",
+  "created_at": "2026-10-08T14:05:33.244Z",
+  "trace_id": "2e9290b74f9496aa7029341ec0a7400f",
+  "data": {
+    "trial_id": "trl_2Wd7Hx4Qn9Kb6Tc3Lm8Vz5Ry1",
+    "pool_line_id": "line_3Qc7Vn2Kx8Wd5Tb9Hm4Lz6Ry1",
+    "paired_handle": "+14155550123",
+    "reason": "already_bound_elsewhere",
+    "conflict_at": "2026-10-08T14:05:33.208Z",
+    "metadata": { "signup_id": "su_7731" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: `paired_handle`.
+
+## `trial.revoked`
+
+Sent when you revoke a trial with
+[`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial).
+
+It is not sent when the pairing window of a trial expires, when you revoke a trial that is already
+revoked, or when you revoke a trial that was still pairing after its window.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `trial_id` | string | No | The id of the trial. |
+| `pool_line_id` | string | No | The id of the trial's pool line. |
+| `paired_handle` | string | Yes | The handle of the prospect. `null` if the trial was never paired. |
+| `reason` | string | No | The `reason` given in the call: `rebind`, `partner` or `admin`. |
+| `revoked_at` | string | No | The time of the revocation. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_ADbvLGLDE3sjcqY7tDiFr7i9I",
+  "event_type": "trial.revoked",
+  "created_at": "2026-10-08T16:20:15.437Z",
+  "trace_id": "d6cefd9166749ee7f07d20a0c0d6d479",
+  "data": {
+    "trial_id": "trl_2Wd7Hx4Qn9Kb6Tc3Lm8Vz5Ry1",
+    "pool_line_id": "line_3Qc7Vn2Kx8Wd5Tb9Hm4Lz6Ry1",
+    "paired_handle": "+14155550123",
+    "reason": "partner",
+    "revoked_at": "2026-10-08T16:20:15.402Z",
+    "metadata": { "signup_id": "su_7731" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: `paired_handle`.

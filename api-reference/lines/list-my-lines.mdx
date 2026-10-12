@@ -1,0 +1,16 @@
+---
+title: "List your active and reserved lines"
+description: "Lists the lines of your account whose status is active or reserved."
+openapi: "GET /v1/lines/my"
+---
+
+- **Credential:** an API key.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets only the lines of its list.
+- **Events:** none.
+- **Personal data:** `phone_number`, the full number of each line, and `metadata`. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **What is listed:** your `active` and `reserved` lines of every kind, shared and test lines included, oldest first, with full phone numbers. Lines whose status is `suspended`, `provisioning` or `cancelled` are left out: keep the ids of your lines. See [Your lines](/guides/managing-lines#your-lines).
+- **Pagination:** none, and no filter. The API does not bound the number of lines in the response.
+
+## Errors
+
+This operation has no error of its own. The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

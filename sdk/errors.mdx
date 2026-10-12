@@ -1,206 +1,362 @@
 ---
-title: "Errors"
-description: "The error class hierarchy, when to retry, when to surface to the user."
+title: "SDK errors and retries"
+sidebarTitle: "Errors and retries"
+description: "Lists the error classes and connection-error messages of the SDK, the failures it retries by itself and for how long, how it sets idempotency keys, and how to cancel a call."
 ---
 
-The SDK throws typed errors. Branch on the class first, then on
-`error.code` for the specific cause. The class tells you *what*
-category of failure (auth, permission, quota, transport); the `code`
-tells you *which* one inside that category.
+A call that fails throws. This page lists the error classes and their fields, the failures the SDK retries by itself and for how long, the way it uses idempotency keys, and how to cancel a call. Read it before you write the error handling of an integration. The errors of the API, with their codes, are in [Errors and rate limits](/errors-and-rate-limits#errors).
 
-## The hierarchy
+## Error families
 
-```
-Error
-├── APIError                          // every backend-returned error
-│   ├── BadRequestError               // 400
-│   ├── AuthenticationError           // 401
-│   ├── PaymentRequiredError          // 402
-│   ├── PermissionDeniedError         // 403
-│   ├── NotFoundError                 // 404
-│   ├── ConflictError                 // 409
-│   ├── GoneError                     // 410
-│   ├── UnprocessableEntityError      // 413, 422
-│   ├── RateLimitError                // 429 (general rate limiting)
-│   ├── QuotaExceededError            // 429 (line-level quota)
-│   ├── InternalServerError           // 500
-│   └── ServiceUnavailableError       // 503
-│
-├── APIConnectionError                // network, timeout, abort
-└── WebhookSignatureError             // verifyWebhook() failures
-```
+| Family | Thrown when |
+| --- | --- |
+| `APIError` and its 12 subclasses | The API refused or failed the call, or the SDK could not use the response. |
+| `APIConnectionError` | No usable response arrived: a network failure, a timeout or a cancellation. The API may have received the request. |
+| `WebhookSignatureError` | `verifyWebhook` or `parseWebhookEvent` rejected a request. See [Webhooks](/sdk/webhooks#failures). |
 
-Every `APIError` carries:
+The three families extend `Error`. `APIConnectionError` and `WebhookSignatureError` do not extend `APIError`: a test with `instanceof APIError` does not catch them.
 
-```ts
-class APIError extends Error {
-  status: number          // HTTP status
-  code: string            // stable string code, e.g. 'line_not_owned'
-  message: string         // human-readable
-  traceId: string         // include this when reporting bugs
-  requestId: string       // your-request-id correlation
-  retryAfter?: number     // seconds — only on 429 / 503
-  issues?: ErrorIssue[]   // field-level details on 422 validation
-}
-```
+Two failures throw a built-in error. Invalid client options and an invalid per-call `maxRetries` throw a plain `Error`. An invalid `file` argument of `attachments.upload` throws `TypeError`.
 
-## Pattern: branch on class, then on code
+## Classes by status
 
-```ts
+The SDK chooses the class from `error.status` in the response body, which repeats the HTTP status.
+
+| Status | Class |
+| --- | --- |
+| `400` | `BadRequestError` |
+| `401` | `AuthenticationError` |
+| `402` | `PaymentRequiredError` |
+| `403` | `PermissionDeniedError` |
+| `404` | `NotFoundError` |
+| `409` | `ConflictError` |
+| `410` | `GoneError` |
+| `413`, `422` | `UnprocessableEntityError` |
+| `429` | `RateLimitError` or `QuotaExceededError`: see [The two error classes of a `429`](#the-two-error-classes-of-a-429). |
+| `500` | `InternalServerError` |
+| `503` | `ServiceUnavailableError` |
+| Any other status | `APIError` |
+
+`GoneError` is thrown for a `410` in the standard [error format](/errors-and-rate-limits#error-format). An operation that was removed from the API returns a `410` with another body, which the SDK does not read: the call throws a plain `APIError` whose `status` and `code` are `undefined` and whose `message` is empty. Before iSnap removes an operation, it marks it deprecated for at least 30 days: see [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility).
+
+## Fields of an error
+
+Every `APIError` carries these fields:
+
+| Field | Content |
+| --- | --- |
+| `name` | The class name, for example `NotFoundError`. |
+| `status` | The status of the error. |
+| `code` | The `error.code` of the API, or one of the [codes the SDK raises itself](#codes-the-sdk-raises-itself). It is the stable value to branch on. |
+| `message` | Text for a person. It can change: do not branch on it. |
+| `traceId`, `requestId` | The `trace_id` and `request_id` of the response body, or the `X-Trace-Id` and `X-Request-Id` response headers when the body has none. Empty strings when no response carries them, as on the errors that `attachments.upload` raises itself. |
+| `retryAfter` | A number of seconds, on a `429` that states a delay. |
+| `issues` | An array of `{ path, message, code }` when the API names a field: on `400 validation_failed`, and on the refusals whose reference page says so, such as `400 webhook_url_not_allowed` and `422 limit_out_of_bounds`. |
+
+Three points need care:
+
+- The type declarations give `retryAfter` and `issues` as optional. At run time they are `null` or `undefined` when they do not apply. Test them with `typeof err.retryAfter === 'number'` and `Array.isArray(err.issues)`.
+- The type declarations give `path` as a `string`. At run time it is an array of field names and indexes, such as `["attachments", 0]`. Print it with `JSON.stringify(issue.path)`.
+- The `retry_at` field of the API error is not exposed.
+
+`APIConnectionError` has no `status`, `code`, `traceId` or `requestId`. The original error is in `cause`. Its messages are:
+
+| Message | Cause |
+| --- | --- |
+| `Network error: <reason>`, or `Network error` when the reason is not an `Error` | The connection failed. Or the `signal` was aborted during the last attempt with a reason that is not an `AbortError`, such as the signal of `AbortSignal.timeout()`. |
+| `Request aborted after <timeoutMs>ms` | An attempt timed out. Or the `signal` was aborted during the last attempt with no reason, or with an `AbortError`. The number is always `timeoutMs`, whatever time elapsed. |
+| `Request aborted before attempt` | The `signal` of the call was already aborted before an attempt. |
+| `Request aborted during retry backoff` | The `signal` was aborted during a request that the SDK would have retried, or during the wait before a retry. So a call canceled during any attempt except the last ends with this message, after one more call to `onRetry`. |
+| `Pagination aborted` | The `signal` was aborted between two pages of a [list iterator](/sdk/pagination#stop-an-iteration). |
+| `Upload aborted` | The `signal` was aborted while `attachments.upload` waited between two polls. |
+
+The last attempt is the only one when `maxRetries` is `0`. To tell a timeout from your own cancel, test `signal.aborted` on the signal you passed.
+
+When the request of `attachments.upload` to the upload URL fails, the helper throws an `APIConnectionError` with a message of its own. When that request is refused, it throws `APIError` with code `upload_failed` and the status of that request. Neither error carries the attachment id.
+
+An error message can contain up to 200 characters of a response body that is not JSON. Log `code`, `status`, `traceId` and `requestId` in preference to `message`.
+
+## Branch on `code`
+
+The class tells the status. `err.code` tells the exact cause: branch on it. The codes of each operation are on its reference page, and the codes every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+```typescript
 import {
+  APIConnectionError,
   APIError,
-  AuthenticationError,
-  PermissionDeniedError,
-  NotFoundError,
+  ISnapClient,
   QuotaExceededError,
-  RateLimitError,
-  APIConnectionError
+  RateLimitError
 } from '@isnap/sdk'
 
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
 try {
-  await isnap.messages.send({ line_id, to, body })
+  const message = await client.messages.send({
+    line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+    to: '+14155550123',
+    body: 'Your order has shipped.'
+  })
+  console.log(message.id, message.status)
 } catch (err) {
-  if (err instanceof AuthenticationError) {
-    // Key revoked / wrong env. Don't retry; rotate keys.
+  if (err instanceof QuotaExceededError || err instanceof RateLimitError) {
+    // A 429. Neither class extends the other: test both.
+    const delay = typeof err.retryAfter === 'number' ? `${err.retryAfter} s` : 'not stated'
+    console.error(`${err.code}, delay: ${delay}`)
+  } else if (err instanceof APIError) {
+    switch (err.code) {
+      case 'validation_failed':
+        for (const issue of Array.isArray(err.issues) ? err.issues : []) {
+          console.error(JSON.stringify(issue.path), issue.code, issue.message)
+        }
+        break
+      case 'line_suspended':
+      case 'line_not_active':
+        console.error(`The line cannot send: ${err.code}`)
+        break
+      default:
+        console.error(err.status, err.code, err.traceId, err.requestId)
+    }
+  } else if (err instanceof APIConnectionError) {
+    // No usable response. The API may have received the request.
+    console.error(err.message)
+  } else {
     throw err
   }
-  if (err instanceof PermissionDeniedError) {
-    // Scoped key, line not owned, etc. Surface to caller; they need
-    // to fix the integration, not retry.
-    throw err
-  }
-  if (err instanceof NotFoundError) {
-    // line_id doesn't exist on this account. Don't retry.
-    throw err
-  }
-  if (err instanceof QuotaExceededError) {
-    // err.code: 'new_contact_quota_exceeded' | 'hourly_quota_exceeded' | ...
-    // err.retryAfter: seconds until the bucket frees
-    return queueForLater(err.retryAfter)
-  }
-  if (err instanceof RateLimitError) {
-    // Generic rate limit (not a quota bucket). The SDK auto-retries,
-    // so seeing this means even after retries we still got rate-limited.
-    return queueForLater(err.retryAfter)
-  }
-  if (err instanceof APIConnectionError) {
-    // Network blip, timeout, abort. SDK already retried.
-    return queueForLater(60)
-  }
-  if (err instanceof APIError) {
-    // Catch-all for unhandled API errors. Log + surface.
-    console.error('iSnap API error', err.code, err.traceId)
-    throw err
-  }
-  throw err
 }
 ```
 
-## Auto-retry behavior
+## Codes the SDK raises itself
 
-The SDK retries automatically on:
+The SDK throws `APIError` with codes of its own, which the API never sends:
 
-- **`APIConnectionError`** — network / timeout. Retried with exponential
-  backoff (250ms, 500ms, 1s, 2s, …) plus jitter.
-- **`InternalServerError`** (500) — backend transient.
-- **`ServiceUnavailableError`** (503) — backend degraded. Honours
-  `Retry-After` if present.
-- **`RateLimitError`** (429) — generic rate limit. Honours
-  `Retry-After`.
+| `code` | Class | `status` | When |
+| --- | --- | --- | --- |
+| `invalid_response` | `ServiceUnavailableError` when the status is 500 or more, `APIError` otherwise. | The response status. | The response body is not JSON. The message contains the first 200 characters of the body. |
+| `unknown_error` | `APIError` | The response status. | A JSON response signals a failure and has no `error` object. |
+| `response_too_large` | `APIError` | The response status. | The `Content-Length` of the response exceeds 10,485,760 bytes. The SDK refuses the response. |
+| `upload_failed` | `APIError` | The status of the upload response, or `422`. | In `attachments.upload`: the upload request was refused, or the attachment became `failed`. |
+| `upload_timeout` | `APIError` | `504` | In `attachments.upload`: the attachment was not `ready` after the last poll. |
 
-The SDK does **not** retry on:
+One code is raised by both sides. `attachments.upload` refuses a file larger than 5,368,709,120 bytes before any request, with a plain `APIError` of status `413` and code `attachment_exceeds_storage_limit`. The same refusal by the API, on `attachments.create`, arrives as `UnprocessableEntityError`. [The attachments helper](/sdk/reference#the-attachments-helper) describes these failures.
 
-- **`QuotaExceededError`** (429 with quota code) — the bucket
-  genuinely doesn't have room. Retrying is wrong; back off and try
-  later.
-- Any 4xx other than 429 — your call is malformed; retrying won't help.
-- Any 5xx other than 500 / 503 — escalation, not a retry case.
+## The two error classes of a `429`
 
-Default `maxRetries` is **3** (so 4 attempts total, including the
-initial). Override per-client or per-call:
+A `429` becomes `QuotaExceededError` when its code is one of five codes, and `RateLimitError` otherwise. Neither class extends the other: catch both.
 
-```ts
-const isnap = new ISnapClient({
-  apiKey,
-  maxRetries: 5,                       // client-wide override
-  onRetry: ({ attempt, nextDelayMs, error }) => {
-    metrics.increment('isnap.retry')
-  }
+| `code` | Class | Thrown by | What the SDK does |
+| --- | --- | --- | --- |
+| `new_contact_quota_exceeded`, `known_contact_quota_exceeded`, `total_message_quota_exceeded` | `QuotaExceededError` | `messages.send` | Throws immediately. Never retried. |
+| `queue_full` | `QuotaExceededError` | `messages.send` | Throws immediately. Never retried. |
+| `lookup_rate_limit_exceeded` | `QuotaExceededError` | `lookup.check` | Throws immediately. Never retried. |
+| `rate_limit_exceeded` | `RateLimitError` | Any call | Waits 60 seconds and retries. |
+| `minute_limit_exceeded` | `RateLimitError` | `messages.send` | Waits the delay the API states, 60 seconds or less, and retries. |
+| `hourly_limit_exceeded` | `RateLimitError` | `messages.send` | Throws immediately when the delay the API states exceeds `maxRetryDelayMs`. |
+| `rebind_cap_reached` | `RateLimitError` | `trial.revoke` | Waits and retries when the delay the API states, from 1 second to 24 hours, is `maxRetryDelayMs` or less. Otherwise throws immediately, with `retryAfter` set. |
+
+The last column describes a client with the default options. The codes of `messages.send` come from the sending limits of the line: see [Sending limits](/guides/sending-limits). After one of them, read the counters of the line with `client.lines.quota(id)`. `rate_limit_exceeded` is the request-rate limit, or on `messages.send` and `messages.list` the message-operations limit: see [Rate limits](/errors-and-rate-limits#rate-limits).
+
+## Automatic retries
+
+The SDK retries a failed attempt by itself, up to `maxRetries` times (3 by default; the pages of this site pass 2). Retries apply to every method, `POST`, `PATCH` and `DELETE` included. `client.health()` is the exception: it is not retried unless the call passes `maxRetries`.
+
+A `RateLimitError` whose delay is `maxRetryDelayMs` or less, 60 seconds by default, is retried too. On a line whose `quota_overflow_behavior` is `drop` or `fail`, a `minute_limit_exceeded` send is therefore retried 60 seconds later, and can then be accepted: see [Refusals](/guides/sending-limits#refusals). Pass `maxRetries: 0` to the call to receive the refusal immediately.
+
+| Outcome of an attempt | Retried |
+| --- | --- |
+| The connection fails. | Yes |
+| The attempt times out. | Yes |
+| A `500` or a `503`. | Yes |
+| A `429` whose code is not one of the five codes of `QuotaExceededError`. | Yes, when the delay the API states does not exceed `maxRetryDelayMs`. |
+| A response with a status of 500 or more whose body is not JSON. | Yes |
+| A `429` with one of the five codes of `QuotaExceededError`. | No |
+| Any other `4xx`. | No |
+| A JSON error with a `5xx` status other than `500` and `503`, for example `502` or `504`. | No |
+| A `429` whose body is not JSON. | No |
+
+### Delays
+
+When the API states no delay, the wait before retry `n` (0, 1, 2) is 250 ms multiplied by 2 to the power `n`, plus a random 0 to 100 ms, capped at `maxRetryDelayMs`. With the defaults the three waits are 250 to 350 ms, 500 to 600 ms, and 1,000 to 1,100 ms.
+
+On a `429` that carries `error.retry_after`, the SDK waits exactly that number of seconds. When that delay is longer than `maxRetryDelayMs`, the SDK does not wait: it throws the `RateLimitError` immediately, with `retryAfter` set, and does not call `onRetry`.
+
+The SDK reads the delay from `error.retry_after` in the response body. It does not read the `Retry-After` header. The API sets both to the same value.
+
+### How long a call can last
+
+`timeoutMs` applies to each attempt, not to the call. A call can last much longer than `timeoutMs`:
+
+- **No response.** With the defaults, a call to a server that never responds lasts at least 121.75 seconds: 4 attempts of 30 seconds and 3 waits.
+- **Request-rate limits.** Over the request-rate limit or the message-operations limit (see [Rate limits](/errors-and-rate-limits#rate-limits)), the API returns `429 rate_limit_exceeded` with a `retry_after` of 60. With the defaults the SDK waits 60 seconds and retries, up to 3 times: the call lasts more than 180 seconds before it throws `RateLimitError`.
+
+To fail fast, lower `maxRetryDelayMs` on the client, or pass `maxRetries: 0` to a call. To stop a call, retries included, [cancel it](#cancellation) with a signal.
+
+```typescript
+import { ISnapClient, RateLimitError } from '@isnap/sdk'
+
+// No wait longer than 5 seconds before a retry: a 429 that states 60 seconds is thrown immediately.
+const client = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY ?? '',
+  maxRetries: 2,
+  maxRetryDelayMs: 5_000
 })
 
-// Per-call override:
-await isnap.messages.send(body, { maxRetries: 0 })  // disable retry for this call
-```
-
-## `RateLimitError` vs `QuotaExceededError`
-
-Both are HTTP 429. The split is by `error.code`:
-
-| Class | Codes | Origin |
-|---|---|---|
-| `QuotaExceededError` | `new_contact_quota_exceeded`, `known_contact_quota_exceeded`, `total_message_quota_exceeded`, `queue_full`, `lookup_rate_limit_exceeded` | Per-line quota gate (warming, 5-bucket model). Action: back off, audit list. |
-| `RateLimitError` | Everything else 429 | Generic per-API-key rate limit. Action: SDK already retried; if it still fires, you're hammering the API. |
-
-Both carry `retryAfter` when the backend supplies it. Trust it.
-
-## `GoneError` (410)
-
-A 410 response means the endpoint has been **removed**. The SDK throws
-`GoneError` with the structured payload preserved:
-
-```ts
-catch (err) {
-  if (err instanceof GoneError) {
-    console.error(`Endpoint removed on ${err.removed_at}. Use ${err.successor}.`)
-    // Migrate to err.successor, then redeploy.
-    throw err
-  }
-}
-```
-
-This is the post-deprecation-window state — see
-[Concepts → Deprecation lifecycle](/concepts/deprecation-lifecycle).
-
-## `WebhookSignatureError`
-
-Thrown by `verifyWebhook()` when:
-
-- Signature doesn't match.
-- Timestamp is outside the tolerance window (replay protection).
-- Payload isn't valid JSON or doesn't match a known event type.
-
-Catch it and return **401** so iSnap retries:
-
-```ts
 try {
-  const event = verifyWebhook({ payload, signature, secret })
+  const { lines } = await client.lines.listMine()
+  console.log(lines.length)
+
+  // One call without any retry.
+  const line = await client.lines.get('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', { maxRetries: 0 })
+  console.log(line.status)
 } catch (err) {
-  if (err instanceof WebhookSignatureError) {
-    res.status(401).end()
-    return
-  }
-  throw err
+  if (!(err instanceof RateLimitError)) throw err
+  console.error(`${err.code}: wait ${err.retryAfter} seconds before the next request.`)
 }
 ```
 
-## Building a `traceId`-correlated bug report
+## Idempotency keys
 
-When you file a bug with iSnap support, include `error.traceId` and
-`error.requestId`. Both are echoed on every API response (including
-errors) and let iSnap pinpoint the request in the backend logs.
+### The `auto` mode
 
-```ts
-catch (err) {
-  if (err instanceof APIError) {
-    Sentry.captureException(err, {
-      tags: { trace_id: err.traceId, request_id: err.requestId, code: err.code }
-    })
-  }
+In `"auto"` mode, the default, the SDK adds an `Idempotency-Key` header, a random UUID (version 4), to every `POST`, `PATCH`, `PUT` and `DELETE` call. `GET` calls carry none.
+
+The key is generated once per method call and reused on the automatic retries of that call. Two separate method calls get two different keys.
+
+### Operations that honor the key
+
+The API acts on the key for these eight methods only. On every other method the header is sent and ignored.
+
+| Method | Operation | The same key with a different request |
+| --- | --- | --- |
+| `messages.send` | [`POST /v1/messages`](/api-reference/messages/send-message) | `ConflictError`, code `idempotency_conflict` |
+| `messages.addReaction` | [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction) | `ConflictError`, code `idempotency_conflict` |
+| `messages.removeReaction` | [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction) | `ConflictError`, code `idempotency_conflict` |
+| `chats.shareContactCard` | [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) | `ConflictError`, code `idempotency_conflict`, on any retry once the first request created the message: see [Your own retries](#your-own-retries). |
+| `attachments.create` | [`POST /v1/attachments`](/api-reference/attachments/create-attachment) | The body is not compared. `ConflictError`, code `idempotency_terminal_state`, once the attachment is no longer `awaiting_upload` or its upload deadline has passed. |
+| `lines.assign` | [`POST /v1/lines/assign`](/api-reference/lines/assign-line) | `ConflictError`, code `idempotency_key_collision` |
+| `lines.mintShared` | [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) | `ConflictError`, code `idempotency_key_collision` |
+| `macosSessions.rent` | [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) | `ConflictError`, code `idempotency_key_collision` |
+
+On `messages.send`, `messages.addReaction`, `messages.removeReaction` and `chats.shareContactCard`, the key belongs to the line: the same key used on another line is a separate call, and returns no conflict.
+
+In `attachments.upload`, the API acts on the key for the request that registers the attachment, and for that request only. Each `upload()` call registers a new attachment, unless you pass an `idempotencyKey` that an earlier call used: the API then returns the attachment registered with that key while it is `awaiting_upload` and before its upload deadline, and the call throws `ConflictError` with code `idempotency_terminal_state` in any other state.
+
+What a repeated request returns, for how long, and what the key is scoped to differ between these operations: see [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+
+### The other writes
+
+Automatic retries apply to every method. On a method outside [Operations that honor the key](#operations-that-honor-the-key), a retry after a lost response can run the operation twice. This concerns `webhooks.create`, `webhooks.rotateSecret`, `webhooks.replay`, `trial.init`, `byod.pair`, `preOrders.create` and every other method that writes.
+
+Pass `maxRetries: 0` where a second execution is not acceptable. `webhooks.create` is one such call: two subscriptions for one URL deliver every event twice.
+
+```typescript
+import { APIConnectionError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const url = 'https://hooks.your-domain.example/isnap'
+
+try {
+  const webhook = await client.webhooks.create({ url, events: ['message.*'] }, { maxRetries: 0 })
+  console.log(webhook.id)
+} catch (err) {
+  if (!(err instanceof APIConnectionError)) throw err
+  // The API may have created the subscription. Look before you create again.
+  const { webhooks } = await client.webhooks.list()
+  const created = webhooks.some((webhook) => webhook.url === url)
+  console.error(created ? 'Created, and the response was lost.' : 'Not created.')
 }
 ```
 
-## Related
+The signing secret of a subscription is returned by `webhooks.create` and by `webhooks.rotateSecret` only. When the response of the creation was lost, call `webhooks.rotateSecret` to get a secret.
 
-- [Sending messages → Errors](/guides/sending-messages#errors) — catalog per endpoint.
-- [Quotas + warming](/concepts/quotas-and-warming) — what triggers `QuotaExceededError`.
-- [Deprecation lifecycle](/concepts/deprecation-lifecycle) — `GoneError` context.
+Three more cases need care with automatic retries:
+
+- A retry of a write that succeeded can throw instead of acting twice: `messages.cancel` throws `ConflictError` with `too_late_to_cancel`, `lines.cancelVariantChange` `NotFoundError` with `no_pending_variant_change`, `lines.release` `NotFoundError`, and `preOrders.cancel` `BadRequestError` with `pre_order_already_confirmed`. Read the resource before you report a failure.
+- `lines.assign` with `as_test_line: true`: when the conversion to a test line fails after the assignment, the API does not record the key, and an automatic retry of a `500` assigns another line. Pass `{ maxRetries: 0 }` with `as_test_line`, and read `lines.listMine` before you call again.
+- `trial.status`: call it with `{ maxRetries: 0 }`, on a client whose `timeoutMs` covers your network. The first read within 1 hour after pairing returns the trial key, and no later read returns it: when that response is lost, a retry does not return the key.
+
+### Your own retries
+
+Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt. A new method call gets a new key, so pass the key yourself. Build it from a record of your own, so that every attempt to send the same message carries the same key, in any process:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// One key per message you intend to send, built from a record of your own.
+// Store it with your record of the message: reuse it to retry.
+const idempotencyKey = 'order-4812-shipped'
+
+const message = await client.messages.send(
+  {
+    line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+    to: '+14155550123',
+    body: 'Your order has shipped.'
+  },
+  { idempotencyKey }
+)
+console.log(message.id, message.status)
+```
+
+A second `messages.send` with the same key, on the same line and with the same content, returns the message already created, in its current state. No second message is sent. The key stays valid as long as that message exists: see [Idempotency](/idempotency#operations-that-honor-the-key).
+
+Three rules apply to your own retries:
+
+- Send retries one after the other, not in parallel, and keep the key at 255 characters or fewer.
+- Do not retry `chats.shareContactCard` with the same key: the retry throws `ConflictError` with code `idempotency_conflict` once the first request created the message, and sends the card when it did not. Pass `maxRetries: 0` to that method and, after a failure, look for the message with `messages.list` before you call it again.
+- On `lines.assign`, `lines.mintShared` and `macosSessions.rent`, a repeat of the same request, sent while the first one is still running, returns `503 idempotency_in_flight`. The SDK retries it with the same key and, with the defaults, throws `ServiceUnavailableError` after its three waits, 1.75 to 2.05 seconds in total. The API reserves a key for up to 60 seconds. Pass your own `idempotencyKey` to these methods, so that you can call again with the same key. The API remembers the key for 24 hours: after that, the same call with the same key takes or creates another line, or rents another session.
+
+### The `manual` mode
+
+In `"manual"` mode the SDK sends a key only when the call passes one. Automatic retries stay on: a write without a key can execute twice. TypeScript does not require a key in this mode.
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY ?? '',
+  maxRetries: 2,
+  idempotencyKey: 'manual'
+})
+
+// The call carries the key you pass. Without it, the call carries no key and is still retried.
+// Store the key with your record of the reaction: reuse it to retry.
+const idempotencyKey = 'ticket-9271-like'
+
+const reaction = await client.messages.addReaction(
+  'msg_3Fh8Kq2Zx7Wn5Tb9Rm4Yc6Jd1',
+  { type: 'like' },
+  { idempotencyKey }
+)
+console.log(reaction)
+```
+
+## Cancellation
+
+Pass an `AbortSignal` as `signal` to cancel a call. Cancellation stops the current attempt while it waits for the response headers, and any wait before a retry. Once the headers have arrived, the SDK reads the body to the end. When the cancellation takes effect, the call rejects with `APIConnectionError`, whose `cause` is the reason of the signal.
+
+The message of the error depends on when the signal was aborted: see [Fields of an error](#fields-of-an-error). Do not read the message to tell your cancel from a timeout: test `signal.aborted`, as the sample does.
+
+```typescript
+import { APIConnectionError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Abort the call after 5 seconds, retries included. A response body that has started
+// to arrive is still read to the end.
+const controller = new AbortController()
+const timer = setTimeout(() => controller.abort(new Error('5 seconds spent')), 5_000)
+
+try {
+  const { lines } = await client.lines.listMine({ signal: controller.signal })
+  console.log(lines.length)
+} catch (err) {
+  if (!(err instanceof APIConnectionError) || !controller.signal.aborted) throw err
+  console.error('Canceled:', err.cause)
+} finally {
+  clearTimeout(timer)
+}
+```
+
+A signal passed to a list iterator also stops the iteration: see [Stop an iteration](/sdk/pagination#stop-an-iteration).

@@ -1,0 +1,23 @@
+---
+title: "Cancel a pre-order"
+description: "Cancels a draft pre-order."
+openapi: "POST /v1/pre-orders/{id}/cancel"
+---
+
+- **Credential:** an API key of the account that owns the pre-order.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **`Idempotency-Key`:** not honored. A second cancel returns `400 pre_order_already_confirmed`.
+- **Events:** sends `pre_order.cancelled`, which only a subscription without a line filter receives: see [Events](/guides/pre-orders#events).
+- **Drafts only:** a confirmed pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
+- **Caching:** the response carries `Cache-Control: no-store`, whatever its status.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not a UUID. |
+| 400 | `pre_order_already_confirmed` | The pre-order is confirmed, fulfilled or already canceled. |
+| 404 | `not_found` | The id is unknown, or the pre-order belongs to another account. |
+| 409 | `pre_order_already_confirmed` | A confirmation or another cancel of the same draft ran at the same time and won. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,172 @@
+---
+title: "Reaction events"
+description: "Gives the data of reaction.added, reaction.received and reaction.removed, with an example of each and the personal data they carry."
+---
+
+The `reaction.*` events announce a reaction added to, or removed from, a message of one of your
+lines, by the contact or by you. For each of the three event types, this page says when it is sent
+and when it is not, lists the fields of `data`, and shows a full event. See
+[Chat features](/guides/conversations) for how to add and remove a reaction.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `parent_message_id` | string | No | The id of the message the reaction is on. |
+| `reaction_id` | string | No | The id of the reaction. |
+| `reaction_type` | string | No | `love`, `like`, `dislike`, `laugh`, `emphasize` or `question`. A reaction from a contact can also be `custom`. |
+| `reaction_emoji` | string | Yes, for `custom` | The emoji of the reaction. |
+| `direction` | string | No | `inbound` for a reaction from the contact, `outbound` for a reaction of the line. |
+| `line_id` | string | No | The id of the line. |
+| `metadata` | object | Yes | The `metadata` of the message the reaction is on. |
+| `line_metadata` | object | Yes | The `metadata` of the line, when it belongs to your account. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+The handle of the author has two names: `from_handle` on an inbound reaction, `actor_handle` on an
+outbound one. The timestamp has one name per event: `added_at`, `received_at` or `removed_at`.
+
+A reaction that concerns a message that iSnap has deleted sends no event. The reaction events of a
+trial are tied to the trial's pool line. On a line that another account owned before you, you
+receive the reactions of contacts to the messages of that account: see
+[Lines that change owner](/webhooks/overview#lines-that-change-owner).
+
+**Personal data.** `from_handle` and `actor_handle` are handles: phone numbers or email addresses.
+Do not copy them into logs, tickets or other tools. Refer to a contact by an id of your own.
+
+## `reaction.added`
+
+Sent when the line's device confirms a reaction you added with
+[`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction).
+
+It is not sent when the device reports that it could not place the reaction, nor when the reaction
+never reaches a device.
+
+Adding a reaction of another type replaces yours: `reaction.added` is sent again with the same
+`reaction_id` and the new `reaction_type`, and no `reaction.removed` is sent. Keep the latest
+`reaction_type` for each `reaction_id`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `direction` | string | No | Always `outbound`. |
+| `actor_handle` | string | No | The handle of the line. |
+| `added_at` | string | No | The time iSnap recorded the device's confirmation. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_Yo3mlTXyTSpOrMYS4TEUsL606",
+  "event_type": "reaction.added",
+  "created_at": "2026-10-08T14:26:12.515Z",
+  "trace_id": "4c97dccf3686e6cbb8745d87f8df3391",
+  "data": {
+    "parent_message_id": "msg_7Hq3Zd9Kp2Vx6Wn4Tb8Lc5Ym1",
+    "reaction_id": "msg_9Bx4Lk7Qw2Zn5Hc8Tm3Vd6Ry1",
+    "reaction_type": "like",
+    "reaction_emoji": "👍",
+    "direction": "outbound",
+    "actor_handle": "+14155550124",
+    "added_at": "2026-10-08T14:26:12.480Z",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `actor_handle`.
+
+## `reaction.received`
+
+Sent when a contact adds a reaction to a message of the line.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `direction` | string | No | Always `inbound`. |
+| `from_handle` | string | No | The handle of the contact. |
+| `received_at` | string | No | The time the device gives for the reaction. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_od4S1OTQOIoDufq1ukEByQYSs",
+  "event_type": "reaction.received",
+  "created_at": "2026-10-08T14:27:30.842Z",
+  "trace_id": "6948adb4dda0c2d8adf12cdfad46cb37",
+  "data": {
+    "parent_message_id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+    "reaction_id": "msg_2Kd7Wn4Tx9Qb6Lc3Hm8Vz5Ry1",
+    "reaction_type": "love",
+    "reaction_emoji": "❤️",
+    "from_handle": "+14155550123",
+    "direction": "inbound",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "received_at": "2026-10-08T14:27:30.000Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `from_handle`.
+
+## `reaction.removed`
+
+Sent when a reaction is removed, in either direction. Tell the two cases apart with `direction`.
+
+### The contact removes a reaction
+
+`data` holds the fields of `reaction.received`, with `removed_at` in place of `received_at`.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_DJV0cu4nwzBOIklbM8BOYvsdK",
+  "event_type": "reaction.removed",
+  "created_at": "2026-10-08T14:29:02.611Z",
+  "trace_id": "d6c9849cbd21661f31de138a02e63360",
+  "data": {
+    "parent_message_id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+    "reaction_id": "msg_yUFbvflLgvBULo8HD3KJfwczN",
+    "reaction_type": "love",
+    "reaction_emoji": "❤️",
+    "from_handle": "+14155550123",
+    "direction": "inbound",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "removed_at": "2026-10-08T14:29:02.000Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### You remove a reaction
+
+Sent once the line's device confirms a removal you asked for with
+[`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction). `data` holds the
+fields of `reaction.added`, with `removed_at` in place of `added_at`.
+
+It is not sent when the line has no paired device, or when its device cannot remove reactions: the
+API call succeeds and no event follows.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_Wgun9H2N2AfZjB1Gwr5qzsUkA",
+  "event_type": "reaction.removed",
+  "created_at": "2026-10-08T14:30:47.130Z",
+  "trace_id": "566b22c3875a16bc6e1a15d500d0969f",
+  "data": {
+    "parent_message_id": "msg_7Hq3Zd9Kp2Vx6Wn4Tb8Lc5Ym1",
+    "reaction_id": "msg_XwSSm4ZSBTALETjqOOR5lFFVf",
+    "reaction_type": "like",
+    "reaction_emoji": "👍",
+    "direction": "outbound",
+    "actor_handle": "+14155550124",
+    "removed_at": "2026-10-08T14:30:47.093Z",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `from_handle` or `actor_handle`.

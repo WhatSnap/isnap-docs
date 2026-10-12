@@ -1,0 +1,84 @@
+---
+title: "Typing indicator events"
+description: "Gives the data of typing_indicator.started and typing_indicator.stopped, which only a line whose device detects typing sends, with an example of each and the personal data they carry."
+---
+
+The `typing_indicator.*` events announce that a contact starts or stops typing. Only a line whose
+device detects typing sends them: an iMessage line, rented, BYOD or shared, never does. This page
+says when each event is sent and lists the fields of `data`. See [Chat features](/guides/conversations) for the
+typing indicator your own line shows.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `chat_id` | string | No | The chat in which the contact types. |
+| `line_id` | string | No | The id of the line. For a trial, the trial's pool line. |
+| `from_handle` | string | No | The handle of the contact. |
+| `metadata` | null | Always `null` | A typing event has no main resource that carries `metadata`. |
+| `line_metadata` | object | Yes | The `metadata` of the line, when it belongs to your account. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+These events are sent only when the line's device reports that a contact is typing. On a BYOD line,
+read its `typing_in` capability on
+[`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health).
+
+These events are not sent for a typing indicator you start or stop yourself.
+
+**Personal data.** `from_handle` is a handle: a phone number or an email address. Do not copy it
+into logs, tickets or other tools. Refer to a contact by an id of your own.
+
+## `typing_indicator.started`
+
+Sent when a contact starts typing in a chat with the line.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `started_at` | string | No | The time the device gives. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_LE6K1XP1CAktq71PV6hxhBrg4",
+  "event_type": "typing_indicator.started",
+  "created_at": "2026-10-08T14:22:41.730Z",
+  "trace_id": "22dc56c9d8017368367efc63fd7e41e9",
+  "data": {
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "from_handle": "+14155550123",
+    "started_at": "2026-10-08T14:22:41.000Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `from_handle`.
+
+## `typing_indicator.stopped`
+
+Sent when a contact stops typing in a chat with the line.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `stopped_at` | string | No | The time the device gives. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_1bOXb7ykRz3eedrVdmoHrYKI6",
+  "event_type": "typing_indicator.stopped",
+  "created_at": "2026-10-08T14:22:53.512Z",
+  "trace_id": "eba12966af432a5e80b464fa0c28a9c6",
+  "data": {
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "from_handle": "+14155550123",
+    "stopped_at": "2026-10-08T14:22:53.000Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `from_handle`.

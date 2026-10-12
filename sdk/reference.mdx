@@ -1,0 +1,269 @@
+---
+title: "SDK method reference"
+sidebarTitle: "Method reference"
+description: "Maps every SDK method to the operation it calls and what it resolves with, and describes the attachments helper, the health and version calls, and the exported names and constants."
+---
+
+This page lists every method of the client, the operation each one calls, and the value it resolves with. Use it to find the method for an operation, then follow the link to the operation's reference page for its parameters, its fields and its errors.
+
+## Conventions
+
+A client exposes one property per resource, such as `client.messages`, and three methods of its own. Every method follows the same rules:
+
+- **Arguments.** Path parameters come first, then the request body or the query, then an optional [options](/sdk/configuration#per-call-options) object. The SDK URL-encodes path parameters.
+- **Bodies.** A request body is sent as given. Field names are the `snake_case` names of the API: the SDK converts no name.
+- **Queries.** A query value that is `undefined` or `null` is left out. Every other value is sent as a string.
+- **Result.** A successful call resolves with the `data` of the response. The HTTP status, the response headers, and the `trace_id` and `request_id` of the response are not available on success. A `200` cannot be told from a `201` or a `202`.
+- **No content.** A `204` response resolves with `undefined`.
+- **Failure.** A failed call throws: see [Errors and retries](/sdk/errors).
+
+## Methods
+
+### Client
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.version()` | [`GET /v1/version`](/api-reference/service/get-version) | `VersionInfo`: `{ version }`. |
+| `client.health()` | [`GET /v1/health`](/api-reference/service/get-health) | `HealthStatus`: `{ status, timestamp, checks }`. |
+| `client.request(method, path, body?, opts?)` | Any path. | The `data` of the response, with the type you give. See [Call an operation that has no method](/sdk/configuration#call-an-operation-that-has-no-method). |
+
+### Messages
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.messages.send(body)` | [`POST /v1/messages`](/api-reference/messages/send-message) | `Message` |
+| `client.messages.list(filters?)` | [`GET /v1/messages`](/api-reference/messages/list-messages) | `AsyncIterable<Message>`: see [Pagination](/sdk/pagination). |
+| `client.messages.get(id)` | [`GET /v1/messages/{id}`](/api-reference/messages/get-message) | `Message` |
+| `client.messages.cancel(id)` | [`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message) | `Message` |
+| `client.messages.addReaction(messageId, body)` | [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction) | `Reaction` |
+| `client.messages.removeReaction(messageId)` | [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction) | `ReactionRemoval` |
+
+### Chats
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.chats.list(filters?)` | [`GET /v1/chats`](/api-reference/chats/list-chats) | `AsyncIterable<Chat>`: see [Pagination](/sdk/pagination). |
+| `client.chats.get(chatId)` | [`GET /v1/chats/{chat_id}`](/api-reference/chats/get-chat) | `Chat` |
+| `client.chats.markRead(chatId, body)` | [`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read) | `ChatMarkRead` |
+| `client.chats.typingStart(chatId, body)` | [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/start-typing) | `ChatTypingStart` |
+| `client.chats.typingStop(chatId)` | [`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/stop-typing) | `ChatTypingStop` |
+| `client.chats.shareContactCard(chatId, body)` | [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) | `ShareContactCardResult` |
+
+### Attachments
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.attachments.create(body)` | [`POST /v1/attachments`](/api-reference/attachments/create-attachment) | `CreateAttachmentResponse` |
+| `client.attachments.get(id)` | [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment) | `Attachment` |
+| `client.attachments.upload(file, metadata, opts?)` | The two operations above and one upload request: see [The attachments helper](#the-attachments-helper). | `Attachment`, with `status: "ready"`. |
+
+### Recipient lookup
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.lookup.check(params)` | [`POST /v1/lookup`](/api-reference/lookup/look-up-recipient) | `LookupResult` |
+
+`lookup.check` resolves the same way on a final result and on a pending one. A pending result has `pending: true`, with `probe_id` and `retry_after`: repeat the call after `retry_after` seconds.
+
+### Lines
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.lines.list(query?)` | [`GET /v1/lines`](/api-reference/lines/list-available-lines) | `LineList`: one page, `{ lines, total, page, limit }`. |
+| `client.lines.get(id)` | [`GET /v1/lines/{id}`](/api-reference/lines/get-line) | `Line` |
+| `client.lines.listMine()` | [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) | `MyLines`: `{ lines }`. |
+| `client.lines.patch(id, body)` | [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line) | `Line` |
+| `client.lines.reserve(id)` | [`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line) | `Line` |
+| `client.lines.activate(id, body?)` | [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) | `Line` |
+| `client.lines.release(id)` | [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) | `Line` |
+| `client.lines.assign(body)` | [`POST /v1/lines/assign`](/api-reference/lines/assign-line) | `Line` |
+| `client.lines.mintShared(body?)` | [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) | `Line` |
+| `client.lines.terminate(id, body?)` | [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) | `Line` |
+| `client.lines.cancel(id)` | [`POST /v1/lines/{id}/cancel`](/api-reference/lines/cancel-line) | `Line` |
+| `client.lines.uncancel(id)` | [`POST /v1/lines/{id}/uncancel`](/api-reference/lines/uncancel-line) | `Line` |
+| `client.lines.setAnniversary(id, body)` | [`POST /v1/lines/{id}/anniversary`](/api-reference/lines/set-line-anniversary) | `Line` |
+| `client.lines.setVariant(id, body)` | [`POST /v1/lines/{id}/variant`](/api-reference/lines/change-line-variant) | `Line` |
+| `client.lines.cancelVariantChange(id)` | [`DELETE /v1/lines/{id}/variant`](/api-reference/lines/cancel-variant-change) | `undefined` |
+| `client.lines.convertToTest(id)` | [`POST /v1/lines/{id}/convert-to-test`](/api-reference/lines/convert-to-test-line) | `Line` |
+| `client.lines.convertFromTest(id)` | [`POST /v1/lines/{id}/convert-from-test`](/api-reference/lines/convert-from-test-line) | `Line` |
+| `client.lines.transferOwnership(id, body)` | [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) | `Line` |
+| `client.lines.getConfig(id)` | [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) | `LineConfigResponseData` |
+| `client.lines.updateConfig(id, body)` | [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) | `LineConfigResponseData` |
+| `client.lines.quota(id)` | [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-line-sending-limits) | `QuotaSnapshot` |
+| `client.lines.queue(id, query?)` | [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-line-queue) | `QueueResponseData`: one page. |
+| `client.lines.health(id)` | [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) | `LineHealth` |
+
+`lines.mintShared`, `lines.activate` and `lines.terminate` send `{}` when you give no body.
+
+### Webhook subscriptions
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.webhooks.create(body)` | [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook) | `Webhook`, with `secret`. |
+| `client.webhooks.list()` | [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) | `WebhookList`: `{ webhooks }`, the whole set. |
+| `client.webhooks.get(id)` | [`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhook) | `Webhook` |
+| `client.webhooks.update(id, body)` | [`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook) | `Webhook` |
+| `client.webhooks.delete(id)` | [`DELETE /v1/webhooks/{id}`](/api-reference/webhooks/delete-webhook) | `undefined` |
+| `client.webhooks.rotateSecret(id)` | [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/rotate-webhook-secret) | `WebhookRotateSecret`: `{ id, secret, old_secret_expires_at }`. |
+| `client.webhooks.deliveries(id, filters?)` | [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) | `AsyncIterable<WebhookDelivery>`: see [Pagination](/sdk/pagination). |
+| `client.webhooks.replay(webhookId, deliveryId)` | [`POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay`](/api-reference/webhooks/replay-webhook-delivery) | `WebhookDeliveryReplay`: `{ delivery_id, replay_of, status }`. |
+| `client.webhooks.events(filters)` | [`GET /v1/webhooks/events`](/api-reference/webhooks/list-webhook-events) | `AsyncIterable<WebhookEventItem>`: see [Pagination](/sdk/pagination). |
+
+`webhooks.replay` replays one delivery. It takes the id of a webhook subscription and the id of a delivery, not the id of an event.
+
+### Trials
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.trial.init(body?)` | [`POST /v1/trial/init`](/api-reference/trials/start-trial) | `TrialInitData` |
+| `client.trial.status(token)` | [`GET /v1/trial/status`](/api-reference/trials/get-trial-status) | `TrialStatusData` |
+| `client.trial.activity()` | [`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity) | `TrialActivityData` |
+| `client.trial.get(trialId)` | [`GET /v1/trial/{trial_id}`](/api-reference/trials/get-trial) | `Trial` |
+| `client.trial.update(trialId, body)` | [`PATCH /v1/trial/{trial_id}`](/api-reference/trials/update-trial) | `Trial` |
+| `client.trial.revoke(trialId, body?)` | [`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial) | `TrialRevokeData` |
+
+`trial.init` and `trial.revoke` send `{}` when you give no body. `trial.status(token)` puts the pairing code of the trial in the URL of the request. Treat the pairing code as a secret, and do not log request URLs. `trial.activity` is called with a trial key: create a [second client](/sdk/configuration#credentials) for it.
+
+### BYOD
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.byod.pair(body)` | [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing) | `ByodPairResponse` |
+| `client.apps.manifest()` | [`GET /v1/apps`](/api-reference/byod/get-app-downloads) | `AppManifest` |
+
+### Pre-orders
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.preOrders.create(body)` | [`POST /v1/pre-orders`](/api-reference/pre-orders/create-pre-order) | `PreOrder` |
+| `client.preOrders.list(query?)` | [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders) | `PreOrderListData`: one page, `{ items, has_more, next_cursor }`. |
+| `client.preOrders.get(id)` | [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) | `PreOrder` |
+| `client.preOrders.update(id, body)` | [`PATCH /v1/pre-orders/{id}`](/api-reference/pre-orders/update-pre-order) | `PreOrder` |
+| `client.preOrders.confirm(id)` | [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) | `PreOrder` |
+| `client.preOrders.cancel(id)` | [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) | `PreOrder` |
+| `client.areaCodes.list(query?)` | [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes) | `AreaCodes` |
+
+### Hosted macOS sessions
+
+| Method | Operation | Resolves with |
+| --- | --- | --- |
+| `client.macosSessions.rent(body?)` | [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) | `MacosSession` |
+| `client.macosSessions.get(id)` | [`GET /v1/macos-sessions/{id}`](/api-reference/macos-sessions/get-macos-session) | `MacosSession` |
+| `client.macosSessions.update(id, body)` | [`PATCH /v1/macos-sessions/{id}`](/api-reference/macos-sessions/update-macos-session) | `MacosSession` |
+| `client.macosSessions.cancel(id)` | [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session) | `MacosSession` |
+| `client.macosSessions.uncancel(id)` | [`POST /v1/macos-sessions/{id}/uncancel`](/api-reference/macos-sessions/uncancel-macos-session) | `MacosSession` |
+
+`macosSessions.rent` accepts `rent()`, `rent(opts)` and `rent({ metadata }, opts)`. The first argument is read as a body only when it has a `metadata` key.
+
+## Operations with no method
+
+One operation of the API reference has no method: [`GET /v1/attention`](/api-reference/lines/list-attention). Call it with [`client.request`](/sdk/configuration#call-an-operation-that-has-no-method).
+
+API keys are created and revoked in the [iSnap dashboard](https://platform.isnap.ai). The SDK has no method for them.
+
+## The attachments helper
+
+`attachments.upload(file, { filename, contentType }, opts?)` does three things in one call. It registers the attachment with `POST /v1/attachments`, uploads the bytes to the URL that operation returns, then polls `GET /v1/attachments/{id}` until the attachment is `ready`. It resolves with that attachment. To send the file, pass its `id` in the `attachments` array of `messages.send`.
+
+| Input | Rule |
+| --- | --- |
+| `file` | A `Blob`, an `ArrayBuffer` or a `Uint8Array`. A Node.js `Buffer` qualifies. Streams and file paths are not accepted: the whole file is in memory. Any other value throws `TypeError`. |
+| `filename`, `contentType` | The file name and the content type the attachment is registered with. |
+| `opts.pollIntervalMs` | The wait before each poll, in milliseconds. The default is 500. |
+| `opts.maxPolls` | The maximum number of polls. The default is 60. |
+
+`opts` also takes the [per-call options](/sdk/configuration#per-call-options). Each `upload()` call registers a new attachment, unless you pass an `idempotencyKey` that an earlier call used: the API then returns the attachment registered with that key while it is `awaiting_upload` and before its upload deadline, and `409 idempotency_terminal_state` in any other state. Pass a new key for each file.
+
+### Polling
+
+With the defaults the helper polls 60 times, 500 ms apart: 30 seconds of waiting, plus the time of the requests. After the last poll it throws `APIError` with status `504` and code `upload_timeout`.
+
+iSnap confirms a finished upload on a 30-second cycle, and converts an audio file before the attachment is `ready`. The default polling, 60 polls 500 milliseconds apart, can therefore end on an upload that succeeds. Raise `pollIntervalMs` to 2,000 to 5,000 milliseconds, so that `maxPolls` polls cover at least 60 seconds.
+
+Each poll is one API request, plus its automatic retries when it fails. Each request counts against the [request-rate limit](/errors-and-rate-limits#rate-limits), 100 requests per rolling 60 seconds. At the default interval, with no retry, the helper makes up to 2 requests per second: raising `maxPolls` alone can make up to 120 requests per minute.
+
+A timeout does not cancel the attachment.
+
+### Failures
+
+| Failure | Thrown |
+| --- | --- |
+| The file is larger than 5,368,709,120 bytes. | `APIError`, status `413`, code `attachment_exceeds_storage_limit`, before any request. |
+| The registration or a poll fails. | The error of that call, after its [automatic retries](/sdk/errors#automatic-retries). |
+| The upload request is refused. | `APIError`, code `upload_failed`, with the status of the upload response. |
+| The upload request fails or times out. | `APIConnectionError` |
+| The attachment becomes `failed`. | `APIError`, status `422`, code `upload_failed`. |
+| The attachment is not `ready` after `maxPolls` polls. | `APIError`, status `504`, code `upload_timeout`. Every status other than `ready` and `failed` keeps the polling going. |
+
+The upload request is sent once and is not retried. It has the `timeoutMs` of the client: a large file needs a larger `timeoutMs`.
+
+When the helper throws, it gives you no attachment id: on `upload_timeout`, and on `upload_failed` with status `422`, the id is in the text of the error message only. A refused upload carries no id. To keep the id, call `attachments.create`, upload the bytes yourself, and poll `attachments.get`. [Example: uploading an attachment](/sdk/examples/upload-attachment) shows both ways, and [Attachments](/guides/attachments) gives the limits and the retention of a file.
+
+## Health and version
+
+| Method | Behavior |
+| --- | --- |
+| `client.health()` | Resolves with `{ status, timestamp, checks }` on a `200` and on a `503`. `status` is `ok` or `degraded`. Any other status throws. The call is not retried unless you pass `maxRetries`. |
+| `client.version()` | Resolves with `{ version }`, the version of the API the client talks to. |
+
+The two operations need no credential. The client sends its key with them as with every request.
+
+```typescript
+import { ISnapClient, MIN_API_VERSION, SDK_VERSION } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const health = await client.health()
+if (health.status === 'degraded') {
+  console.warn('The API reports a degraded state.', health.timestamp)
+}
+
+const { version } = await client.version()
+console.log(`SDK ${SDK_VERSION}, API ${version}, MIN_API_VERSION ${MIN_API_VERSION}`)
+```
+
+## Exports
+
+The package exports 41 values, and its request, response and event types by name.
+
+| Values | Names |
+| --- | --- |
+| Client | `ISnapClient` |
+| Resource classes | `AppsResource`, `AreaCodesResource`, `AttachmentsResource`, `ByodResource`, `ChatsResource`, `LinesResource`, `LookupResource`, `MacosSessionsResource`, `MessagesResource`, `PreOrdersResource`, `TrialResource`, `WebhooksResource` |
+| Error classes | `APIError`, `BadRequestError`, `AuthenticationError`, `PaymentRequiredError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `GoneError`, `UnprocessableEntityError`, `RateLimitError`, `QuotaExceededError`, `InternalServerError`, `ServiceUnavailableError`, `APIConnectionError`, `WebhookSignatureError` |
+| Webhook functions | `verifyWebhook`, `parseWebhookEvent` |
+| Type guards | `isMessageEvent`, `isReactionEvent`, `isLineEvent`, `isTypingIndicatorEvent`, `isTrialEvent`, `isPreOrderEvent`, `isBindingEvent`, `isMacosSessionEvent`, `isAdminEvent` |
+| Constants | `SDK_VERSION`, `MIN_API_VERSION` |
+
+| Types | Names |
+| --- | --- |
+| Client and options | `ClientConfig`, `RequestOptions`, `RetryInfo`, `HttpMethod`, `HealthStatus`, `VersionInfo` |
+| Errors | `APIErrorMeta`, `ErrorEnvelope`, `ErrorIssue` |
+| Messages | `Message`, `SendMessageBody`, `ListMessagesQuery`, `Reaction`, `ReactionRemoval`, `ReactionType`, `SendReactionBody` |
+| Chats | `Chat`, `ListChatsQuery`, `ChatMarkRead`, `MarkReadBody`, `ChatTypingStart`, `ChatTypingStop`, `TypingStartBody`, `ShareContactCardBody`, `ShareContactCardResult` |
+| Attachments | `Attachment`, `CreateAttachmentBody`, `CreateAttachmentResponse`, `UploadInput`, `UploadMetadata`, `UploadOptions` |
+| Recipient lookup | `LookupRequest`, `LookupResult` |
+| Lines | `Line`, `LineList`, `MyLines`, `ListLinesQuery`, `PatchLineBody`, `ActivateLineBody`, `AssignLineBody`, `MintSharedLineBody`, `TerminateLineBody`, `SetLineAnniversaryBody`, `SetLineVariantBody`, `TransferOwnershipBody`, `LineConfigPatch`, `LineConfigResponseData`, `QuotaSnapshot`, `QueueResponseData`, `ListQueueQuery`, `LineHealth` |
+| Webhook subscriptions | `Webhook`, `WebhookList`, `CreateWebhookBody`, `UpdateWebhookBody`, `WebhookRotateSecret`, `WebhookDelivery`, `ListDeliveriesQuery`, `WebhookDeliveryReplay`, `WebhookEventItem`, `ListEventsQuery` |
+| Webhook events | `VerifyWebhookOptions`, `WebhookEventBase`, `WebhookEvent`, `WebhookPartnerMetadata`, `MessageEvent`, `ReactionEvent`, `ReactionEventData`, `LineEvent`, `TypingIndicatorEvent`, `TrialEvent`, `PreOrderEvent`, `BindingEvent`, `MacosSessionEvent`, `AdminEvent`, and one `EventType` alias per family, such as `MessageEventType` |
+| Trials | `Trial`, `TrialInitBody`, `TrialInitData`, `TrialStatusData`, `TrialActivityData`, `PatchTrialBody`, `TrialRevokeBody`, `TrialRevokeData` |
+| BYOD | `ByodPairBody`, `ByodPairResponse`, `AppManifest`, `AppDownloadEntry` |
+| Pre-orders | `PreOrder`, `PreOrderStatus`, `CreatePreOrderBody`, `PatchPreOrderBody`, `ListPreOrdersQuery`, `PreOrderListData`, `AreaCodes`, `AreaCode`, `Country`, `ListAreaCodesQuery` |
+| Hosted macOS sessions | `MacosSession`, `RentMacosSessionBody`, `PatchMacosSessionBody` |
+
+The request and response types are generated from the OpenAPI document. Their fields are the `snake_case` fields of the API. The generated `paths` and `components` types are not exported.
+
+TypeScript rejects a request field that is not in the API. In plain JavaScript nothing checks the field names: a misspelled field is sent as given. Nine operations refuse a field they do not define with `400 validation_failed`, and every other operation ignores it, as `POST /v1/messages` does: see [Requests](/api-reference/introduction#requests).
+
+## Versions
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `SDK_VERSION` | `"2.2.1"` | The version of the SDK. It is independent of the API version. |
+| `MIN_API_VERSION` | `"2.24.0"` | Informational: the SDK does not check it. |
+
+The SDK follows Semantic Versioning. It sends no API version and negotiates none: `client.version()` returns the version of the API the client talks to. [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) gives the version scheme of the API.
+
+## Personal data
+
+The SDK stores nothing. It passes handles, message text and metadata through as given. Many methods return them: the message, chat, trial and lookup methods, and the webhook events. Request this data only when needed. Do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.

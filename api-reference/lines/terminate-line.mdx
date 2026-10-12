@@ -1,0 +1,28 @@
+---
+title: "Terminate a line"
+description: "Ends an active or suspended line you own, immediately and for good."
+openapi: "POST /v1/lines/{id}/terminate"
+---
+
+- **Credential:** an API key of the owner of the line, on any account. See [Terminate](/guides/managing-lines#terminate) for the effect on billing.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Test keys:** a termination sent with an `isnap_test_` account key ends the real line: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. Terminating a line that is already `cancelled` returns `200` with the line unchanged and sends no event, so a retry is safe.
+- **Events:** [`line.terminated`](/webhooks/events/line#line-terminated), [`line.disconnected`](/webhooks/events/line#line-disconnected), one [`message.failed`](/webhooks/events/message#message-failed) for each failed message, and one [`binding.released`](/webhooks/events/binding#binding-released) for each released binding of a shared line.
+- **Hosted macOS sessions:** the sessions that ran the line are taken off it and listed in `released_macos_session_ids` of `line.terminated`. Each stays rented until you cancel it with [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 403 | `pool_line_not_terminable` | The line is a dedicated pool line: `billing_tier: shared_pool`, and not a test line. To end it, write to [support@isnap.ai](mailto:support@isnap.ai). |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 409 | `line_not_customer_terminable` | The line is `reserved` or `provisioning`. |
+| 409 | `test_line_in_use` | The line is a test line, and a trial that is not revoked uses it. |
+| 409 | `subscription_cancel_failed`, `subscription_lookup_failed`, `subscription_id_untrustworthy` | The per-line subscription could not be canceled or read. The line was not terminated. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 409 | `line_terminated_concurrently`, `line_ownership_changed_concurrently`, `line_status_changed_concurrently` | The line changed during the call, and this call did not terminate it. Its per-line subscription can already be canceled. A line that has not ended and still carried that subscription then leaves your account. Read the line, and write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+
+Branch on `error.code`, never on `error.message`.
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,22 @@
+---
+title: "Get a line"
+description: "Returns one rented or BYOD line, with its phone number masked unless the caller owns the line."
+openapi: "GET /v1/lines/{id}"
+---
+
+- **Credential:** optional. A valid API key of the owner of the line gets the full phone number. Any other caller gets the same line with the phone number masked. See [Your lines](/guides/managing-lines#your-lines).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied here. The key gets the full phone number of any line of its account.
+- **Events:** none.
+- **Personal data:** `phone_number`, in full to the owner of the line, and `metadata`, to every caller. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Invalid credential:** it is ignored. The response is `200` with the masked number, never `401`.
+- **Lines that are not served:** shared lines, test lines and dedicated pool lines return `404`, even to their owner. Read them with [`GET /v1/lines/my`](/api-reference/lines/list-my-lines).
+- **Metadata:** the `metadata` of the line is returned to every caller. Never put personal data or secrets in it: see [Metadata](/guides/managing-lines#metadata).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The id is not `line_` followed by 25 characters from `0-9A-Za-z`. |
+| 404 | `not_found` | No line has this id, or the line is a shared line or a line with `billing_tier: shared_pool`: a test line or a dedicated pool line. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

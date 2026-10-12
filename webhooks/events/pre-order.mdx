@@ -1,0 +1,88 @@
+---
+title: "Pre-order events"
+description: "Gives the data of pre_order.fulfilled and pre_order.cancelled, with an example of each and the personal data they carry."
+---
+
+The `pre_order.*` events announce the two ends of a pre-order: its line is handed over, or you
+cancel the draft. This page says when each of the two event types is sent and when it is not, lists
+the fields of `data`, and shows a full event. See [Pre-orders](/guides/pre-orders) for the flow.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `pre_order_id` | string | No | The id of the pre-order: a UUID. |
+| `metadata` | object | Yes | The `metadata` of the pre-order. |
+| `line_metadata` | object | Yes | The `metadata` of the line the event is tied to, when it belongs to your account. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+No event announces that a pre-order is created or confirmed, that iSnap cancels the order behind a
+confirmed pre-order, or that the estimated fulfillment time has passed: read the pre-order with
+[`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order).
+
+## `pre_order.fulfilled`
+
+Sent once when iSnap hands over the line of a pre-order. The pre-order becomes `fulfilled` in the
+same step.
+
+The event is tied to the new line. A subscription with a line filter receives it only if it lists
+that line, and the pre-order does not give you the line id beforehand: receive pre-order events on
+a subscription without a line filter.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `pre_order_id` | string | No | The id of the pre-order. |
+| `line_id` | string | No | The id of the line that was handed over. |
+| `phone_number` | string | Yes | The full number of the line, unmasked. |
+| `billing_tier` | string | No | The `billing_tier` of the line: `rental_iphone`. |
+| `fulfilled_at` | string | No | The time of the hand-over. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_lCXSyzzhW3qWUgjBjiSWqGA3L",
+  "event_type": "pre_order.fulfilled",
+  "created_at": "2026-10-08T19:30:44.158Z",
+  "trace_id": "df793e9f23155b81b5e950f2f7b0ee31",
+  "data": {
+    "pre_order_id": "7f3c2a10-5b8e-4d6f-9a21-c4e8b7d05f36",
+    "line_id": "line_9Wn4Kc7Tx2Qd5Hb8Lm3Vz6Ry1",
+    "phone_number": "+14155550125",
+    "billing_tier": "rental_iphone",
+    "fulfilled_at": "2026-10-08T19:30:44.120Z",
+    "metadata": { "order_ref": "po_5560" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: `phone_number` is the number of your line.
+
+## `pre_order.cancelled`
+
+Sent when you cancel a draft pre-order with
+[`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order).
+
+The event is tied to no line: a subscription with a line filter never receives it.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `pre_order_id` | string | No | The id of the pre-order. |
+| `cancelled_at` | string | No | The time of the cancellation. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_O0TshFIHcAbhX9r4Ck8hlnyed",
+  "event_type": "pre_order.cancelled",
+  "created_at": "2026-10-08T09:12:05.770Z",
+  "trace_id": "53ab27debdbd04a18a085e24e118ab9c",
+  "data": {
+    "pre_order_id": "7f3c2a10-5b8e-4d6f-9a21-c4e8b7d05f36",
+    "cancelled_at": "2026-10-08T09:12:05.733Z",
+    "metadata": { "order_ref": "po_5560" },
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.

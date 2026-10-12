@@ -1,0 +1,21 @@
+---
+title: "Get an attachment"
+description: "Returns an attachment and, when it is ready, a download URL valid 15 minutes."
+openapi: "GET /v1/attachments/{id}"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. An API key reads the attachments that its account created, and the files received on the inbound messages of its lines.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied: such a key reads every attachment the account can read.
+- **Events:** none.
+- **Personal data:** `filename` and the file behind `download_url` can hold personal data. Request them only when needed, do not copy them into logs, tickets or other tools, and refer to a contact by an id of your own. Treat `download_url` as a secret for as long as it is valid.
+- **Download URL:** `download_url` is set only when `status` is `ready`, and is valid until `download_expires_at`, 15 minutes later. Call the operation again for a new URL. See [Downloading a file](/guides/attachments#downloading-a-file).
+- **Waiting:** iSnap checks for an uploaded file every 30 seconds. Read this operation until `status` is `ready` before you send the attachment. See [Statuses](/guides/attachments#statuses).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 404 | `not_found` | The id is unknown, or the attachment is not one your account can read. |
+| 410 | `attachment_expired` | `expires_at` has passed: 72 hours after the attachment was created, or after iSnap registered a received file. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,28 @@
+---
+title: "Remove a reaction"
+description: "Removes the line's reaction from a message."
+openapi: "DELETE /v1/messages/{id}/reactions"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Removing a reaction](/guides/conversations#removing-a-reaction).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `404 not_found` for a message on a line outside its list.
+- **Test keys:** a removal sent with an `isnap_test_` account key reaches the real contact: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored. The key shares the space of the line with `POST /v1/messages`. See [Retrying a reaction](/guides/conversations#retrying-a-reaction).
+- **Events:** sends `reaction.removed` when the line's device confirms the removal. Sends nothing in the other cases.
+- **Response:** `removed` is `false` and `type` is `null` when the line had no reaction on the message. `removed: true` does not mean that the reaction left the contact's screen: when the line has no paired device, or when the device fails the removal, nothing reaches the contact.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The id is malformed. |
+| 400 | `line_not_active` | The message's line is neither `active` nor `suspended`. |
+| 403 | `line_suspended` | The message's line is suspended. |
+| 404 | `not_found` | The message is unknown, belongs to another account, or is on a line outside the list of a line-scoped key. |
+| 409 | `idempotency_conflict` | The `Idempotency-Key` was already used on this line for another call. |
+| 422 | `sms_reactions_not_supported` | The message was sent or received as SMS or RCS. |
+| 422 | `multi_attachment_reaction` | The message has more than one attachment. |
+| 422 | `parent_not_yet_acked` | The line's device has not confirmed the message, or the message was typed on the line's device. |
+| 422 | `reaction_recipient_unsupported` | The contact's handle is longer than 20 characters, as most email addresses are. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

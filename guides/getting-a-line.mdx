@@ -1,0 +1,476 @@
+---
+title: "Getting a line"
+description: "Compare the ways to get a line and who can use each, browse the marketplace, and reserve, activate, assign or create a line."
+---
+
+A [line](/concepts#lines) is what sends and receives messages. This page lists the ways to get one and who can use each, and describes the operations that take a line from the marketplace or create a shared line. Read it before you write the code that adds a line to your account.
+
+## Ways to get a line
+
+| Way | Who can use it | Where payment happens |
+| --- | --- | --- |
+| Reserve a marketplace line | Every account | Nothing is paid at the reservation. A direct account cannot activate the line through the API: it buys a line by writing to [support@isnap.ai](mailto:support@isnap.ai), or orders one with a [pre-order](/guides/pre-orders). See [Accounts](/concepts#accounts). |
+| Reserve a marketplace line, then activate it with [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
+| Take a marketplace line in one call with [`POST /v1/lines/assign`](/api-reference/lines/assign-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
+| Create a shared line with [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
+
+The operations that acquire a line take no payment. Two other operations can charge an account: [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) charges a direct account that receives an `active` rented line, and [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) opens the monthly billing of the line that a direct account ordered.
+
+iSnap grants the status of [wholesale partner](/concepts#accounts), and no field of any response says whether your account has it. An account without it receives `402 checkout_required` from `activate` and `assign`, and `402 payment_required` from `POST /v1/lines/shared`. To ask for the status, write to [support@isnap.ai](mailto:support@isnap.ai).
+
+Three other ways have their own page:
+
+- [Pre-orders](/guides/pre-orders): order a rented line and state the area codes you prefer.
+- [BYOD lines](/guides/byod): pair your own Mac and iPhone, or your own Android phone. The line appears, already `active`, when the device completes pairing.
+- [Trials](/guides/trials): let a prospect exchange messages with an iSnap line from their own phone.
+
+An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. A line you get with a test key is a real line, billed like any other. See [Test keys](/authentication#test-keys).
+
+## The marketplace
+
+[`GET /v1/lines`](/api-reference/lines/list-available-lines) lists the lines that can be acquired now. It needs no credential and ignores one: phone numbers are masked for every caller.
+
+- **What is listed.** Only lines whose `status` is `available`, that are fully operational, and whose Apple ID is not flagged. A line can leave the list and come back without being acquired. A line that is not in the list cannot be acquired now: read the list again before each reservation.
+- **Masked numbers.** A North American number reads `+1 (415) ***-**23`: the area code and the last two digits stay visible. Any other number keeps its country calling code and its last two digits, with asterisks in between. A number that cannot be parsed reads `""`.
+- **Full line objects.** Each listed line carries every field of the line object, `metadata` included. See [Metadata at acquisition](#metadata-at-acquisition).
+
+The filters combine. Each one is optional.
+
+| Parameter | Keeps the lines that match |
+| --- | --- |
+| `billing_tier` | One [line kind](/concepts#line-kinds): `rental_iphone`, `rental_android`, `byod_imessage` or `byod_android`. The values `shared_imessage` and `shared_pool` are accepted and always return an empty list. |
+| `area_code` | This area code exactly. At most 10 characters. |
+| `country_code` | This country, as its 2-letter ISO code. Case-insensitive. |
+| `state` | This US state, as a code or a name, of 2 to 40 characters. Case-insensitive. An unknown value returns an empty list. A value outside the length bounds returns `400 validation_failed`. |
+| `country` | This country, as an ISO code or a country name, of 2 to 60 characters. Case-insensitive. An unknown value returns an empty list. A value outside the length bounds returns `400 validation_failed`. |
+| `status` | `available` only. Any other value returns `400 validation_failed`. Omitting it changes nothing. |
+| `metadata.<key>` | Lines whose `metadata` holds exactly this string under `<key>`. When a key is repeated, its first value applies. Anyone can use this filter, without a credential: never put personal data or secrets in line `metadata`. |
+
+The list is paged by page number, not by the cursors of the [other list operations](/pagination#list-operations). `page` starts at 1 and defaults to 1. `limit` is 1 to 100 and defaults to 20. The response is `{ lines, total, page, limit }`: lines are ordered by `area_code`, then by `phone_number`, and `total` is the number of lines that match the filters.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/lines?billing_tier=rental_iphone&area_code=415&page=1&limit=20"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+// The SDK needs a key even for an operation that requires none.
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const { lines, total } = await client.lines.list({
+  billing_tier: 'rental_iphone',
+  area_code: '415',
+  page: 1,
+  limit: 20
+})
+
+console.log(`${total} lines match`)
+for (const line of lines) console.log(line.id, line.phone_number)
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/lines",
+    params={"billing_tier": "rental_iphone", "area_code": "415", "page": 1, "limit": 20},
+    timeout=30,
+)
+response.raise_for_status()
+data = response.json()["data"]
+
+print(f"{data['total']} lines match")
+for line in data["lines"]:
+    print(line["id"], line["phone_number"])
+```
+
+</CodeGroup>
+
+## Reservations
+
+[`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line) reserves an `available` line for your account for 15 minutes. The response is the line with `status: reserved`, the full phone number, and `expires_at` set to the end of the 15 minutes. Any account can reserve a line, and the call checks no payment method.
+
+A `reserved` line is not billed and cannot send. What you do next depends on your account:
+
+| Account | Next step, before `expires_at` |
+| --- | --- |
+| Direct account | `POST /v1/lines/{id}/activate` returns `402 checkout_required`. To buy a line, write to [support@isnap.ai](mailto:support@isnap.ai): see [Accounts](/concepts#accounts). When nothing activates the line before `expires_at`, it returns to the marketplace. |
+| Wholesale partner | Call [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line). See [Activation](#activation). |
+
+The rules of a reservation:
+
+- A reservation cannot be extended. Reserving a line that you have already reserved returns `409 conflict`.
+- The API does not limit the number of lines that one account has reserved at the same time.
+- `reserve` returns `409` whenever the line cannot be taken. The code is `conflict` when the line is not `available` or does not exist. It is a code that starts with `line_`, such as `line_apple_id_flagged`, when the line is `available` but cannot be acquired now. The set of `line_` codes is open: treat any `409` as "choose another line", except after a request whose response you did not receive (see [Retries](#retries)). `reserve` never returns `404`.
+- After `expires_at`, the line returns to `available` with no owner, and `activate` returns `409 line_not_reserved`. No event is sent.
+- `expires_at` has a meaning only while `status` is `reserved`. Do not read it on a line in another status.
+
+To give a reserved line back before it expires, call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line). The line returns to `available` immediately and has no owner. The call changes no billing and sends no event. It returns `404 not_found` for any line that you have not reserved, an `active` line included: to end a line that you use, see [Ending a line](/guides/managing-lines#ending-a-line).
+
+## Activation
+
+[`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) turns a line that you reserved, within its 15 minutes, into an `active` line. Wholesale partners only: any other account receives `402 checkout_required`. A direct account buys a line by writing to [support@isnap.ai](mailto:support@isnap.ai): see [Accounts](/concepts#accounts).
+
+The activated line has no per-line subscription: it is billed on the monthly invoice of the wholesale partner. The response has `expires_at: null` and `anniversary_at` set. The body is optional:
+
+| Field | Effect |
+| --- | --- |
+| `inbound_only` | `true` activates a rented line as an [inbound-only line](/concepts#line-kinds). Omitted or `false`, the line is a two-way line. On a line that is not rented, `true` returns `400 inbound_only_not_rental`. |
+| `billing_anchor_at` | States the billing anchor of the line. A timestamp more than 31 days after the activation returns `400 billing_anchor_too_far`. See [Anniversary and billing anchor](/guides/managing-lines#anniversary-and-billing-anchor). |
+
+When the line is not reserved by your account within the 15 minutes, `activate` returns `409 line_not_reserved`: the reservation expired or was released, the line was never reserved, or the id is unknown. When the reserved line can no longer be acquired, `activate` returns `400` with one of the `line_` codes of `reserve`: release the line and choose another one.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/reserve" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+# Wholesale partners only: a direct account receives 402 checkout_required.
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/activate" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"inbound_only": false}'
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient, PaymentRequiredError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Neither call honors Idempotency-Key, so the SDK must not retry them on its own.
+const once = { maxRetries: 0 }
+
+async function reserveAndActivate(lineId: string) {
+  try {
+    const reserved = await client.lines.reserve(lineId, once)
+    console.log(`Reserved until ${reserved.expires_at}`)
+  } catch (err) {
+    // Any 409 means that this line cannot be taken now: choose another one.
+    if (err instanceof ConflictError) return null
+    throw err
+  }
+
+  try {
+    return await client.lines.activate(lineId, { inbound_only: false }, once)
+  } catch (err) {
+    if (err instanceof PaymentRequiredError) {
+      // 402 checkout_required: the account is not a wholesale partner.
+      // The line stays reserved until expires_at.
+      return null
+    }
+    if (err instanceof ConflictError && err.code === 'line_not_reserved') {
+      // The 15 minutes are over: reserve a line again.
+      return null
+    }
+    throw err
+  }
+}
+
+const line = await reserveAndActivate('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd')
+console.log(line?.status)
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+
+def reserve_and_activate(line_id):
+    reserved = requests.post(f"{API}/v1/lines/{line_id}/reserve", headers=HEADERS, timeout=30)
+    if reserved.status_code == 409:
+        # Any 409 means that this line cannot be taken now: choose another one.
+        return None
+    reserved.raise_for_status()
+    print("Reserved until", reserved.json()["data"]["expires_at"])
+
+    activated = requests.post(
+        f"{API}/v1/lines/{line_id}/activate",
+        headers=HEADERS,
+        json={"inbound_only": False},
+        timeout=30,
+    )
+    if activated.status_code == 402:
+        # checkout_required: the account is not a wholesale partner.
+        # The line stays reserved until expires_at.
+        return None
+    if activated.status_code == 409 and activated.json()["error"]["code"] == "line_not_reserved":
+        # The 15 minutes are over: reserve a line again.
+        return None
+    activated.raise_for_status()
+    return activated.json()["data"]
+
+
+line = reserve_and_activate("line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd")
+print(line["status"] if line else None)
+```
+
+</CodeGroup>
+
+## Assignment
+
+[`POST /v1/lines/assign`](/api-reference/lines/assign-line) makes one available line yours and activates it, in one call. Wholesale partners only: any other account receives `402 checkout_required` once the body passes validation, before any line is looked at.
+
+| Field | Meaning |
+| --- | --- |
+| `billing_tier` | Required. The [line kind](/concepts#line-kinds) to take: `rental_iphone`, `rental_android`, `byod_imessage` or `byod_android`. |
+| `area_code` | Take a line with exactly this area code. |
+| `inbound_only` | `true` takes the line as an inbound-only line. Rented kinds only: `400 inbound_only_not_rental` otherwise. |
+| `as_test_line` | `true` makes the line a [test line](/guides/managing-lines#test-lines). Rented kinds only (`400 test_line_not_rental`), and not together with `inbound_only` (`400 test_line_not_inbound_only`). |
+| `metadata` | The `metadata` of the line. See [Metadata at acquisition](#metadata-at-acquisition). |
+
+The line comes back `active`, with no per-line subscription. When several lines match, the API does not specify which one it chooses. When none matches, it returns `409 no_matching_line`.
+
+With `as_test_line: true`, the line is assigned first and converted second. When the conversion alone fails, the call returns the error and the line stays assigned to you as a rented line. Before you retry a failed call that carried `as_test_line`, read [`GET /v1/lines/my`](/api-reference/lines/list-my-lines): if the line is there, convert it with [`POST /v1/lines/{id}/convert-to-test`](/api-reference/lines/convert-to-test-line) and do not assign again.
+
+Always send an `Idempotency-Key` with this call: see [Retries](#retries).
+
+<CodeGroup>
+
+```bash curl
+# One key per line you want.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the request: reuse it to retry.
+
+curl -sS -X POST "https://api.isnap.ai/v1/lines/assign" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"billing_tier":"rental_iphone","area_code":"415","metadata":{"crm_account_id":"acct_1042"}}'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { ConflictError, ISnapClient, PaymentRequiredError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// One key per line you want.
+const idempotencyKey = randomUUID() // Store it with your record of the request: reuse it to retry.
+
+try {
+  const line = await client.lines.assign(
+    {
+      billing_tier: 'rental_iphone',
+      area_code: '415',
+      metadata: { crm_account_id: 'acct_1042' }
+    },
+    { idempotencyKey }
+  )
+  console.log(line.id, line.phone_number, line.status)
+} catch (err) {
+  if (err instanceof PaymentRequiredError) {
+    // 402 checkout_required: wholesale partners only.
+    console.error('This account cannot assign lines.')
+  } else if (err instanceof ConflictError && err.code === 'no_matching_line') {
+    console.error('No available line matches these filters: change them.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import json
+import os
+import time
+import uuid
+
+import requests
+
+API = "https://api.isnap.ai"
+
+
+def post_with_key(path, payload, key):
+    """POST with an idempotency key. Retry a lost response, a 500 or a 503 up to 2 times, with the same key."""
+    headers = {
+        "Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+    }
+    # Serialize once: the API compares the body of a retry byte for byte.
+    body = json.dumps(payload)
+    response = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2 ** (attempt - 1))
+        try:
+            response = requests.post(f"{API}{path}", headers=headers, data=body, timeout=30)
+        except (requests.ConnectionError, requests.Timeout):
+            # No response: the request may have run. The same key makes the retry safe.
+            if attempt == 2:
+                raise
+            continue
+        if response.status_code not in (500, 503):
+            break
+    return response
+
+
+def assign_line(billing_tier, area_code, metadata):
+    # One key per line you want.
+    idempotency_key = str(uuid.uuid4())  # Store it with your record of the request: reuse it to retry.
+    payload = {"billing_tier": billing_tier, "area_code": area_code, "metadata": metadata}
+    response = post_with_key("/v1/lines/assign", payload, idempotency_key)
+
+    if response.status_code == 402:
+        # checkout_required: wholesale partners only.
+        print("This account cannot assign lines.")
+        return None
+    if response.status_code == 409 and response.json()["error"]["code"] == "no_matching_line":
+        print("No available line matches these filters: change them.")
+        return None
+    response.raise_for_status()
+    return response.json()["data"]
+
+
+line = assign_line("rental_iphone", "415", {"crm_account_id": "acct_1042"})
+if line:
+    print(line["id"], line["phone_number"], line["status"])
+```
+
+</CodeGroup>
+
+## Shared lines
+
+A [shared line](/concepts#line-kinds) has no hardware and no number of its own. Each contact is served by a number that iSnap binds to them: the first message to a contact creates the binding, and later messages to that contact use the same number. The binding ends when no message was exchanged with the contact for 90 days, a setting of iSnap, and the API then sends [`binding.released`](/webhooks/events/binding#binding-released). For what a send from a shared line returns, see [Sending messages](/guides/sending-messages).
+
+[`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) creates one shared line per call and returns `201` with the line, already `active`. Wholesale partners only: any other account receives `402 payment_required`.
+
+- The body is optional, and `metadata` is its only field.
+- The new line has `shared: true`, `phone_number: ""`, `capabilities: ["imessage"]`, `inbound_only: false` and `stripe_subscription_id: null`.
+- The API does not limit the number of shared lines that an account creates. Every call creates one more billable line: always send an `Idempotency-Key`, as described in [Retries](#retries).
+- [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns `404 not_found` for a shared line, even to its owner. Read your shared lines with [`GET /v1/lines/my`](/api-reference/lines/list-my-lines).
+
+<CodeGroup>
+
+```bash curl
+# One key per line you want.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the request: reuse it to retry.
+
+curl -sS -X POST "https://api.isnap.ai/v1/lines/shared" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"metadata":{"crm_account_id":"acct_1042"}}'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { ISnapClient, PaymentRequiredError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// One key per line you want.
+const idempotencyKey = randomUUID() // Store it with your record of the request: reuse it to retry.
+
+try {
+  const line = await client.lines.mintShared(
+    { metadata: { crm_account_id: 'acct_1042' } },
+    { idempotencyKey }
+  )
+  console.log(line.id, line.status, line.shared)
+} catch (err) {
+  if (err instanceof PaymentRequiredError) {
+    // 402 payment_required: wholesale partners only.
+    console.error('This account cannot create shared lines.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import json
+import os
+import time
+import uuid
+
+import requests
+
+# One key per line you want.
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the request: reuse it to retry.
+headers = {
+    "Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}",
+    "Content-Type": "application/json",
+    "Idempotency-Key": idempotency_key,
+}
+# Serialize once: the API compares the body of a retry byte for byte.
+body = json.dumps({"metadata": {"crm_account_id": "acct_1042"}})
+
+response = None
+for attempt in range(3):
+    if attempt:
+        time.sleep(2 ** (attempt - 1))
+    try:
+        response = requests.post("https://api.isnap.ai/v1/lines/shared", headers=headers, data=body, timeout=30)
+    except (requests.ConnectionError, requests.Timeout):
+        # No response: the request may have run. The same key makes the retry safe.
+        if attempt == 2:
+            raise
+        continue
+    # Retry a 500, or a 503 idempotency_in_flight, with the same key.
+    if response.status_code not in (500, 503):
+        break
+
+if response.status_code == 402:
+    # payment_required: wholesale partners only.
+    print("This account cannot create shared lines.")
+else:
+    response.raise_for_status()
+    line = response.json()["data"]
+    print(line["id"], line["status"], line["shared"])
+```
+
+</CodeGroup>
+
+## Retries
+
+`POST /v1/lines/assign` and `POST /v1/lines/shared` honor `Idempotency-Key`. Without a key, every retry takes or creates one more billable line: always send one, and reuse it only to retry the same request. The API remembers the key for 24 hours: after that, the same request with the same key takes or creates another line. The rules are in [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).
+
+`reserve`, `activate` and `release` ignore the header. When the response to one of them is lost, do not resend the call blindly: read [`GET /v1/lines/my`](/api-reference/lines/list-my-lines), which lists a line that you have reserved with `status: reserved` and a line that you activated with `status: active`.
+
+By default, the SDK sends an `Idempotency-Key` of its own with every write, and reuses it only on the automatic retries of that one call. Two calls to `lines.assign` get two keys, and can take two lines. To retry a call yourself, pass the key of the first attempt in `idempotencyKey`, as the samples on this page do.
+
+## Metadata at acquisition
+
+`metadata` is an object of your own keys that stays on the line: see [Metadata](/guides/managing-lines#metadata) for its limits and its reserved keys. Each way to get a line treats it differently:
+
+| Operation | What happens to `metadata` |
+| --- | --- |
+| `POST /v1/lines/assign` | Replaced by the `metadata` of the request, or cleared when the request has none. |
+| `POST /v1/lines/shared` | Set to the `metadata` of the request. |
+| `reserve`, then `activate`, or any other activation of a reserved line | Left as it is. |
+
+A line that returns to the marketplace keeps its `metadata`: a release, an expired reservation and the end of a per-line subscription do not clear it. A line that you get through `reserve` can therefore carry keys that an earlier owner left. After you get a line this way, read its `metadata` and remove the keys you do not know with [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line).
+
+A line from the marketplace also keeps its chats. You list the chats of its earlier owners, and you can receive events about their messages. Ignore the chats and the events about messages from before you got the line: see [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+
+<Warning>
+Line `metadata` is readable by anyone who holds the line id, and it stays on a line that returns to the marketplace, where `GET /v1/lines` lists it, and filters lines by it, without a credential. Never put personal data or secrets in line `metadata`. Refer to a contact, or to an account in your own system, by an id of your own.
+</Warning>
+
+## Line-scoped keys
+
+A [line-scoped key](/authentication#line-scoped-keys) cannot get a new line:
+
+- `POST /v1/lines/assign` and `POST /v1/lines/shared` return `403 forbidden` to every line-scoped key.
+- `reserve`, `activate` and `release` return `403 forbidden` for any line that is not in the list of the key.
+
+Use a key with no list of lines to get a line.
+
+## Events
+
+None of the operations on this page sends an event. No event announces a reservation, its expiry, a release, an activation, or the creation of a shared line. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+To know the state of a line, read it: [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) returns your `active` and `reserved` lines, and [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns one rented or BYOD line in any status.
+
+## Next steps
+
+- [Managing lines](/guides/managing-lines): read, configure, watch and end the lines you own.
+- [Sending messages](/guides/sending-messages): send from an `active` line.

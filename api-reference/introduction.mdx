@@ -1,374 +1,253 @@
 ---
-title: "API Reference"
-description: "Conventions used across every endpoint — base URL, authentication, envelopes, errors, idempotency, pagination, IDs."
+title: "API reference"
+sidebarTitle: "Overview"
+description: "Lists every operation of the iSnap API with the credential it accepts, and gives the base URL, the response conventions, the compatibility rules and the OpenAPI document."
 ---
 
-Everything below applies to **every** endpoint. The per-endpoint
-reference is generated from the
-[OpenAPI spec](/api-reference/openapi.json) — use the sidebar to
-navigate.
+This page is the map of the API: its base URL, the tables of its 70 operations with the credential each one takes, the conventions every operation follows, and the compatibility rules. Each operation has its own page, with its parameters, its responses and its errors.
 
 ## Base URL
 
-```
+```text
 https://api.isnap.ai
 ```
 
-Test API keys (`isnap_test_*`) produce real-shaped responses but never
-reach a real device. Live keys (`isnap_live_*`) are production traffic.
+Every operation is served at this host, under the `/v1/` path prefix. There is one host for every kind of key. Calls use HTTPS: a plain HTTP request is not served and returns `301` to the HTTPS URL. Call the API from a server: iSnap does not grant cross-origin browser access to other websites.
 
-## Authentication
+## Operations
 
-Every `/v1/*` endpoint requires an API key in the `Authorization`
-header. The two exceptions are
-[`GET /v1/health`](/api-reference/meta/get-health) and
-[`GET /v1/version`](/api-reference/meta/get-version), which are
-unauthenticated probes.
+These tables are the canonical list of the operations. Their columns:
 
-### Where to get a key
+- **Credential.** `API key` is an `isnap_live_` or `isnap_test_` key: both do the same thing. `Trial key` is the key of one trial. `None` means that the operation needs no credential. See [Authentication](/authentication).
+- **Account.** "Wholesale partners only" marks an operation that a direct account cannot use. An empty cell means any account. See [Accounts](/concepts#accounts).
+- **`Idempotency-Key`.** "Yes" means that the operation reads the header and recognizes a repeated request. "No" means that it ignores the header: a repeated request acts again. See [Idempotency](/idempotency#operations-that-honor-the-key).
 
-In the dashboard at
-[platform.isnap.ai](https://platform.isnap.ai) → **Developers → API
-keys → Create key**. Pick `test` for sandbox or `live` for production.
-The full string is shown once at creation — store it in your secret
-manager.
+A line-scoped key is limited to its lines on some of these operations only: see [Line-scoped keys](/authentication#line-scoped-keys).
 
-### How to use it
+### Messages
 
-<CodeGroup>
-```bash cURL
-curl https://api.isnap.ai/v1/lines/my \
-  -H "Authorization: Bearer isnap_live_aBcD..."
-```
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/messages`](/api-reference/messages/send-message) | Sends one message to one recipient from one line. | API key or trial key | | Yes |
+| [`GET /v1/messages`](/api-reference/messages/list-messages) | Lists your inbound and outbound messages, which iSnap keeps at least 72 hours. | API key or trial key | | No |
+| [`GET /v1/messages/{id}`](/api-reference/messages/get-message) | Returns one message. | API key | | No |
+| [`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message) | Cancels a message that the line's device has not taken. | API key | | No |
+| [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction) | Adds or replaces the line's reaction on a message. | API key | | Yes |
+| [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction) | Removes the line's reaction from a message. | API key | | Yes |
 
-```ts TypeScript SDK
-import { ISnapClient } from '@isnap/sdk'
+### Chats
 
-const isnap = new ISnapClient({
-  apiKey: process.env.ISNAP_API_KEY!
-})
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`GET /v1/chats`](/api-reference/chats/list-chats) | Lists chats, most recent activity first. | API key | | No |
+| [`GET /v1/chats/{chat_id}`](/api-reference/chats/get-chat) | Returns one chat. | API key | | No |
+| [`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read) | Marks the unread inbound messages of a chat as read. | API key | | No |
+| [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/start-typing) | Shows the typing indicator to the chat's contact. | API key | | No |
+| [`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/stop-typing) | Clears the typing indicator. | API key | | No |
+| [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) | Sends a contact card to the chat's contact. | API key | | Yes, but never replays: a repeat returns `409` once the card's message exists, and sends the card when it does not. |
 
-// The SDK adds the Authorization header to every request automatically.
-const lines = await isnap.lines.listMine()
-```
+### Attachments
 
-```python Python (requests)
-import os, requests
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/attachments`](/api-reference/attachments/create-attachment) | Creates an attachment and returns an upload URL. | API key | | Yes |
+| [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment) | Returns an attachment, with a download URL when it is ready. | API key | | No |
 
-requests.get(
-  "https://api.isnap.ai/v1/lines/my",
-  headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
-)
-```
-</CodeGroup>
+### Recipient lookup
 
-Every endpoint page below has an interactive request panel that
-includes the `Authorization` header in the code samples
-automatically — paste your key into the panel to try it live.
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/lookup`](/api-reference/lookup/look-up-recipient) | Tells whether a handle can receive iMessage. | API key | | No |
 
-### Verify your key
+### Lines
 
-The fastest way to confirm a key works:
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`GET /v1/lines`](/api-reference/lines/list-available-lines) | Lists the marketplace: the lines you can take now. | None | | No |
+| [`GET /v1/lines/{id}`](/api-reference/lines/get-line) | Returns one rented or BYOD line. | None. With an API key of the line's owner, the response contains the full phone number. | | No |
+| [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) | Lists your lines whose status is `active` or `reserved`. | API key | | No |
+| [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line) | Changes the metadata or the billing anchor of a line. | API key | | No |
+| [`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line) | Reserves an available line for you for 15 minutes. | API key | | No |
+| [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) | Activates a line you reserved. | API key | Wholesale partners only | No |
+| [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) | Returns a line you reserved to the marketplace. | API key | | No |
+| [`POST /v1/lines/assign`](/api-reference/lines/assign-line) | Takes one available line and activates it, in one call. | API key | Wholesale partners only | Yes |
+| [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) | Creates a shared line. | API key | Wholesale partners only | Yes |
+| [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) | Ends a line now, for good. | API key | | No |
+| [`POST /v1/lines/{id}/cancel`](/api-reference/lines/cancel-line) | Schedules the end of a line at its next anniversary. | API key | Wholesale partners only | No |
+| [`POST /v1/lines/{id}/uncancel`](/api-reference/lines/uncancel-line) | Withdraws a scheduled end. | API key | | No |
+| [`POST /v1/lines/{id}/anniversary`](/api-reference/lines/set-line-anniversary) | Sets the anniversary of a line. | API key | Wholesale partners only | No |
+| [`POST /v1/lines/{id}/variant`](/api-reference/lines/change-line-variant) | Switches a rented line that has no per-line subscription between inbound-only and two-way. | API key | | No |
+| [`DELETE /v1/lines/{id}/variant`](/api-reference/lines/cancel-variant-change) | Withdraws a scheduled variant change. | API key | | No |
+| [`POST /v1/lines/{id}/convert-to-test`](/api-reference/lines/convert-to-test-line) | Turns a two-way rented line into a test line. | API key | Wholesale partners only | No |
+| [`POST /v1/lines/{id}/convert-from-test`](/api-reference/lines/convert-from-test-line) | Turns a test line back into a rented line. | API key | Wholesale partners only | No |
+| [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) | Transfers a line to another account. | API key | | No |
+| [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) | Returns the sending configuration of a line. | API key | | No |
+| [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) | Changes the sending configuration of a line. | API key | | No |
+| [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-line-sending-limits) | Returns the sending limits of a line, and how much of each is used. | API key | | No |
+| [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-line-queue) | Lists the messages of a line that are held, waiting, or sent and not reported delivered. | API key | | No |
+| [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) | Returns the health of a BYOD line. | API key | | No |
+| [`GET /v1/attention`](/api-reference/lines/list-attention) | Lists your lines that have a fault. | API key | | No |
 
-```bash
-curl https://api.isnap.ai/v1/lines/my \
-  -H "Authorization: Bearer $ISNAP_API_KEY"
-```
+### Webhooks
 
-A 200 response with your lines means the key is good. A 401 means it
-isn't — check the prefix matches the environment you're hitting.
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook) | Creates a webhook subscription and returns its signing secret. | API key | | No |
+| [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) | Lists your webhook subscriptions. | API key | | No |
+| [`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhook) | Returns one webhook subscription. | API key | | No |
+| [`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook) | Changes the URL, the event filter, the line filter, the description or the active flag of a subscription. | API key | | No |
+| [`DELETE /v1/webhooks/{id}`](/api-reference/webhooks/delete-webhook) | Deletes a subscription and its delivery records. | API key | | No |
+| [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/rotate-webhook-secret) | Replaces the signing secret and returns the new one. | API key | | No |
+| [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) | Lists the deliveries of a subscription. | API key | | No |
+| [`POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay`](/api-reference/webhooks/replay-webhook-delivery) | Creates a new delivery of the event of a finished delivery. | API key | | No |
+| [`GET /v1/webhooks/events`](/api-reference/webhooks/list-webhook-events) | Lists the events of the last 72 hours that matched an active, unsuspended webhook subscription of your account. | API key | | No |
 
-See [SDK → Auth](/sdk/auth) for scoping, rotation, and the error
-catalog around authentication.
+### Trials
 
-## Envelope
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/trial/init`](/api-reference/trials/start-trial) | Starts a trial and returns its pairing code. | API key | | No |
+| [`GET /v1/trial/status`](/api-reference/trials/get-trial-status) | Returns the pairing status of a trial. | None. The pairing code in the query identifies the trial. | | No |
+| [`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity) | Returns the activity of a trial. | Trial key | | No |
+| [`GET /v1/trial/{trial_id}`](/api-reference/trials/get-trial) | Returns one trial. | API key | | No |
+| [`PATCH /v1/trial/{trial_id}`](/api-reference/trials/update-trial) | Changes the metadata of a trial. | API key | | No |
+| [`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial) | Ends a trial. | API key | | No |
 
-Every successful 2xx response wraps the payload:
+### BYOD
 
-```json
-{
-  "success": true,
-  "data": { /* endpoint-specific payload */ },
-  "trace_id": "tr_...",
-  "request_id": "req_..."
-}
-```
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing) | Issues an activation code for a BYOD device. | API key | | No |
+| [`GET /v1/apps`](/api-reference/byod/get-app-downloads) | Returns the download links of the iSnap apps. | None | | No |
 
-- `trace_id` correlates the request across iSnap's internal services.
-  Include it when filing a bug.
-- `request_id` is the per-request identifier; you can pass it back on
-  retries via the `X-Request-Id` header to help iSnap correlate the
-  attempts.
+### Pre-orders
 
-`204 No Content` responses have no body (no envelope).
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/pre-orders`](/api-reference/pre-orders/create-pre-order) | Creates a pre-order draft. | API key | | No |
+| [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders) | Lists your pre-orders. | API key | | No |
+| [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) | Returns one pre-order. | API key | | No |
+| [`PATCH /v1/pre-orders/{id}`](/api-reference/pre-orders/update-pre-order) | Changes the metadata of a pre-order. | API key | | No |
+| [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) | Confirms a pre-order draft. | API key | | No |
+| [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) | Cancels a pre-order draft. | API key | | No |
+| [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes) | Lists the area codes that a pre-order can request. | None | | No |
 
-## Errors
+### Hosted macOS sessions
 
-Failures use the same envelope shape with `success: false` and a
-structured `error`:
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) | Rents a hosted macOS session. | API key | Wholesale partners only | Yes |
+| [`GET /v1/macos-sessions/{id}`](/api-reference/macos-sessions/get-macos-session) | Returns a session you rent. | API key | The account that rents the session | No |
+| [`PATCH /v1/macos-sessions/{id}`](/api-reference/macos-sessions/update-macos-session) | Changes the metadata of a session you rent. | API key | The account that rents the session | No |
+| [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session) | Schedules the end of a rental at its next anniversary. | API key | The account that rents the session | No |
+| [`POST /v1/macos-sessions/{id}/uncancel`](/api-reference/macos-sessions/uncancel-macos-session) | Withdraws a scheduled end. | API key | The account that rents the session | No |
 
-```json
-{
-  "success": false,
-  "data": null,
-  "error": {
-    "status": 422,
-    "code": "validation_error",
-    "message": "to: must be E.164 format",
-    "issues": [
-      { "path": "to", "code": "invalid_format" }
-    ]
-  },
-  "trace_id": "tr_...",
-  "request_id": "req_..."
-}
-```
+### Service
 
-The `code` field is a stable string — branch on it. The `message`
-field is human-readable and may change between releases.
+| Operation | What it does | Credential | Account | `Idempotency-Key` |
+| --- | --- | --- | --- | --- |
+| [`GET /v1/health`](/api-reference/service/get-health) | Reports whether the API and its dependencies respond. | None | | No |
+| [`GET /v1/version`](/api-reference/service/get-version) | Returns the version of the API. | None | | No |
 
-### What each status means
+## Conventions
 
-<AccordionGroup>
-  <Accordion title="400 Bad Request — malformed request shape">
-    The request body didn't parse or a query param was off-spec. Fix the
-    payload and retry.
+### Requests
 
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 400,
-        "code": "invalid_json",
-        "message": "Request body is not valid JSON"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
+- A request body is JSON. Send `Content-Type: application/json` with every body. A `+json` subtype, and parameters such as `charset`, are accepted.
+- JSON fields and query parameters are in `snake_case`.
+- A body field that the operation does not define is ignored. Nine operations refuse it instead, with `400 validation_failed` and the issue code `unrecognized_keys`: `PATCH /v1/lines/{id}/config`, `POST /v1/pre-orders`, `PATCH /v1/pre-orders/{id}`, `POST /v1/byod/pair`, `POST /v1/trial/init`, `POST /v1/trial/{trial_id}/revoke`, `PATCH /v1/trial/{trial_id}`, `POST /v1/macos-sessions/rent` and `PATCH /v1/macos-sessions/{id}`. On the other operations, a misspelled optional field is dropped without an error: check the response.
+- A query parameter that the operation does not define is ignored, without an error: a misspelled filter returns the list unfiltered.
+- A path or a method that the API does not define returns `404 not_found`. Without an API key, a `POST`, `PATCH`, `PUT` or `DELETE` outside `/v1/webhooks` returns `403 forbidden` first: see [How a request is checked](/authentication#how-a-request-is-checked).
+- Timestamps in requests are ISO 8601 with a `Z` suffix: see [Timestamps](/concepts#timestamps).
 
-  <Accordion title="401 Unauthorized — missing, revoked, or wrong-env key">
-    Either no `Authorization` header, the key is revoked, or you're
-    using a `live` key against a sandbox base URL (or vice versa).
+### Responses
 
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 401,
-        "code": "invalid_api_key",
-        "message": "The API key is invalid or has been revoked"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="403 Forbidden — key valid but not allowed for this resource">
-    A scoped key tried to act on a line outside its scope, or you tried
-    a privileged action your role doesn't grant.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 403,
-        "code": "line_not_owned",
-        "message": "API key is not scoped to line line_aBc..."
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="404 Not Found — resource doesn't exist on this account">
-    The path is right but the resource isn't visible to you — either it
-    doesn't exist, or your key doesn't have access (iSnap returns 404
-    rather than 403 here to avoid leaking existence).
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 404,
-        "code": "message_not_found",
-        "message": "No message with that ID"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="409 Conflict — state collision">
-    The resource can't transition the way you asked. Most common cases:
-    same `Idempotency-Key` reused with a different body, or cancelling
-    a message that's already past the cancellable window.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 409,
-        "code": "too_late_to_cancel",
-        "message": "Message status is sent; cannot be cancelled"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="410 Gone — endpoint removed">
-    The endpoint existed in an earlier version but has been retired.
-    The `successor` field points to the replacement.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 410,
-        "code": "endpoint_removed",
-        "message": "POST /v1/legacy was removed on 2026-12-31. Use POST /v1/new.",
-        "removed_at": "2026-12-31",
-        "successor": "/v1/new"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="422 Unprocessable Entity — validation failed">
-    The request shape is well-formed but a field value is invalid.
-    `issues[]` carries per-field details.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 422,
-        "code": "validation_error",
-        "message": "to: must be E.164 format",
-        "issues": [
-          { "path": "to", "code": "invalid_format" }
-        ]
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-
-  <Accordion title="429 Too Many Requests — quota or rate limit hit">
-    Either a per-line quota bucket (warming, daily, hourly,
-    new-contacts, known-contacts) or the global API rate limit. The
-    `Retry-After` header (seconds) tells you how long to back off. The
-    `error.code` indicates which bucket fired.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 429,
-        "code": "new_contact_quota_exceeded",
-        "message": "Line line_aBc... has hit its new-contacts quota",
-        "retry_after": 3540
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-
-    Quota errors are **not retryable** automatically — the bucket
-    genuinely doesn't have room. Back off, audit your sending shape.
-  </Accordion>
-
-  <Accordion title="500 / 503 — server error">
-    Transient. The SDK auto-retries with exponential backoff. If you're
-    rolling your own client, treat 500/503 as retryable up to 3–4
-    attempts.
-
-    ```json
-    {
-      "success": false,
-      "data": null,
-      "error": {
-        "status": 503,
-        "code": "service_unavailable",
-        "message": "iSnap is temporarily unable to handle the request"
-      },
-      "trace_id": "tr_...",
-      "request_id": "req_..."
-    }
-    ```
-  </Accordion>
-</AccordionGroup>
-
-## Idempotency
-
-Every mutating request (`POST`, `PATCH`, `PUT`, `DELETE`) accepts an
-`Idempotency-Key` header. If you send the same key twice within 24 h,
-iSnap returns the **original** response — no duplicate side effects.
-
-```bash
-curl -X POST https://api.isnap.ai/v1/messages \
-  -H "Authorization: Bearer $ISNAP_API_KEY" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{ "line_id": "line_...", "to": "+1...", "body": "Hi" }'
-```
-
-The TypeScript SDK auto-generates a key per request. If you're rolling
-your own client, generate a UUID v4 per attempt and reuse it on every
-retry of the same logical operation.
-
-## Pagination
-
-List endpoints return cursor-paginated results:
+A success with a body has this shape, here the response of `DELETE /v1/chats/{chat_id}/typing`. It has no `error` key.
 
 ```json
 {
   "success": true,
   "data": {
-    "items": [ /* ... */ ],
-    "has_more": true,
-    "next_cursor": "cur_..."
-  }
+    "chat_id": "chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn",
+    "stopped_at": "2026-10-08T14:22:57.392Z"
+  },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
 }
 ```
 
-Pass `?cursor=cur_...` on the next request. Cursors are opaque —
-don't parse them, don't store them long-term (they're stable for
-~24 h).
+| Case | Shape |
+| --- | --- |
+| Success with a body | `success`, `data`, `trace_id`, `request_id`. The result of the operation is in `data`. |
+| Error | `success: false`, `data: null`, `error`, `trace_id`, `request_id`. See [Error format](/errors-and-rate-limits#error-format). |
+| `204` | No body. Two operations return it: `DELETE /v1/webhooks/{id}` and `DELETE /v1/lines/{id}/variant`. |
+| `GET /v1/health` | The body is the health object itself, on `200` and on `503`. |
 
-## ID prefixes
+Other rules of a response:
 
-iSnap IDs are prefixed by resource type for unambiguous routing in
-your code:
+- Timestamps are ISO 8601 in UTC with milliseconds: see [Timestamps](/concepts#timestamps).
+- Ids have a prefix that names the resource: see [Identifiers](/concepts#identifiers).
+- A list returns its items one page at a time: see [Pagination](/pagination#list-operations).
+- Every response carries the `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers: see [Rate limits](/errors-and-rate-limits#rate-limits).
+- The responses of the operations that can return a secret carry `Cache-Control: no-store`, whatever their status: `POST /v1/byod/pair`, `POST` and `GET /v1/pre-orders`, `GET /v1/pre-orders/{id}`, its `confirm` and `cancel`, `POST` and `GET /v1/webhooks`, `GET` and `PATCH /v1/webhooks/{id}`, `POST /v1/webhooks/{id}/rotate-secret`, `POST /v1/trial/init` and `GET /v1/trial/status`.
 
-| Prefix | Resource |
-|---|---|
-| `usr_` | User |
-| `line_` | Line |
-| `msg_` | Message |
-| `evt_` | Webhook event |
-| `wh_` | Webhook subscription |
-| `sub_` | Billing subscription |
-| `tr_` | Trace |
-| `req_` | Request |
-| `cur_` | Pagination cursor |
+### Request and trace ids
 
-All IDs are base62-encoded after the prefix. They are URL-safe,
-opaque, and never reused.
+Every response carries two ids in its headers. A response in the standard envelope, success or error, carries them in its body too.
+
+| Header | Body field | Form |
+| --- | --- | --- |
+| `X-Request-Id` | `request_id` | `req_` followed by 25 letters and digits. |
+| `X-Trace-Id` | `trace_id` | 32 lowercase hexadecimal characters. |
+
+Log both with every call: you need them to report a problem. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
+
+Two request headers are optional:
+
+- `X-Request-Id`: your own request id. iSnap keeps it only when it has the form `req_` followed by 25 letters and digits, and replaces any other value.
+- `traceparent`: a W3C trace context, `00-<32 hex>-<16 hex>-<2 hex>` in lowercase. Its trace id becomes the `trace_id` of the response, and the header is returned. A malformed value is ignored.
+
+## Versioning and compatibility
+
+The version of the API is a `MAJOR.MINOR.PATCH` number. It is the `info.version` of the OpenAPI document, and [`GET /v1/version`](/api-reference/service/get-version) returns it in `data.version`. These pages describe version 2.39.0.
+
+| Part | What a new one means |
+| --- | --- |
+| Minor | The version adds operations, optional request fields, response fields, enum values or event types. |
+| Major | The version contains a breaking change. Its changelog entry says what breaks and what to do. |
+| Patch | The described surface does not change. |
+
+The path prefix stays `/v1` whatever the major version.
+
+Build your client so that a minor version does not break it:
+
+- Ignore response fields, enum values and event types you do not know.
+- Record an event of an unknown type as processed, and skip it.
+
+### Deprecation
+
+Before iSnap removes an operation or a field, it marks it deprecated for at least 30 days. A deprecation shows in three places:
+
+| Where | Signal |
+| --- | --- |
+| The OpenAPI document | `deprecated: true` on the operation or on the field. |
+| The [changelog](/changelog) | An entry that names what is deprecated. |
+| The responses of a deprecated operation | The headers `Deprecation: true`, `Sunset`, which holds the removal date as an HTTP date, and, when a successor exists, `Link` with `rel="successor-version"`. |
+
+No operation is deprecated at this version. One field is: `monthly_price` on a line. No removal date is set for it.
+
+A removed operation returns `410`. Its body is not the error format: `error` is the string `endpoint_removed`, and `message`, `removed_at`, `successor` and `reason` say when it was removed and what replaces it.
+
+Webhook payloads carry `api_version: "v1"`, which is not the API version number.
+
+The [changelog](/changelog) lists the versions, newest first.
+
+## OpenAPI document
+
+`GET https://api.isnap.ai/openapi.json` returns the OpenAPI 3.0 document of the `/v1` surface. It needs no credential.
+
+```bash
+curl -sS https://api.isnap.ai/openapi.json -o isnap-openapi.json
+```
+
+That document also describes 14 operations under `/v1/api-keys` and `/v1/billing`. They accept only a dashboard session and return `401` to an API key: they are not part of this reference. API keys are created and revoked in the [iSnap dashboard](https://platform.isnap.ai). The document does not list a server: send its operations to `https://api.isnap.ai`.

@@ -1,0 +1,26 @@
+---
+title: "Create a shared line"
+description: "Creates a shared line, which is active immediately."
+openapi: "POST /v1/lines/shared"
+---
+
+- **Credential:** an API key with no list of lines. See [Shared lines](/guides/getting-a-line#shared-lines).
+- **Account:** wholesale partners only: any other account receives `402 payment_required`.
+- **Line-scoped keys:** every [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden`.
+- **Test keys:** a call sent with an `isnap_test_` account key creates a real line, billed like any other: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored, and remembered for 24 hours. Without it, every retry creates one more billable line. A request with no body and a request with `{}` are different requests. See [Retries](/guides/getting-a-line#retries) and [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).
+- **Events:** none. See [Events](/guides/getting-a-line#events).
+- **Response:** `201` with the line. Read it later with [`GET /v1/lines/my`](/api-reference/lines/list-my-lines): `GET /v1/lines/{id}` returns `404` for a shared line.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The `Idempotency-Key` is longer than 255 characters, or the body is invalid. |
+| 400 | `reserved_metadata_key` | `metadata` names `migration_ref` or `proof_line`. |
+| 402 | `payment_required` | Your account is not a wholesale partner. |
+| 403 | `forbidden` | The request uses a line-scoped key. |
+| 409 | `idempotency_key_collision` | The same `Idempotency-Key` was sent with another body. |
+| 503 | `idempotency_in_flight` | A request with the same `Idempotency-Key` is still running. Retry with the same key. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

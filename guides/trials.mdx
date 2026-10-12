@@ -1,0 +1,695 @@
+---
+title: "Trials"
+description: "Let a prospect exchange messages with a line reserved for trials, from their own phone, while your backend sends with a trial key that reaches only that prospect."
+---
+
+A trial lets a prospect exchange messages between their own phone and a line reserved for trials, before they have a line of their own. Your backend starts the trial, the prospect pairs by texting a code, and your backend then sends with a trial key that reaches only that prospect. Read this page when you build a trial step into your product.
+
+A trial runs on a **pool line**. When your account has active [test lines](/guides/managing-lines#test-lines), the pool line is one of them. Otherwise it is a line of iSnap's shared trial pool. Among the candidates, iSnap takes the line with the fewest messages in the last 24 hours. The request has no field to choose the line.
+
+## How a trial works
+
+<Steps>
+
+<Step title="Start the trial">
+
+Call [`POST /v1/trial/init`](/api-reference/trials/start-trial) from your backend with an account API key. The body is optional, and so is every field in it:
+
+| Field | Meaning | When you omit it |
+| --- | --- | --- |
+| `max_outbound_without_inbound` | The [unanswered-send limit](#unanswered-send-limit) of the trial: an integer from 1 to 100. | 10 |
+| `welcome_message` | The text of the confirmation that the prospect receives when pairing succeeds. 1 to 280 characters. | iSnap sends a confirmation of its own. |
+| `footer` | The text appended to every message that the trial key sends. 1 to 300 characters. | iSnap appends a footer of its own. |
+| `metadata` | Your own keys and values: at most 20 keys and 8,192 bytes once serialized. | `null` |
+
+Any other field returns `400 validation_failed`.
+
+The response is `201` with `trial_id` (`trl_` followed by 25 letters or digits), `token`, `pool_line_number`, `pairing_expires_at`, `instructions_url` and `metadata`. `token` is the pairing code. The trial key is not in this response. Store `trial_id` and `token`: no operation lists trials.
+
+This operation does not honor `Idempotency-Key`. For a wholesale partner, a repeated call starts another trial. A second `POST /v1/trial/init` from a direct account returns `409 trial_already_active`, a repeat of a call whose response was lost included. If you lost its `trial_id` before the prospect paired, the limit frees when its pairing window ends, 15 minutes after the call. Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt. See [Retrying safely](/idempotency#retrying-safely).
+
+</Step>
+
+<Step title="Show the pairing code and the number of the pool line">
+
+Show `token` and `pool_line_number` to the prospect in your own interface. The pairing code has 7 characters, taken from `23456789ABCDEFGHJKMNPQRSTVWXYZ`: it never contains `I`, `L`, `O`, `U`, `0` or `1`. No two trials share a pairing code. `instructions_url` is the address of one iSnap page, the same for every trial.
+
+</Step>
+
+<Step title="The prospect texts the code">
+
+The prospect sends a message that contains the pairing code to `pool_line_number`, from their own phone, within 15 minutes of your call. `pairing_expires_at` is the end of those 15 minutes. The code is matched case-insensitively and as a separate word: text around it is allowed, and a code attached to other letters or digits is not matched. A code is matched only on the pool line of its own trial.
+
+When the code matches:
+
+- the trial becomes `active`;
+- the handle that sent the message becomes `paired_handle`: a phone number, or the email address of an Apple ID when the prospect's device sends from one;
+- iSnap issues the trial key and sends `trial.linked`;
+- the prospect receives one confirmation message from the pool line.
+
+The message that carries the code is not stored as a message of the trial and sends no `message.received`.
+
+</Step>
+
+<Step title="Read the trial key from your backend">
+
+When `trial.linked` arrives, call [`GET /v1/trial/status`](/api-reference/trials/get-trial-status) with the pairing code in `token`. The first call after pairing returns `trial_api_key`. Every later call omits it. The key stays available for that first call for 1 hour after pairing. If no call reads it within the hour, no operation returns it and the trial cannot send: [revoke the trial](#revoking-a-trial) and start another.
+
+The same response carries `pool_line_id` and `paired_handle`, which you need to send.
+
+</Step>
+
+<Step title="Send with the trial key">
+
+Call [`POST /v1/messages`](/api-reference/messages/send-message) with the trial key as the credential, `line_id` set to the trial's `pool_line_id`, and `to` set to `paired_handle`. See [Trial key](#trial-key) for what the key can do.
+
+</Step>
+
+</Steps>
+
+<Warning>
+`GET /v1/trial/status` needs no credential: the pairing code is all a caller needs, and the prospect sees that code. The first caller after pairing receives the trial key, and every caller receives `paired_handle`. Treat the pairing code as a secret between you and the prospect. Read the status from your backend only, never from a browser or a mobile app, and read it as soon as `trial.linked` arrives.
+</Warning>
+
+### Start a trial
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/trial/init" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"max_outbound_without_inbound":10,"welcome_message":"You are connected. Reply to this message at any time.","metadata":{"crm_contact_id":"c_123"}}'
+```
+
+```typescript TypeScript
+import { setTimeout as sleep } from 'node:timers/promises'
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// A 503 with one of these codes starts no trial: the call is safe to make again.
+const NO_TRIAL_STARTED = new Set(['line_pool_exhausted', 'pairing_code_unavailable'])
+
+async function startTrial() {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await client.trial.init(
+        {
+          max_outbound_without_inbound: 10,
+          welcome_message: 'You are connected. Reply to this message at any time.',
+          metadata: { crm_contact_id: 'c_123' }
+        },
+        // The operation does not honor Idempotency-Key: the SDK must not retry it on its own.
+        { maxRetries: 0 }
+      )
+    } catch (err) {
+      if (err instanceof APIError && NO_TRIAL_STARTED.has(err.code) && attempt < 2) {
+        await sleep(1000 * 2 ** (attempt + 1))
+        continue
+      }
+      throw err
+    }
+  }
+}
+
+try {
+  const trial = await startTrial()
+  // Store trial.trial_id and trial.token, then show trial.token and
+  // trial.pool_line_number to the prospect. Do not log the pairing code.
+  console.log(trial.trial_id, trial.pairing_expires_at)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'trial_already_active') {
+    // A direct account has one live trial at a time.
+    console.error('This account already has a live trial.')
+  } else if (err instanceof APIError && NO_TRIAL_STARTED.has(err.code)) {
+    // Write to support@isnap.ai with these two ids.
+    console.error(`No trial was started: trace_id ${err.traceId}, request_id ${err.requestId}`)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+import time
+
+import requests
+
+# A 503 with one of these codes starts no trial: the call is safe to make again.
+NO_TRIAL_STARTED = ("line_pool_exhausted", "pairing_code_unavailable")
+
+for attempt in range(3):
+    if attempt > 0:
+        time.sleep(2**attempt)
+    response = requests.post(
+        "https://api.isnap.ai/v1/trial/init",
+        headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+        json={
+            "max_outbound_without_inbound": 10,
+            "welcome_message": "You are connected. Reply to this message at any time.",
+            "metadata": {"crm_contact_id": "c_123"},
+        },
+        timeout=30,
+    )
+    payload = response.json()
+    if response.status_code != 503 or payload["error"]["code"] not in NO_TRIAL_STARTED:
+        break
+
+if response.status_code == 201:
+    trial = payload["data"]
+    # Store trial["trial_id"] and trial["token"], then show trial["token"] and
+    # trial["pool_line_number"] to the prospect. Do not log the pairing code.
+    print(trial["trial_id"], trial["pairing_expires_at"])
+elif payload["error"]["code"] == "trial_already_active":
+    # A direct account has one live trial at a time.
+    print("This account already has a live trial.")
+elif payload["error"]["code"] in NO_TRIAL_STARTED:
+    # Write to support@isnap.ai with these two ids.
+    print("No trial was started:", payload["trace_id"], payload["request_id"])
+else:
+    # The operation does not honor Idempotency-Key: do not retry it blindly.
+    response.raise_for_status()
+```
+
+</CodeGroup>
+
+```json Response
+{
+  "success": true,
+  "data": {
+    "trial_id": "trl_4Hn8Rz2Wq6Lb9Tc3Yx7Kd5Mv1",
+    "token": "K7MQ2XB",
+    "pool_line_number": "+14155550124",
+    "pairing_expires_at": "2026-10-08T14:37:57.392Z",
+    "instructions_url": "https://platform.isnap.ai/trial/how-it-works",
+    "metadata": { "crm_contact_id": "c_123" }
+  },
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "request_id": "req_6Tn3Vb8Kx2Wq9Lc4Rz7Yd1Hm5"
+}
+```
+
+### Read the status and the trial key
+
+The samples return the trial key on the first call after pairing, and tell the other cases apart. Store the key in your secret storage as soon as you receive it.
+
+Call `GET /v1/trial/status` from the backend that stores the key, and never retry it automatically: the first call after pairing returns the trial key once, and a retry after a lost response loses it. In the SDK, pass `{ maxRetries: 0 }` to `trial.status`, from a client whose `timeoutMs` covers your network. A call made after the pairing window ended, for a trial that the prospect has not paired, returns `410 pairing_expired` and revokes the trial, with no event.
+
+<CodeGroup>
+
+```bash curl
+# No credential: the pairing code identifies the trial. Run this from your backend only.
+curl -sS "https://api.isnap.ai/v1/trial/status?token=K7MQ2XB"
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+// The SDK needs a key even for an operation that requires none.
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+type TrialRead =
+  | { state: 'key'; trialKey: string; lineId: string; to: string }
+  | { state: 'waiting' } // the prospect has not paired
+  | { state: 'paired' } // the key was returned by an earlier call, or its hour has passed
+  | { state: 'ended' } // the pairing window ended, the trial is revoked, or the code is unknown
+
+// Call this from your backend when trial.linked arrives. `token` is the pairing code.
+async function readTrial(token: string): Promise<TrialRead> {
+  try {
+    // Never retried: a retry after a lost response loses the trial key.
+    const trial = await client.trial.status(token, { maxRetries: 0 })
+    if (trial.status === 'pairing_pending') return { state: 'waiting' }
+    if (trial.trial_api_key && trial.pool_line_id && trial.paired_handle) {
+      return {
+        state: 'key',
+        trialKey: trial.trial_api_key,
+        lineId: trial.pool_line_id,
+        to: trial.paired_handle
+      }
+    }
+    return { state: 'paired' }
+  } catch (err) {
+    if (err instanceof APIError && (err.code === 'pairing_expired' || err.code === 'trial_not_found')) {
+      return { state: 'ended' }
+    }
+    throw err
+  }
+}
+
+const read = await readTrial('K7MQ2XB')
+// Never log the trial key, the pairing code or the paired handle.
+console.log(read.state)
+```
+
+```python Python
+import requests
+
+
+def read_trial(token):
+    """Call this from your backend when trial.linked arrives. `token` is the pairing code."""
+    # Never retried: a retry after a lost response loses the trial key.
+    response = requests.get(
+        "https://api.isnap.ai/v1/trial/status",
+        params={"token": token},
+        timeout=30,
+    )
+    payload = response.json()
+
+    if response.status_code == 200:
+        trial = payload["data"]
+        if trial["status"] == "pairing_pending":
+            return {"state": "waiting"}
+        if "trial_api_key" in trial:
+            return {
+                "state": "key",
+                "trial_key": trial["trial_api_key"],
+                "line_id": trial["pool_line_id"],
+                "to": trial["paired_handle"],
+            }
+        # The key was returned by an earlier call, or its hour has passed.
+        return {"state": "paired"}
+
+    if payload["error"]["code"] in ("pairing_expired", "trial_not_found"):
+        # The pairing window ended, the trial is revoked, or the code is unknown.
+        return {"state": "ended"}
+    response.raise_for_status()
+
+
+read = read_trial("K7MQ2XB")
+# Never log the trial key, the pairing code or the paired handle.
+print(read["state"])
+```
+
+</CodeGroup>
+
+iSnap records the pairing first and sends `trial.linked` afterward. If the event cannot be sent, the pairing stands. When `trial.linked` has not arrived, call `GET /v1/trial/status` from your backend as a fallback, until it returns a `status` other than `pairing_pending` or a `410`. Each call counts against the [request-rate limit](/errors-and-rate-limits#rate-limits).
+
+### Send with the trial key
+
+<CodeGroup>
+
+```bash curl
+# One key per message, unique across all your trials.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
+curl -sS -X POST "https://api.isnap.ai/v1/messages" \
+  -H "Authorization: Bearer $ISNAP_TRIAL_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"line_id":"line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd","to":"+14155550123","body":"Thanks for trying this out. Reply to this message to continue."}'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+// A client has one credential: this one sends with the trial key.
+const trialClient = new ISnapClient({ apiKey: process.env.ISNAP_TRIAL_KEY ?? '', maxRetries: 2 })
+
+// One key per message, unique across all your trials.
+const idempotencyKey = randomUUID() // Store it with your record of the message: reuse it to retry.
+
+try {
+  const message = await trialClient.messages.send(
+    {
+      line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', // pool_line_id of the trial
+      to: '+14155550123', // paired_handle of the trial
+      body: 'Thanks for trying this out. Reply to this message to continue.'
+    },
+    { idempotencyKey }
+  )
+  console.log(message.id, message.status)
+} catch (err) {
+  if (!(err instanceof APIError)) throw err
+  switch (err.code) {
+    case 'trial_needs_inbound':
+      // The trial is dormant: wait for trial.reactivated before the next send.
+      console.error('The prospect must reply before the next send.')
+      break
+    case 'trial_scope_violation':
+      console.error('line_id is not the pool line of the trial, or to is not the paired handle.')
+      break
+    case 'unauthorized':
+      console.error('The trial is revoked: its key no longer works.')
+      break
+    default:
+      throw err
+  }
+}
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+# One key per message, unique across all your trials.
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the message: reuse it to retry.
+
+response = None
+for attempt in range(3):
+    if attempt > 0:
+        time.sleep(2**attempt)
+    try:
+        response = requests.post(
+            "https://api.isnap.ai/v1/messages",
+            headers={
+                "Authorization": f"Bearer {os.environ['ISNAP_TRIAL_KEY']}",
+                "Idempotency-Key": idempotency_key,
+            },
+            json={
+                "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",  # pool_line_id of the trial
+                "to": "+14155550123",  # paired_handle of the trial
+                "body": "Thanks for trying this out. Reply to this message to continue.",
+            },
+            timeout=30,
+        )
+    except (requests.ConnectionError, requests.Timeout):
+        # No response: the same key makes the retry safe.
+        response = None
+        continue
+    if response.status_code not in (500, 503):
+        break
+    # 500 or 503: the same key makes the retry safe.
+
+if response is None:
+    raise SystemExit("No response. Retry later with the same key and the same body.")
+payload = response.json()
+
+if response.status_code == 202:
+    print(payload["data"]["id"], payload["data"]["status"])
+elif payload["error"]["code"] == "trial_needs_inbound":
+    # The trial is dormant: wait for trial.reactivated before the next send.
+    print("The prospect must reply before the next send.")
+elif payload["error"]["code"] == "trial_scope_violation":
+    print("line_id is not the pool line of the trial, or to is not the paired handle.")
+elif payload["error"]["code"] == "unauthorized":
+    print("The trial is revoked: its key no longer works.")
+else:
+    response.raise_for_status()
+```
+
+</CodeGroup>
+
+## Trial key
+
+A trial key is issued at pairing and belongs to one trial. It starts with `isnap_test_`, like a test API key of an account, and is 54 characters long: see [Trial keys](/authentication#trial-keys). Three operations accept it:
+
+| Operation | What the trial key gets |
+| --- | --- |
+| [`POST /v1/messages`](/api-reference/messages/send-message) | Sends a text message from the pool line of the trial to the paired handle. |
+| [`GET /v1/messages`](/api-reference/messages/list-messages) | Lists the messages of this trial only: the messages on its pool line, to or from the paired handle. The confirmation and the limit notice that iSnap sends are not listed. |
+| [`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity) | Returns the counters of the trial. See [Activity](#activity). |
+
+Every other operation that needs a credential returns `401 unauthorized` to a trial key. The [operations without a credential](/authentication#operations-without-a-credential) ignore it. After a revoke, the three operations above return `401 unauthorized` too.
+
+A trial send follows these rules:
+
+| Rule | Refusal |
+| --- | --- |
+| `line_id` is the pool line of the trial and `to` is the paired handle. Phone numbers are compared after normalization, and a number without a country code is read as a US number. | `403 trial_scope_violation`. The error does not say which of the two fields is wrong. |
+| `to` is a phone number. | `400 bad_request` for an email address. |
+| The message is text only. | `422 trial_attachments_unsupported` when the request carries attachments. |
+| `reply_to_message_id`, when present, names a message of the same trial. | `403 trial_scope_violation` for a message of another trial, `422 reply_to_cross_line` for a message on another line, `404 not_found` for an unknown id. |
+| The trial is `active`. | `402 trial_needs_inbound` when it is `dormant`. |
+| The pool line is `active`. | `403 line_not_active` |
+
+When `paired_handle` is an email address, no send of that trial can succeed, because `to` must be a phone number. Revoke the trial to free the handle.
+
+A trial send does not count against the [sending limits](/guides/sending-limits) of the line, and its response carries no `X-iSnap-Quota-*` header. The [unanswered-send limit](#unanswered-send-limit) of the trial is the only limit on the number of sends. The [request-rate limit](/errors-and-rate-limits#rate-limits) applies as on every operation.
+
+`POST /v1/messages` honors `Idempotency-Key` on a trial send:
+
+- The key is compared with the earlier messages on the pool line, and other trials use the same line. Use a key that is unique across all trials, such as a UUID.
+- The same key with the same body returns the earlier message, and the send does not count against the unanswered-send limit. The status of the trial is checked first: when the earlier send made the trial `dormant`, the repeat returns `402 trial_needs_inbound`, and that earlier message was accepted: read it with `GET /v1/messages`.
+- The same key with another body returns `409 idempotency_conflict`.
+- A key is remembered as long as its message is kept, at least 72 hours after iSnap recorded it: see [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+
+## Footer and welcome message
+
+iSnap sends two messages to the prospect on its own and appends a footer to yours. You can replace two of the three texts when you start the trial:
+
+| Text | What the prospect reads when you set nothing | Replace it with |
+| --- | --- | --- |
+| Confirmation at pairing | `You're connected. Reply here anytime — your messages show up in the app.` | `welcome_message` |
+| Footer of every message that the trial key sends | `Sent for free with iSnap - isnap.ai` | `footer` |
+| Notice when the trial reaches its unanswered-send limit | `You've reached the free texting limit on your trial. Reply to this message to keep the conversation going.` | Cannot be replaced. |
+
+**Footer.** iSnap appends the footer to every trial send, after a blank line. It cannot be turned off. The `body` of the stored message, as the API returns it, includes the footer, and so does the message that the prospect receives. `Idempotency-Key` compares the body that you sent, without the footer.
+
+**Confirmation and notice.** Each is sent once per event, and its delivery is not guaranteed: a failed delivery is not retried, and a failed confirmation does not undo the pairing. Neither message counts against the unanswered-send limit or against the totals of [Activity](#activity), and the trial key cannot read them.
+
+## Unanswered-send limit
+
+`max_outbound_without_inbound` is the number of messages that the trial key can send in a row without a signal from the prospect. It is a count, not a timer.
+
+- Each accepted trial send adds 1 to `outbound_since_last_inbound`.
+- The send that brings the counter to `max_outbound_without_inbound` is accepted and makes the trial `dormant`. Exactly that many sends are possible between two signals from the prospect.
+- While the trial is `dormant`, a send returns `402 trial_needs_inbound`. `GET /v1/messages` and `GET /v1/trial/activity` keep working.
+- At each change to `dormant`, iSnap sends `trial.dormant` once, and the prospect receives the notice of [Footer and welcome message](#footer-and-welcome-message) once.
+
+No delay changes the status of a trial: an `active` or `dormant` trial stays so until one of the signals below, or until you revoke it.
+
+Three signals from the prospect set the counter back to 0:
+
+| Signal from the prospect | `reactivation_reason` in `trial.reactivated` |
+| --- | --- |
+| A message from the paired handle to the pool line | `inbound_message` |
+| A [reaction](/guides/conversations) that the prospect adds to a message of the trial | `reaction` |
+| The first read receipt on a message of the trial, except on an iMessage line | `read_receipt` |
+
+When the trial is `dormant`, the signal also makes it `active` again and iSnap sends `trial.reactivated`. When the trial is `active`, the counter returns to 0 and no event is sent. A reaction that the prospect removes and a typing indicator do not reset the counter. On an iMessage line, a read by the prospect is not a signal: it neither sets the counter back to 0 nor reactivates the trial. Only a reply or a reaction does.
+
+## Statuses
+
+| `status` | Meaning | Set by | Can become |
+| --- | --- | --- | --- |
+| `pairing_pending` | The prospect has not paired. | `POST /v1/trial/init` | `active`, `revoked` |
+| `active` | The prospect is paired and the trial key can send. | Pairing, and a signal from the prospect on a `dormant` trial. | `dormant`, `revoked` |
+| `dormant` | The unanswered-send limit is reached. Sends are refused until a signal from the prospect. | The send that reaches the limit. | `active`, `revoked` |
+| `revoked` | The trial is over. The trial key no longer works. Final. | A revoke, or a call to `GET /v1/trial/status` after the pairing window ended while the trial was still `pairing_pending`. | Nothing |
+
+Three behaviors to build for:
+
+- **The end of the pairing window is recorded at the next status call.** A trial that is still `pairing_pending` after `pairing_expires_at` becomes `revoked` when `GET /v1/trial/status` is next called for it, and that call returns `410 pairing_expired`. No event is sent. Until that call, [`GET /v1/trial/{trial_id}`](/api-reference/trials/get-trial) can still return `pairing_pending`.
+- **`GET /v1/trial/status` never returns `revoked`.** For every revoked trial, one that you revoked included, it returns `410 pairing_expired`.
+- **Fields of `GET /v1/trial/status` depend on the status.** `pairing_expires_at` is set only while the trial is `pairing_pending`. `pool_line_id` is always set. `pool_line_number`, `paired_handle` and `activity_rule` are `null` until the prospect is paired. The pairing code in `token` is case-insensitive, and spaces around it are ignored.
+
+## Revoking a trial
+
+[`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial) ends a trial that you own, in any status other than `revoked`, a trial that is still pairing included. After a revoke:
+
+- the trial key returns `401 unauthorized`;
+- the prospect's handle can pair with another trial immediately;
+- a direct account can start another trial;
+- the prospect receives no message, and the messages they send to the pool line afterward are dropped.
+
+The body is optional. Its only field is `reason`, which is recorded on the trial and carried by `trial.revoked`:
+
+| `reason` | Use | Limit |
+| --- | --- | --- |
+| `partner` | The default: you end the trial. | None. |
+| `rebind` | You end the trial so that the same prospect can start another one. | iSnap can turn it off for an account, and limits it per rolling 24 hours. See below. |
+| `admin` | Not available to an API key. | `422 admin_reason_forbidden` |
+
+The limits of `reason: rebind`:
+
+- When iSnap turned rebind off for your account, the call returns `403 rebind_not_allowed`.
+- A direct account can make 3 `rebind` revokes per rolling 24 hours. A wholesale partner has no limit. iSnap can set another value for an account.
+- Over the limit, the call returns `429 rebind_cap_reached`. `error.retry_after` and the `Retry-After` header give the number of seconds to wait. `error.retry_at` is the timestamp at which the oldest counted revoke leaves the 24 hours.
+
+Two cases return `200` and send no event, whatever the `reason`, and are never limited:
+
+- **A repeated revoke.** The response has `already_revoked: true`, and `reason` is the reason stored by the first revoke.
+- **A revoke after the pairing window ended**, on a trial that never paired. The stored `reason` is `pairing_expired`, and the `reason` of your request is ignored.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/trial/trl_4Hn8Rz2Wq6Lb9Tc3Yx7Kd5Mv1/revoke" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"rebind"}'
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  const result = await client.trial.revoke('trl_4Hn8Rz2Wq6Lb9Tc3Yx7Kd5Mv1', { reason: 'rebind' })
+  console.log(result.status, result.already_revoked, result.reason)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'rebind_cap_reached') {
+    console.error(`Rebind limit reached. Retry in ${err.retryAfter} seconds.`)
+  } else if (err instanceof APIError && err.code === 'rebind_not_allowed') {
+    console.error('Rebind is turned off for this account. Revoke without a reason.')
+  } else if (err instanceof APIError && err.code === 'trial_not_found') {
+    console.error('Unknown trial id, or a trial of another account.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.isnap.ai/v1/trial/trl_4Hn8Rz2Wq6Lb9Tc3Yx7Kd5Mv1/revoke",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    json={"reason": "rebind"},
+    timeout=30,
+)
+payload = response.json()
+
+if response.status_code == 200:
+    result = payload["data"]
+    print(result["status"], result["already_revoked"], result["reason"])
+elif payload["error"]["code"] == "rebind_cap_reached":
+    print("Rebind limit reached. Retry at", payload["error"]["retry_at"])
+elif payload["error"]["code"] == "rebind_not_allowed":
+    print("Rebind is turned off for this account. Revoke without a reason.")
+elif payload["error"]["code"] == "trial_not_found":
+    print("Unknown trial id, or a trial of another account.")
+else:
+    response.raise_for_status()
+```
+
+</CodeGroup>
+
+## Limits on live trials
+
+A trial is live while it is `pairing_pending` inside its pairing window, `active` or `dormant`.
+
+- **A direct account has one live trial at a time.** A second `POST /v1/trial/init` returns `409 trial_already_active`: revoke the live trial first.
+- **A wholesale partner can start any number of trials.** See [Accounts](/concepts#accounts).
+
+A prospect's handle is limited too, inside one pool:
+
+- On iSnap's shared trial pool, a handle is paired with one pool line at a time.
+- On your own test lines, a handle is paired with at most a number of lines that iSnap sets for your account. That number is 1 unless iSnap changed it.
+- A handle has at most one live trial on one pool line.
+
+When a prospect texts a valid pairing code over one of these limits, the trial is not paired and stays `pairing_pending` until its pairing window ends. iSnap sends `trial.bind_conflict`, and the prospect receives no reply. `GET /v1/trial/status` keeps returning `pairing_pending`: the event is the only signal. If the earlier trial of that prospect is yours, revoke it, and the handle can pair again immediately.
+
+## Metadata
+
+Set `metadata` when you start a trial, and change it with [`PATCH /v1/trial/{trial_id}`](/api-reference/trials/update-trial). The body of the `PATCH` is required and has one field, `metadata`. Send `Content-Type: application/json` with every body.
+
+- The `PATCH` merges: a key that you send replaces the stored value, a key sent as `null` is deleted, and the other keys stay.
+- The result contains at most 20 keys and 8,192 bytes once serialized. Beyond that, the call returns `400 metadata_too_large`. A request that only deletes keys is never refused for the size of the result.
+- The `PATCH` works in every status, `revoked` included, and sends no event.
+
+`metadata` is returned by `POST /v1/trial/init`, `GET /v1/trial/{trial_id}` and `PATCH /v1/trial/{trial_id}`. `GET /v1/trial/status` never returns it.
+
+Every `trial.*` event carries the `metadata` of the trial in `data.metadata`. `data.line_metadata` carries the `metadata` of the pool line when that line is one of your test lines, and `null` otherwise. The message events of a trial carry the `metadata` of the message, not of the trial.
+
+## Activity
+
+[`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity) returns the counters of one trial. It accepts the key of that trial only: an account API key returns `401 unauthorized`.
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `active` or `dormant`. |
+| `messages_sent_total`, `messages_received_total` | The messages of the trial that iSnap still keeps. iSnap deletes a message at least 72 hours after it recorded it, so these are not totals over the life of the trial. |
+| `last_inbound_at` | The time of the latest inbound message of the trial that iSnap still keeps. `null` when there is none. |
+| `last_activity_at` | Set at pairing, at each send, and each time the prospect resets the unanswered-send limit. |
+| `activity_rule.max_outbound_without_inbound` | The unanswered-send limit of the trial. |
+| `activity_rule.outbound_since_last_inbound` | The sends counted since the last reset. |
+| `activity_rule.remaining_before_dormant` | The sends left before the trial becomes `dormant`: the limit minus the counter, never below 0. |
+
+The response also carries `trial_id`, `pool_line_id` and `paired_handle`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/trial/activity" \
+  -H "Authorization: Bearer $ISNAP_TRIAL_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const trialClient = new ISnapClient({ apiKey: process.env.ISNAP_TRIAL_KEY ?? '', maxRetries: 2 })
+
+const activity = await trialClient.trial.activity()
+console.log(activity.status, activity.activity_rule.remaining_before_dormant)
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/trial/activity",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_TRIAL_KEY']}"},
+    timeout=30,
+)
+response.raise_for_status()
+activity = response.json()["data"]
+print(activity["status"], activity["activity_rule"]["remaining_before_dormant"])
+```
+
+</CodeGroup>
+
+## Events
+
+| Event | Sent when |
+| --- | --- |
+| [`trial.linked`](/webhooks/events/trial#trial-linked) | A prospect pairs with a trial by texting its pairing code. |
+| [`trial.dormant`](/webhooks/events/trial#trial-dormant) | The trial reaches its unanswered-send limit. |
+| [`trial.reactivated`](/webhooks/events/trial#trial-reactivated) | A `dormant` trial becomes `active` again. |
+| [`trial.bind_conflict`](/webhooks/events/trial#trial-bind_conflict) | A prospect texts a valid pairing code, but their handle is already paired with this pool line, or with as many pool lines of the pool as its limit allows. The trial stays unpaired. |
+| [`trial.revoked`](/webhooks/events/trial#trial-revoked) | You revoke a trial with `POST /v1/trial/{trial_id}/revoke`. A repeated revoke, and a revoke after the pairing window ended on a trial that never paired, send nothing. |
+
+The `data` of each event is described in [Trial events](/webhooks/events/trial). A message from the paired handle is stored and sends `message.received`: see [Receiving messages](/guides/receiving-messages).
+
+The events of a trial, and the message events of its messages, are tied to the pool line of the trial. A [webhook subscription](/webhooks/overview) with a line filter receives them only when the filter lists that line. The pool line is chosen when the trial starts: receive trial events on a subscription without a line filter.
+
+The trial events announce the five changes above, and no other. No event announces:
+
+- the start of a trial;
+- the end of a pairing window, or a trial revoked because its window ended;
+- a change of `metadata`;
+- a message that a sender who is not paired sends to the pool line, which is dropped without a reply;
+- a text that matches no pairing code;
+- the confirmation and the notice that iSnap sends to the prospect, or a failure to deliver them.
+
+Getting a line of your own changes no trial and sends no trial event. Revoke a trial when the prospect no longer needs it.
+
+The full list is in [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). To know the state of a trial, read it with `GET /v1/trial/{trial_id}`, or with `GET /v1/trial/status` during pairing. Deduplicate on `event_id`. Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. See [Duplicates](/webhooks/delivery#duplicates) and [Order](/webhooks/delivery#order).
+
+## Errors
+
+The refusals of each operation are on its reference page: [`POST /v1/trial/init`](/api-reference/trials/start-trial), [`GET /v1/trial/status`](/api-reference/trials/get-trial-status), [`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity), [`GET /v1/trial/{trial_id}`](/api-reference/trials/get-trial), [`PATCH /v1/trial/{trial_id}`](/api-reference/trials/update-trial) and [`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial). The refusals of a send with a trial key are on [`POST /v1/messages`](/api-reference/messages/send-message#with-a-trial-key). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Keys and accounts
+
+- **Test keys.** An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. A trial started with a test key is a real trial. See [Test keys](/authentication#test-keys).
+- **Line-scoped keys.** The list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied to trials: such a key can start, read, update and revoke any trial of the account.
+
+## Cost
+
+A trial on iSnap's shared trial pool costs nothing. A test line of your own is billed like a two-way rented line, whether or not trials run on it: see [Test lines](/guides/managing-lines#test-lines).
+
+## Personal data
+
+`paired_handle` is the prospect's phone number, or the email address of their Apple ID. These responses and events carry it:
+
+- `GET /v1/trial/status`, without a credential;
+- `GET /v1/trial/{trial_id}` and `PATCH /v1/trial/{trial_id}`;
+- `GET /v1/trial/activity`;
+- `trial.linked`, `trial.bind_conflict` and `trial.revoked`.
+
+The trial key reads the text of the messages of the trial through `GET /v1/messages`. The message events of a trial carry the same text and handles, and `message.received` adds `contact_name` when the line's device reports a display name for the sender.
+
+Request this data only when you need it. Do not copy it into logs, tickets or other tools. Refer to a prospect by an id of your own, which you can keep in the `metadata` of the trial.

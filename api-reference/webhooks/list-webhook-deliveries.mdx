@@ -1,0 +1,29 @@
+---
+title: "List the deliveries of a webhook subscription"
+description: "Lists the delivery records of a webhook subscription, newest first, with a cursor."
+openapi: "GET /v1/webhooks/{id}/deliveries"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key reads the deliveries of the events of every line of the account.
+- **`Idempotency-Key`:** not needed: the operation changes nothing. See
+  [Retrying safely](/idempotency#retrying-safely).
+- **Events:** none.
+- **Personal data:** `request_body_snippet` contains the beginning of an event, with message text and
+  handles, and `response_body_snippet` the beginning of the response of your endpoint. Request it
+  only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id
+  of your own.
+- **Guide:** [Delivery records](/webhooks/delivery#delivery-records) explains each field, and
+  [Retention](/webhooks/delivery#retention) says how long a record exists. A record describes one
+  delivery and shows its latest attempt.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `wh_` followed by 25 letters or digits. `limit` is outside 1 to 100. `status` is not `pending`, `success` or `failed`. `event` is longer than 100 characters. `since` or `until` is not a timestamp in ISO 8601, in UTC, ending with `Z`. |
+| 400 | `invalid_cursor` | `cursor` is not a cursor this operation returned. |
+| 404 | `not_found` | Your account has no subscription with this id. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

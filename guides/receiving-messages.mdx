@@ -1,0 +1,314 @@
+---
+title: "Receiving messages"
+description: "Receive the messages your lines get, read them and their chats, and know what iSnap records of messages typed on a line's device and how long it keeps them."
+---
+
+A line receives the messages its contacts write to it. This page describes how an inbound message reaches you and what its fields hold, how iSnap groups messages into chats, what it records of the messages typed on the line's device, what it does not report, and how long it keeps each record. Read it before you write the code that receives.
+
+What this page says about the line's device describes iMessage lines. iSnap makes no statement on this page about the device of an Android line.
+
+## Inbound messages
+
+An inbound message reaches you in two ways:
+
+- **The [`message.received`](/webhooks/events/message#message-received) event.** iSnap sends it when it records the message. `data` holds the `message`, its `chat_id`, `received_at` (the time the line's device gives for the reception) and, when the device reports one, `contact_name`: the display name of the sender as the device knows it. See [Webhooks overview](/webhooks/overview).
+- **[`GET /v1/messages`](/api-reference/messages/list-messages) with `direction=inbound`.** It lists the inbound messages that iSnap keeps: see [Listing messages](#listing-messages) and [Retention](#retention).
+
+An inbound message is a [message object](/concepts#messages) with these values:
+
+| Field | Value on an inbound message |
+| --- | --- |
+| `direction` | `inbound`. |
+| `status` | `delivered`, from the start. There is no status for "received". |
+| `from` | The handle of the sender. See [Handle of the sender](#handle-of-the-sender). |
+| `to` | The line's number. On a shared line, the number that serves the contact. |
+| `channel`, `service` | The service the message arrived on: `iMessage`, `SMS` or `RCS`. |
+| `delivered_at` | When the line's device received the message. |
+| `created_at` | When iSnap recorded the message. It can be much later than `delivered_at`: see [When a message arrives](#when-a-message-arrives). |
+| `sent_at`, `queued_at`, `scheduled_for` | `null`. |
+| `effect` | The effect the sender used, when there was one. Always `null` on a shared line. |
+| `attachments` | The files received with the message. See [Inbound attachments](/guides/attachments#inbound-attachments). |
+| `metadata` | `null`. |
+| `use_typing_indicator` | `true`. It has no meaning on an inbound message. |
+
+### Handle of the sender
+
+On a line that has its own device, `from` holds the sender's handle exactly as the line's device stores it, up to 255 characters: iSnap does not normalize it. It is a phone number, or an email address for a sender who writes from the email address of their Apple ID. A phone number can come in another form than E.164, and short codes and alphanumeric senders come as they are. On a shared line, `from` is normalized: a phone number is in E.164.
+
+Before you compare it with a number you send to, bring both to E.164 with the rule that `POST /v1/messages` applies to `to`: a number without a country code is read as a US number. The rules that depend on a contact having written to a line (known contacts, inbound-only lines and the reply lane of [Sending limits](/guides/sending-limits#new-and-known-contacts)) compare the `to` of a send with the handle as stored.
+
+You cannot reply through the API to a contact who writes from an email address. [`POST /v1/messages`](/api-reference/messages/send-message) and [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) return `400 bad_request`, the typing and read operations return `422 unsupported_handle`, and a reaction returns `422 reaction_recipient_unsupported` when the address is longer than 20 characters. Show such a chat as read-only.
+
+The line's device reports every message that its Apple ID receives, including a message sent to an email address of that account rather than to the line's number. `to` is the line's number in both cases.
+
+### When a message arrives
+
+The line's device checks for new messages every 2 seconds. While the device is asleep, stopped or without its permission to read messages, it reports nothing. When it is back, it reports the messages it stored meanwhile, oldest first: such a message is delayed, not lost, as long as Apple delivered it to the device. A device that is paired again does not report the messages dated more than 10 minutes before that pairing: such a message is lost, and no event announces it. A late message's `created_at` is the time iSnap recorded it, later than its `delivered_at`.
+
+`since` and `until` on `GET /v1/messages` bound `created_at`. A walk by `created_at` therefore finds a late message: see [Timestamps in queries](/pagination#timestamps-in-queries).
+
+### What iSnap records
+
+- **Long texts.** iSnap cuts the text of an inbound message to 10,000 characters, counted in UTF-16 code units.
+- **Duplicates.** A message that the device reports twice is recorded once and announced once.
+- **No history.** Pairing a device does not import the messages that are already on it. iSnap ignores the messages, receipts and reactions that the device dates more than 10 minutes before it started serving the line.
+- **Attachments.** The files of a message are listed in its `attachments`. Read each one with [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment). A received file cannot go in the `attachments` of [`POST /v1/messages`](/api-reference/messages/send-message): its id returns `404 not_found`.
+
+These inbound messages are not recorded, and send no message event:
+
+- on a [shared line](/guides/sending-messages#shared-lines), a message from a contact whom no number of the shared line serves;
+- on a [test line](/guides/managing-lines#test-lines), a message from anyone but the paired contact of a trial that runs on the line;
+- the message that carries a pairing code, which pairs a prospect with a [trial](/guides/trials): the pairing sends [`trial.linked`](/webhooks/events/trial#trial-linked);
+- a message whose attachment the line's device could not get within 60 seconds: the whole message is dropped, text included. See [Inbound attachments](/guides/attachments#inbound-attachments).
+
+## Listing messages
+
+[`GET /v1/messages`](/api-reference/messages/list-messages) lists the inbound and outbound messages of your account that iSnap still keeps, newest first by default.
+
+| Filter | Keeps |
+| --- | --- |
+| `line_id` | The messages of one line. An unknown line id, or one of another account, returns an empty page. |
+| `direction` | `inbound` or `outbound`. |
+| `status` | One of the seven [message statuses](/concepts#message-statuses). |
+| `kind` | `message`, `voice` or `reaction`. `kind=message` leaves out voice notes and reaction entries. |
+| `since`, `until` | Inclusive bounds on `created_at`. |
+
+`sort=scheduled_for` orders by `scheduled_for` instead of `created_at`, with the messages that have none, inbound messages among them, last. The cursor rules, and what happens to a cursor used with other filters, are in [Pagination](/pagination#cursors). With a [line-scoped key](/authentication#line-scoped-keys), the list holds only the messages of the lines of the key.
+
+The messages of a trial on a test line are not listed with your account key, and `GET /v1/messages/{id}` returns `404 not_found` for them: list them with the trial key.
+
+An entry with `kind: reaction` does not say which message it reacts to, nor which reaction it is. To know the reactions on a message, list with `kind=message` and read the `reactions` field of each message, or receive the reaction events: see [Reactions from the contact](/guides/conversations#reactions-from-the-contact).
+
+<CodeGroup>
+
+```bash curl
+curl -sS -G https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "line_id=line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd" \
+  --data-urlencode "direction=inbound" \
+  --data-urlencode "since=2026-10-08T00:00:00Z" \
+  --data-urlencode "limit=100"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// The iterator requests each next page with the same filters.
+const seen = new Set<string>()
+for await (const message of client.messages.list({
+  line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+  direction: 'inbound',
+  since: '2026-10-08T00:00:00Z',
+  limit: 100
+})) {
+  if (seen.has(message.id) || message.kind === 'reaction') continue
+  seen.add(message.id)
+  console.log(message.id, message.service, message.created_at, message.attachments.length)
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+query = {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "direction": "inbound",
+    "since": "2026-10-08T00:00:00Z",
+    "limit": 100,
+}
+seen = set()
+cursor = None
+while True:
+    params = {**query, "cursor": cursor} if cursor else query
+    response = requests.get(f"{API}/v1/messages", headers=HEADERS, params=params, timeout=30)
+    response.raise_for_status()
+    page = response.json()["data"]
+    for message in page["items"]:
+        if message["id"] in seen or message["kind"] == "reaction":
+            continue
+        seen.add(message["id"])
+        print(message["id"], message["service"], message["created_at"], len(message["attachments"]))
+    if not page["has_more"]:
+        break
+    cursor = page["next_cursor"]
+```
+
+</CodeGroup>
+
+[`GET /v1/messages/{id}`](/api-reference/messages/get-message) returns one message with its current status. It returns `404 not_found` for an unknown id, a message of another account or of a trial, a message on a line outside the list of a line-scoped key, and a message that iSnap has deleted: see [Retention](#retention).
+
+`GET /v1/messages` and `POST /v1/messages` share the message-operations limit: see [Rate limits](/errors-and-rate-limits#rate-limits).
+
+## Chats
+
+A [chat](/concepts#chats) is the exchange between one line and one contact. iSnap creates it at the first message in either direction, and uses the same chat for both directions when the line's device stores the contact's handle in the form of the `to` you send to.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `chat_` followed by 25 characters. |
+| `line_id` | The line. |
+| `contact_handle` | The handle that opened the chat: the E.164 form of `to` when your send opened it, or the handle as the line's device stores it when a received message opened it. The typing and read operations take only a chat whose `contact_handle` is in E.164. |
+| `outbound_number` | On a shared line, the number that serves the contact now, or `null` when no number serves the contact. `null` on every other line. |
+| `last_message_at` | The time of the latest message recorded in the chat: for a message you send, the time iSnap accepted it; for a received or device-typed message, the time the device gives. A late report can set it to an earlier time. It equals `created_at` while the chat has no message. It also moves when iSnap deletes a copy of your own message: see [Messages typed on the device](#messages-typed-on-the-device). |
+| `message_count` | The number of messages recorded in the chat since it was created. It can go down by one: see [Messages typed on the device](#messages-typed-on-the-device). |
+| `unread_count` | The number of inbound messages ever received in the chat. |
+| `created_at`, `updated_at` | When the chat was created and last changed. |
+
+What the two counters do not mean:
+
+- `message_count` is not the number of messages you can read: it does not go down when iSnap deletes messages.
+- `unread_count` is not the number of unread messages: marking the chat read does not lower it. To know whether an inbound message was read on your side, read its `read_at`: see [Read receipts](/guides/conversations#read-receipts).
+
+The message object has no chat id. You get chat ids from [`GET /v1/chats`](/api-reference/chats/list-chats), and from the `chat_id` field of `message.received`, of `message.sent` with `origin: "device"`, of the `message.read` that follows your own mark-read call, and of the typing indicator events.
+
+To show the messages of one chat, list the messages of its line with `GET /v1/messages` and `line_id`, and keep those whose handle matches the chat's `contact_handle` once both are in E.164: `to` on an outbound message, `from` on an inbound message. A message received in a group chat has the member's handle in `from`: only the `chat_id` of its `message.received` places it in that chat. Store the `chat_id` of every event that carries one.
+
+`GET /v1/chats` lists the chats of the lines you own, most recent activity first. `line_id` keeps the chats of one line, and `since` and `until` bound the time of the last activity. `limit` is 1 to 100, 20 by default. A chat that has a new message during a walk moves to the front of the list, before the cursor, and the walk does not return it. A message that the device reports late can move a chat back, and the walk can then return it twice. Deduplicate on the chat id, then list again with `since` set earlier than the start of your walk by the reporting delay that you accept. See [Cursors](/pagination#cursors). [`GET /v1/chats/{chat_id}`](/api-reference/chats/get-chat) returns one chat, or `404 not_found` for an unknown chat, a chat on a line that is not yours, or a chat on a line outside the list of a line-scoped key.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -G https://api.isnap.ai/v1/chats \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "line_id=line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd" \
+  --data-urlencode "limit=100"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Chats move during a walk: deduplicate on the id, then list again with since.
+const chats = new Map<string, string>()
+for await (const chat of client.chats.list({ line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', limit: 100 })) {
+  chats.set(chat.id, chat.last_message_at)
+}
+console.log(`${chats.size} chats`)
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+query = {"line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd", "limit": 100}
+chats = {}
+cursor = None
+while True:
+    params = {**query, "cursor": cursor} if cursor else query
+    response = requests.get(f"{API}/v1/chats", headers=HEADERS, params=params, timeout=30)
+    response.raise_for_status()
+    page = response.json()["data"]
+    for chat in page["items"]:
+        # Chats move during a walk: deduplicate on the id, then list again with since.
+        chats[chat["id"]] = chat["last_message_at"]
+    if not page["has_more"]:
+        break
+    cursor = page["next_cursor"]
+print(len(chats), "chats")
+```
+
+</CodeGroup>
+
+### Group chats
+
+A line can receive messages in a group chat. iSnap records them in one chat for that group:
+
+- Each message has the handle of the member who sent it in `from`.
+- The chat shows a single `contact_handle`, the first sender seen. It has no member list and no name, and nothing marks it as a group.
+- A rename, a member who joins and a member who leaves are not reported.
+- A contact card, a typing indicator or a read receipt sent on such a chat goes to that single `contact_handle`.
+
+### A chat is never deleted
+
+A chat stays listed after iSnap deletes its messages, with its `contact_handle` and its counters. The API has no call that deletes a chat. See [Retention](#retention).
+
+A chat belongs to the line, not to your account. When you transfer a line, or when a line returns to the marketplace and another account gets it, the next owner lists every chat of the line, with its `contact_handle`, its counters and the time of its last activity, and you no longer see them. The handles of the contacts who wrote to the line stay with the line too.
+
+The next owner can also receive the content of your messages:
+
+- **Your inbound messages that were not marked read.** When the next owner marks one of these chats read, iSnap also marks read the inbound messages that you received in the chat, that it still keeps and that were not marked read. Only `POST /v1/chats/{chat_id}/read` marks a message read: when you never called it, this is every inbound message of the chat that iSnap still keeps. The line's device can send read receipts for them to the contact, and the next owner receives each of these messages in [`message.read`](/webhooks/events/message#message-read), with its text, the sender's handle and the names of its files.
+- **Events about your earlier messages.** The delivery statuses, read receipts and reactions that the line's device reports afterward about messages from before the change go to the next owner; the message events carry the message they concern. You do not receive them.
+
+[`GET /v1/messages`](/api-reference/messages/list-messages) does not list your messages to the next owner, and still lists them to you until iSnap deletes them.
+
+Before you transfer a line or let it return to the marketplace, export what you need from its chats. After you get a line, ignore the chats and the events about messages from before you got it: the counters of a chat include the messages of earlier owners, and an event whose message has a `created_at` earlier than the time you got the line, or a reaction whose `parent_message_id` is not a message of yours, concerns an earlier owner. See [Lines that change owner](/webhooks/overview#lines-that-change-owner) for the rule and for that time.
+
+## Messages typed on the device
+
+On a line that has its own device, rented or BYOD, someone can type a message in the Messages app of that device. iSnap records it:
+
+- as `direction: outbound` and `status: delivered`, with `sent_at` and `delivered_at` both set to the device's time;
+- and announces it with [`message.sent`](/webhooks/events/message#a-message-typed-on-the-device), with `origin: "device"` and a `chat_id`. A message sent through the API has `origin: "api"`.
+
+The device checks for such messages every 2 seconds. It waits up to 60 seconds before it reports one when an API send to the same contact started within 30 seconds of it, before or after, so that the API's own message is not reported as typed. It never waits on a message typed in a group chat. A report waits up to 8 seconds for its files, then goes without the files not uploaded yet.
+
+When the API's own message still arrives as a typed report, iSnap records it and sends `message.sent` with `origin: "device"`, then deletes that copy: its id returns `404 not_found`, and `message_count` goes down by one. Nothing in the event marks it as such a copy. Before you act on a `message.sent` with `origin: "device"` whose `to` and `body` match a message you sent through the API, wait until your own message is `sent`, then read the event's message with [`GET /v1/messages/{id}`](/api-reference/messages/get-message): `404 not_found` means that it was such a copy.
+
+These messages are not recorded:
+
+- a typed message that Apple failed to send;
+- a report that iSnap did not accept within 10 minutes;
+- a message typed on the device of a shared line, or of a line that runs trials.
+
+A reaction from the line on a typed message is refused with `422 parent_not_yet_acked`, and a contact's reaction to a typed message is not reported: see [Chat features](/guides/conversations#reactions).
+
+## Edits, unsends and deletions
+
+The line's device does not report that a message was edited, unsent or deleted, whether it was received or typed on the device. iSnap keeps the message as first reported, and no event announces the change.
+
+## Retention
+
+iSnap deletes every message at least 72 hours after it recorded it, whatever its status. After that, `GET /v1/messages/{id}` returns `404 not_found`, and the reactions on the message are deleted with it. No event announces the deletion.
+
+The API has no call that deletes a message, a chat or an attachment. `DELETE /v1/messages/{id}` only cancels a send that has not left.
+
+Once it deletes the messages, iSnap keeps:
+
+- the chat, with its `contact_handle`, its counters and the time of its last activity;
+- the record of each attachment, with its file name, content type and size, without the file;
+- for each line, the handle of each contact who wrote to it, with the dates of their first and last inbound message.
+
+A delivery receipt, a read receipt or a reaction about a message that iSnap has deleted sends no event.
+
+## Events
+
+| Event | Sent when |
+| --- | --- |
+| [`message.received`](/webhooks/events/message#message-received) | iSnap records an inbound message. |
+| [`message.sent`](/webhooks/events/message#message-sent) with `origin: "device"` | iSnap records a message typed on the line's device. |
+| [`reaction.received`](/webhooks/events/reaction#reaction-received), [`reaction.removed`](/webhooks/events/reaction#reaction-removed) | A contact adds or removes a reaction on a message of the line. See [Reactions from the contact](/guides/conversations#reactions-from-the-contact). |
+| [`message.read`](/webhooks/events/message#message-read) | You mark a chat read, or a contact reads your message. |
+
+No iMessage line reports that a contact is typing: the [typing indicator events](/webhooks/events/typing-indicator) are not sent for those lines.
+
+These events do not announce everything: the messages listed in [What iSnap records](#what-isnap-records) send nothing, and neither do edits, unsends and deletions. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile from [`GET /v1/messages`](/api-reference/messages/list-messages) and [`GET /v1/chats`](/api-reference/chats/list-chats). Deduplicate on `event_id`. Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. For a `message.read` about a message you sent, apply [Building the status from events](/guides/sending-messages#building-the-status-from-events).
+
+On a line that changed owner, by a transfer or by a return to the marketplace, the events about messages from before the change go to the account that owns the line when the line's device reports them. After you get a line, ignore the events about messages from before you got it: see [A chat is never deleted](#a-chat-is-never-deleted).
+
+## Errors
+
+The refusals of each operation are on its reference page: [`GET /v1/messages`](/api-reference/messages/list-messages), [`GET /v1/messages/{id}`](/api-reference/messages/get-message), [`GET /v1/chats`](/api-reference/chats/list-chats) and [`GET /v1/chats/{chat_id}`](/api-reference/chats/get-chat). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+Inbound messages and chats carry personal data:
+
+- the sender's handle in `from` and the chat's `contact_handle`: a phone number, or the email address of an Apple ID;
+- the text in `body`, the files in `attachments` and their file names;
+- `contact_name` in `message.received`, the sender's name as the line's device knows it.
+
+Request this data only when needed. Do not copy it into logs, tickets or other tools. Refer to a contact by an id of your own. A chat, with its `contact_handle`, stays after the messages are deleted, and the API has no call that deletes it.
+
+A chat belongs to the line, not to your account. When you transfer a line, or when a line returns to the marketplace and another account gets it, the next owner lists every chat of the line, with its `contact_handle`, its counters and the time of its last activity, and you no longer see them. When the next owner marks such a chat read, it receives in `message.read` each of your inbound messages of the chat that iSnap still keeps and that was not marked read, with its text, the sender's handle and the names of its files. Before you transfer a line or let it return to the marketplace, export what you need from its chats: see [A chat is never deleted](#a-chat-is-never-deleted).

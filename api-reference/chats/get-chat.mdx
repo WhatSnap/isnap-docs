@@ -1,0 +1,20 @@
+---
+title: "Get a chat"
+description: "Returns one chat: the exchange between one of your lines and one contact."
+openapi: "GET /v1/chats/{chat_id}"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `404 not_found` for a chat on a line outside its list.
+- **Events:** none.
+- **Personal data:** `contact_handle` is a phone number or an email address. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Line owner:** a chat belongs to its line: after a line changes owner, the account that owns the line lists its chats, those of earlier owners included. See [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+- **What is returned:** the chat, with its counters and, on a shared line, the `outbound_number` that serves the contact. See [Chats](/guides/receiving-messages#chats).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 404 | `not_found` | The chat is unknown, its line is not yours, or it is on a line outside the list of a line-scoped key. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

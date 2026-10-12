@@ -1,0 +1,27 @@
+---
+title: "Change the variant of a line"
+description: "Moves a rented line between inbound-only and two-way, immediately or at a billing anchor of the line."
+openapi: "POST /v1/lines/{id}/variant"
+---
+
+- **Credential:** an API key of the owner of the line. The line must be an `active` rented line with no per-line subscription. A line with one returns `409 variant_bound_to_stripe_price`. See [Variant changes](/guides/managing-lines#variant-changes) for the effect on billing.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Test keys:** a change sent with an `isnap_test_` account key changes the real line and its billing: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. With `effective` absent or `now`, asking for the value that the line already has returns `200` and changes nothing. With `effective: "next_anchor"`, resending the pending change returns it unchanged. Scheduling the value that the line already has returns `200` and stores nothing when no change is pending, and `409 variant_change_already_pending` while a change to the other value is pending.
+- **Events:** [`line.variant_changed`](/webhooks/events/line#line-variant_changed) when a change is applied, [`line.variant_scheduled`](/webhooks/events/line#line-variant_scheduled) when a change is scheduled. A scheduled change that is dropped sends no event.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `not_before_in_the_past` | `not_before` is before the time of the call. |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 409 | `not_a_rental_line` | The line is not a rented line. |
+| 409 | `line_not_active` | The line is not `active`. |
+| 409 | `variant_bound_to_stripe_price` | The line has a per-line subscription. |
+| 409 | `variant_change_already_pending` | A different change is already scheduled. |
+| 409 | `line_has_no_billing_anchor` | The change is scheduled on a line that has neither a billing anchor nor an activation timestamp. |
+| 409 | `variant_change_conflict` | The line changed during the call. Nothing was written. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,18 @@
+---
+title: "List area codes"
+description: "Lists the area codes that can be requested on a pre-order, and the countries they belong to."
+openapi: "GET /v1/area-codes"
+---
+
+- **Credential:** none.
+- **Events:** none.
+- **Pages:** none. The whole list is returned in one response. `area_codes` is ordered by `country_code`, then by `area_code`, and `countries` by `country_code`.
+- **Meaning:** the list contains the area codes that a pre-order can request. It does not say which lines are in stock, and a pre-order does not check its `preferred_area_codes` against it. See [How a pre-order works](/guides/pre-orders#how-a-pre-order-works).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `country` is not 2 letters. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

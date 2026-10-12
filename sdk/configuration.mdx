@@ -1,0 +1,161 @@
+---
+title: "SDK configuration"
+sidebarTitle: "Configuration"
+description: "Lists every option of the ISnapClient constructor and of a single call with its default and validation, the headers the SDK sends, and how to call an operation that has no method."
+---
+
+This page lists what you can set on a client and on a single call, and what the SDK sends with every request. Read it when you create a client, when a call needs its own retries, headers or deadline, or when you call an operation that has no method.
+
+## Create a client
+
+```typescript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY ?? '',
+  timeoutMs: 10_000,
+  maxRetries: 2,
+  maxRetryDelayMs: 5_000,
+  onRetry: ({ attempt, nextDelayMs, error }) => {
+    const cause = error instanceof APIError ? error.code : 'no response'
+    console.warn(`Attempt ${attempt} failed (${cause}). Next attempt in ${Math.round(nextDelayMs)} ms.`)
+  }
+})
+
+const { lines } = await client.lines.listMine()
+console.log(lines.length)
+```
+
+`apiKey` is the only required option. Creating a client makes no network call.
+
+The SDK reads no environment variable. The key and every setting come from the options object: read `ISNAP_API_KEY` yourself and pass it, as the sample does.
+
+## Client options
+
+| Option | Default | Meaning | Validation |
+| --- | --- | --- | --- |
+| `apiKey` | None: required. | The credential sent with every request. | A non-empty string. Leading and trailing whitespace is removed. The SDK does not check the prefix or the format of the key. |
+| `baseUrl` | `https://api.isnap.ai` | The base URL of the API. Every kind of key uses the same host: keep the default. | Trailing slashes are removed. |
+| `timeoutMs` | `30000` | The time allowed for each attempt to receive the response headers, in milliseconds. The SDK does not bound the reading of the body. `timeoutMs` does not bound the whole call either: see [How long a call can last](/sdk/errors#how-long-a-call-can-last). | A finite positive number. |
+| `maxRetries` | `3` | The number of automatic retries after the first attempt. The default gives up to 4 attempts. `0` turns automatic retries off. The pages of this site pass `maxRetries: 2`, the rule of [Errors](/errors-and-rate-limits#errors). | A non-negative integer. |
+| `maxRetryDelayMs` | `60000` | The longest wait the SDK accepts before one retry, in milliseconds. | A finite positive number. |
+| `idempotencyKey` | `"auto"` | `"auto"`: the SDK adds an `Idempotency-Key` to every write. `"manual"`: it sends only the key a call passes. See [Idempotency keys](/sdk/errors#idempotency-keys). | Not validated at run time. |
+| `fetch` | The global `fetch`. | A function that replaces the HTTP implementation. | None. |
+| `onRetry` | None. | A function called before each automatic retry with `{ attempt, nextDelayMs, error }`. `attempt` is the zero-based index of the attempt that failed. It is also called once when the `signal` of the call is aborted during a request that the SDK would have retried. | None. |
+
+The constructor throws a plain `Error`, synchronously, when an option is invalid. For `apiKey` the message is `iSnap SDK: apiKey is required` when the key is missing or is not a string, and `iSnap SDK: apiKey cannot be empty or whitespace` when it is empty or contains only whitespace.
+
+The client has no option for default headers, a proxy, logging or an API version. Pass headers with each call. The SDK sends no API version and negotiates none.
+
+### Read response headers with `fetch`
+
+A method resolves with the `data` of the response: the status and the headers of a successful response are not available to your code. To read them, pass a `fetch` that wraps the global one. This client logs the [rate-limit headers](/errors-and-rate-limits#rate-limits) of every response:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY ?? '',
+  maxRetries: 2,
+  fetch: async (input, init) => {
+    const response = await fetch(input, init)
+    console.log(response.status, response.headers.get('x-ratelimit-remaining'))
+    return response
+  }
+})
+
+await client.lines.listMine()
+```
+
+## Per-call options
+
+Every method takes a last, optional argument with the options of that call:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const line = await client.lines.get('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', {
+  maxRetries: 0,
+  signal: AbortSignal.timeout(5_000),
+  headers: { 'User-Agent': 'acme-crm/4.2' }
+})
+console.log(line.status)
+```
+
+| Option | Type | Effect |
+| --- | --- | --- |
+| `idempotencyKey` | `string` | The value of the `Idempotency-Key` header of this call. See [Idempotency keys](/sdk/errors#idempotency-keys). |
+| `signal` | `AbortSignal` | Cancels the call. See [Cancellation](/sdk/errors#cancellation). |
+| `maxRetries` | `number` | Replaces the client's `maxRetries` for this call. An invalid value rejects the promise with a plain `Error`. |
+| `query` | An object of strings, numbers and booleans. | Query parameters added to the URL. A value that is `undefined` or `null` is left out. Every other value is sent as a string. |
+| `headers` | `HeadersInit` | Headers added to the request. |
+
+Three rules apply:
+
+- On the four list iterators (`messages.list`, `chats.list`, `webhooks.deliveries` and `webhooks.events`) the `query` option is ignored: only the filters argument is sent. On every other method, an argument of the method overrides the same key in `query`.
+- `headers` can add headers and can replace `User-Agent`, `Accept` and `Content-Type`. It cannot replace `Authorization`, nor the `Idempotency-Key` the SDK sets.
+- There is no per-call timeout. `timeoutMs` is set on the client and applies to each attempt. To stop one call, retries included, pass a `signal`: see [Cancellation](/sdk/errors#cancellation).
+
+`attachments.upload` takes two more options, `pollIntervalMs` and `maxPolls`: see [The attachments helper](/sdk/reference#the-attachments-helper).
+
+## Headers
+
+| Header | Value | Sent |
+| --- | --- | --- |
+| `Authorization` | `Bearer` followed by the `apiKey` of the client. | With every request. |
+| `User-Agent` | `@isnap/sdk/2.2.1` | With every request. |
+| `Accept` | `application/json` | With every request. |
+| `Content-Type` | `application/json` | With a request that has a body. |
+| `Idempotency-Key` | A random UUID (version 4), or the `idempotencyKey` of the call. | In `"auto"` mode, with every `POST`, `PATCH`, `PUT` and `DELETE` call. In `"manual"` mode, only when the call passes a key. |
+
+A request body is your object passed through `JSON.stringify`. Field names are the `snake_case` names of the API: the SDK converts no name.
+
+## Credentials
+
+A client has one credential and sends it with every request. That includes the operations that need no credential: `client.version()`, `client.health()`, `lines.list()`, `lines.get()`, `areaCodes.list()`, `apps.manifest()` and `trial.status()` also require a client created with a non-empty `apiKey`.
+
+The SDK takes an API key or a trial key, not a dashboard session. An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. See [Test keys](/authentication#test-keys).
+
+To call with a [trial key](/authentication#trial-keys), create a second client with that key:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const trialClient = new ISnapClient({ apiKey: process.env.ISNAP_TRIAL_KEY ?? '', maxRetries: 2 })
+
+const { lines } = await client.lines.listMine()
+const activity = await trialClient.trial.activity()
+console.log(lines.length, activity.status, activity.messages_sent_total)
+```
+
+## Call an operation that has no method
+
+`client.request(method, path, body?, opts?)` calls any path of the API. It applies the same authentication, retries, idempotency key and error handling as the typed methods, and resolves with the `data` of the response. You give the type of that `data`: the sample below declares the fields it reads.
+
+[`GET /v1/attention`](/api-reference/lines/list-attention) is the operation of the API reference that has no method:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+type Attention = {
+  entries: { line_id: string; since: string | null; reasons: string[]; detail_withheld: boolean }[]
+}
+
+const { entries } = await client.request<Attention>('GET', '/v1/attention')
+for (const entry of entries) {
+  console.log(entry.line_id, entry.since, entry.reasons)
+}
+```
+
+`client.request` is also how you [page through a list by hand](/sdk/pagination#page-by-hand).
+
+## Console output
+
+When a response carries a `Deprecation` header, the SDK writes one `console.warn` per method, path and `Sunset` value for the life of the process. The warning names the removal date and the successor path when the API sends them. [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) describes these headers.
+
+Apart from that warning, the SDK writes nothing to the console and keeps no log.

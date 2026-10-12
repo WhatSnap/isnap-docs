@@ -1,0 +1,21 @@
+---
+title: "Get the sending limits of a line"
+description: "Returns the five sending counters of a line with their limits, the reply-lane budget and the time each full counter frees room."
+openapi: "GET /v1/lines/{id}/quota"
+---
+
+- **Credential:** an API key of the owner of the line. See [Reading the limits and the queue](/guides/sending-limits#reading-the-limits-and-the-queue).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list, even when the line does not exist.
+- **Events:** none.
+- **Rolling windows:** every counter counts over a rolling window and none resets at midnight. See [The five limits](/guides/sending-limits#the-five-limits).
+- **`*_frees_at`:** the time at which a counter drops back under its limit. `null` when the counter is under its limit, when the limit is 0, or when the time could not be computed: read `null` as "no known wait".
+- **Limits in force:** the limits returned are the ones in force on the line. To change them, see [Configuration](/guides/managing-lines#configuration).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or the line is not yours. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

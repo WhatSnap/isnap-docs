@@ -1,0 +1,647 @@
+---
+title: "Line events"
+description: "Gives the data of line.connected, line.disconnected, line.offline, line.degraded, line.apple_id_flagged, line.quota_warning, line.quota_exceeded, line.capability_changed, line.terminated, line.variant_changed, line.variant_scheduled and line.variant_unscheduled, with the line kinds each one concerns, an example of each and the personal data they carry."
+---
+
+The `line.*` events announce changes to one of your lines: its connection, its ability to send and
+receive, its sending limits, its variant and its end. For each of the twelve event types, this page
+says when it is sent and when it is not, lists the fields of `data`, and shows a full event.
+
+Line events do not cover every change of a line. A reservation, an activation, a transfer, a
+suspension and a change of configuration send no event: see
+[What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and read the
+state of your lines from the API on a schedule.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `metadata` | object | Yes | The `metadata` of the line. |
+| `line_metadata` | object | Yes | The same value as `metadata`. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+Four events carry a `line` object: `line.connected`, `line.disconnected`, `line.terminated` and
+`line.variant_changed`. It is the full line, as its owner reads it. The other events carry
+`line_id`.
+
+Not every line kind gets every event: `line.degraded` and `line.capability_changed` are sent for
+BYOD lines only, and a shared line gets neither `line.connected` nor `line.offline`. See
+[Line events by line kind](/webhooks/event-catalog#line-events-by-line-kind).
+
+**Personal data.** A `line` object carries `phone_number`, the number of the line, unmasked. The
+`reason` and `error` of `line.apple_id_flagged` are text from the line's device, and the `reason`
+of `line.terminated` is free text. Do not copy them into logs, tickets or other tools.
+
+## `line.connected`
+
+Sent when:
+
+- a BYOD device finishes pairing: `connected_at` then equals the `activated_at` of the line;
+- a BYOD line that was offline is heard from again;
+- a BYOD line that was degraded passes all the checks that were failing;
+- iSnap hands a line over to your account with its device already connected: the line of a
+  pre-order, or another line that iSnap delivers to your account once it is ready;
+- a rented line or a test line recovers from an outage that a durable `line.offline` announced.
+
+It is not sent when you activate or assign a line, and a rented line or a test line that recovers
+from an outage that was not announced sends nothing.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line` | object | No | The line. |
+| `device_session_id` | string | No | The id of the device session that serves the line. |
+| `connected_at` | string | No | The time of the connection. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_iQhZL5ZmeUrD953nigRJr3Nrf",
+  "event_type": "line.connected",
+  "created_at": "2026-10-08T16:48:20.091Z",
+  "trace_id": "b9ad0531553b629b6d182bc2edf9567a",
+  "data": {
+    "line": {
+      "id": "line_2Tm6Qx9Kd4Wc7Hb3Ln8Vz5Ry1",
+      "phone_number": "+14155550127",
+      "area_code": "415",
+      "country_code": "US",
+      "state": "CA",
+      "state_name": "California",
+      "billing_tier": "byod_imessage",
+      "byod": true,
+      "inbound_only": false,
+      "capabilities": ["imessage", "sms"],
+      "status": "active",
+      "monthly_price": 1500,
+      "stripe_subscription_id": null,
+      "activated_at": "2026-09-20T10:15:00.000Z",
+      "expires_at": null,
+      "anniversary_at": "2026-09-20T10:15:00.000Z",
+      "cancel_at": null,
+      "billing_anchor_at": null,
+      "next_anchor_at": "2026-10-20T10:15:00.000Z",
+      "pending_variant": null,
+      "created_at": "2026-09-20T10:15:00.000Z",
+      "metadata": { "crm_account_id": "acct_4821" },
+      "test_line": false,
+      "shared": false
+    },
+    "device_session_id": "dvs_5Tn8Kc3Wq6Zb9Lx2Hm7Vd4Ry1",
+    "connected_at": "2026-10-08T16:48:20.000Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `line.phone_number`.
+
+## `line.disconnected`
+
+Sent when the line's device signs out, when you terminate the line or a scheduled cancellation is
+carried out, when the BYOD slots of the account no longer cover a BYOD line, and when the hosted
+macOS session that the line runs on is released while a device session of the line runs on it, even
+when the device has stopped reporting. When you terminate a
+line, when a scheduled cancellation is carried out, and when BYOD slots no longer cover the line,
+the event is sent even if the line had no device session: `device_session_id` is then `null`. It is
+sent for every line kind.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line` | object | No | The line. |
+| `device_session_id` | string | Yes | The id of the device session that ended. `null` when the line had none, which is always the case for a shared line. |
+| `reason` | string | No | Why the event was sent: see the table below. |
+| `disconnected_at` | string | No | The time of the disconnection. |
+
+| `reason` | Meaning |
+| --- | --- |
+| `device_logout` | The device signed out. |
+| `customer_initiated` | You terminated the line, or a BYOD line was ended because the BYOD slots of the account no longer cover it. |
+| `scheduled_cancellation` | A scheduled cancellation of the line was carried out, or the hosted macOS session the line ran on was released at the date you scheduled. |
+| `admin_revoked` | iSnap took back the hosted macOS session the line ran on. |
+
+It is not sent when iSnap terminates a line: `line.terminated` then announces the end of the line
+without `line.disconnected`. It is not sent either for the device sessions that a transfer or a
+suspension ends, nor when a device session is replaced by a new pairing on the same line or revoked
+by iSnap.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_5U3lAKt1sEil4nTUqdaOnmDi6",
+  "event_type": "line.disconnected",
+  "created_at": "2026-10-08T17:15:02.371Z",
+  "trace_id": "c5ac59e2bbba55414088db30f2f082fd",
+  "data": {
+    "line": {
+      "id": "line_2Tm6Qx9Kd4Wc7Hb3Ln8Vz5Ry1",
+      "phone_number": "+14155550127",
+      "area_code": "415",
+      "country_code": "US",
+      "state": "CA",
+      "state_name": "California",
+      "billing_tier": "byod_imessage",
+      "byod": true,
+      "inbound_only": false,
+      "capabilities": ["imessage", "sms"],
+      "status": "active",
+      "monthly_price": 1500,
+      "stripe_subscription_id": null,
+      "activated_at": "2026-09-20T10:15:00.000Z",
+      "expires_at": null,
+      "anniversary_at": "2026-09-20T10:15:00.000Z",
+      "cancel_at": null,
+      "billing_anchor_at": null,
+      "next_anchor_at": "2026-10-20T10:15:00.000Z",
+      "pending_variant": null,
+      "created_at": "2026-09-20T10:15:00.000Z",
+      "metadata": { "crm_account_id": "acct_4821" },
+      "test_line": false,
+      "shared": false
+    },
+    "device_session_id": "dvs_5Tn8Kc3Wq6Zb9Lx2Hm7Vd4Ry1",
+    "reason": "device_logout",
+    "disconnected_at": "2026-10-08T17:15:02.336Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `line.phone_number`.
+
+## `line.offline`
+
+Sent in two forms, told apart by `durable`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `byod` | boolean | No | `true` in the immediate form, `false` in the durable form. |
+| `durable` | boolean | No | `false` in the immediate form, `true` in the durable form. |
+| `detected_at` | string | No | The time iSnap detected the outage. |
+
+### Immediate form: BYOD lines
+
+Sent when the device of a BYOD line has not reported for 5 minutes, or has not reported at all since
+it was paired. iSnap checks every 60 seconds: a device that pairs and does not report before the next
+check is announced offline, with `last_heartbeat_at: null`, and announced connected at the first check
+after its first report.
+A line that is `degraded` because its reception checks fail gets no `line.offline`. `data` adds:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `last_heartbeat_at` | string | Yes | The time of the last report of the device. `null` if the device never reported. |
+
+`line.connected` is sent at the first check, every 60 seconds, after the device reports again.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_IcurA33fdLdBGAirl1rbbCJZ7",
+  "event_type": "line.offline",
+  "created_at": "2026-10-08T16:41:00.447Z",
+  "trace_id": "b28e0a62765382cb2ce9627fbe533b4c",
+  "data": {
+    "line_id": "line_2Tm6Qx9Kd4Wc7Hb3Ln8Vz5Ry1",
+    "byod": true,
+    "last_heartbeat_at": "2026-10-08T16:35:58.000Z",
+    "detected_at": "2026-10-08T16:41:00.412Z",
+    "durable": false,
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### Durable form: rented lines and test lines
+
+Sent once when the outage of a line that is not a BYOD line reaches 15 minutes. `data` holds the
+four common fields, and no diagnostic field. `line.connected` is sent when the line recovers.
+
+While the outage lasts, iSnap delivers this event again, with the same `event_id`, each time the
+delivery records of the previous one have been deleted: 72 hours or more after it. Deduplicate on
+`event_id`. Keep the ids you have seen for longer than 72 hours, or make your handling of
+`line.offline` safe to repeat.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_7c1e04b9a2d35f8e60b1c4a97",
+  "event_type": "line.offline",
+  "created_at": "2026-10-08T16:51:00.431Z",
+  "trace_id": "d7dd9d93d310fd5995871e0329979c16",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "byod": false,
+    "durable": true,
+    "detected_at": "2026-10-08T16:51:00.398Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.degraded`
+
+BYOD lines only. Sent when the line can still send but no longer receives: the same reception check
+fails on two consecutive reports of the device. Recovery is announced by `line.connected`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `reasons` | array of strings | No | Why the line no longer receives: `apple_account_reauth_required`, `phone_alias_unregistered`, `not_receiving`. |
+| `checks` | object | No | The result of the three reception checks on this report: `apple_account_credential`, `phone_alias_registered` and `inbound_reception`, each `pass`, `fail` or `unmeasured`. |
+| `device_session_id` | string | No | The id of the device session that serves the line. |
+| `detected_at` | string | No | The time of the report. |
+
+The event is sent again after an offline episode if a reason still holds.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_KfnbU6o4DIaLciv2X0Wpskp00",
+  "event_type": "line.degraded",
+  "created_at": "2026-10-08T12:10:30.214Z",
+  "trace_id": "7f5693b4963c7645d86898621d43c528",
+  "data": {
+    "line_id": "line_2Tm6Qx9Kd4Wc7Hb3Ln8Vz5Ry1",
+    "reasons": ["apple_account_reauth_required", "not_receiving"],
+    "checks": {
+      "apple_account_credential": "fail",
+      "phone_alias_registered": "pass",
+      "inbound_reception": "fail"
+    },
+    "device_session_id": "dvs_5Tn8Kc3Wq6Zb9Lx2Hm7Vd4Ry1",
+    "detected_at": "2026-10-08T12:10:30.000Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.apple_id_flagged`
+
+Sent once when the line's device reports that Apple disabled or restricted the Apple ID of the line.
+It is sent for every line that has a device of its own.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `reason` | string | No | Text from the device, at most 64 characters. A Mac device sends one of `disabled_account_dialog`, `greyed_toggle`, `waiting_for_activation`, `sms_downgrade`, `error_heuristic`. Treat the list as open. |
+| `detected_via` | string | No | How the device detected it. A Mac device sends `macos_dialog` or `heuristic`. Treat the value as open. |
+| `flagged_at` | string | No | The time the device gives. |
+| `error` | string | Absent when the device sends none | Diagnostic text from the device, at most 2,048 characters. |
+
+Only iSnap clears the flag, and no event announces that it was cleared. A report that repeats an
+existing flag sends nothing. For a BYOD line, read `apple_id_flagged` with
+[`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health).
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_x3XvY7rOUPJYJyOYwQAWXqtBZ",
+  "event_type": "line.apple_id_flagged",
+  "created_at": "2026-10-08T11:47:19.660Z",
+  "trace_id": "9bf757a25aa0b48060f131cdef36fc26",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "reason": "disabled_account_dialog",
+    "detected_via": "macos_dialog",
+    "flagged_at": "2026-10-08T11:47:19.000Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `reason` and `error` are device text.
+
+## `line.quota_warning`
+
+Sent when a message that leaves brings one of the line's five
+[sending limits](/guides/sending-limits#the-five-limits) to 80% of its value. It is sent for every
+line kind, and never for a trial.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `bucket` | string | No | The sending limit concerned: `minute`, `hourly`, `daily_total`, `daily_new` or `daily_known`. |
+| `used` | integer | No | The value of the counter. |
+| `limit` | integer | No | The value of the limit. |
+| `percent` | number | No | Always `0.8`. It is the threshold as a fraction, not the usage. |
+| `resets_at` | string | No | The time the event was produced plus the window of the limit: 1 minute, 1 hour or 24 hours. |
+
+The event is sent at most once per line, per sending limit, per 24 hours. A counter that falls back
+and crosses the threshold again inside those 24 hours sends nothing: a warning on the `minute` limit
+is therefore sent at most once a day. A send that the API refuses with `429`, and a held message,
+do not trigger it. No event announces that a counter fell back below the threshold.
+
+When one send takes a counter from below 80% to 100% of its limit, which happens for a limit of 4 or
+less, only `line.quota_exceeded` is sent.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_KctDevloyOCQVwKwfbzp8goWE",
+  "event_type": "line.quota_warning",
+  "created_at": "2026-10-08T14:23:01.939Z",
+  "trace_id": "b2a20049e82fae8511d2f5131584db41",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "bucket": "daily_new",
+    "used": 40,
+    "limit": 50,
+    "percent": 0.8,
+    "resets_at": "2026-10-09T14:23:01.905Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.quota_exceeded`
+
+Sent when a message that leaves brings one of the line's five
+[sending limits](/guides/sending-limits#the-five-limits) to 100% of its value. The fields are those
+of `line.quota_warning`, without `percent`, and the same rules apply: at most once per line, per
+sending limit, per 24 hours, for every line kind, never for a trial. When one send takes a counter
+from below 80% to 100% of its limit, which happens for a limit of 4 or less, `line.quota_exceeded`
+is sent without `line.quota_warning`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `bucket` | string | No | The sending limit concerned: `minute`, `hourly`, `daily_total`, `daily_new` or `daily_known`. |
+| `used` | integer | No | The value of the counter. |
+| `limit` | integer | No | The value of the limit. |
+| `resets_at` | string | No | The time the event was produced plus the window of the limit: 1 minute, 1 hour or 24 hours. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_LMcOiyqZiNklSGanjkiggDIrH",
+  "event_type": "line.quota_exceeded",
+  "created_at": "2026-10-08T14:40:12.158Z",
+  "trace_id": "b7ee206cf0a7e11bc7c1713ef907c31d",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "bucket": "hourly",
+    "used": 60,
+    "limit": 60,
+    "resets_at": "2026-10-08T15:40:12.120Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.capability_changed`
+
+BYOD lines only. Sent when one of the capabilities `imessage`, `sms_fallback`, `send_text` and
+`send_attachment` moves between `active` and `degraded` from one report of the device to the next.
+A move to or from `disabled`, and a change of any other capability, send nothing.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `runtime_capabilities` | object | No | The full map of capabilities the device reported, each with its state. |
+| `changed` | array of objects | No | One entry per capability that moved: `capability`, `from` and `to`. |
+| `changed_at` | string | No | The time iSnap recorded the change. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_bcnxSkUr3jVtSJLv10LN8DJZq",
+  "event_type": "line.capability_changed",
+  "created_at": "2026-10-08T13:05:44.903Z",
+  "trace_id": "f5496f4253bfcc413b8f307570911e65",
+  "data": {
+    "line_id": "line_2Tm6Qx9Kd4Wc7Hb3Ln8Vz5Ry1",
+    "runtime_capabilities": {
+      "imessage": "degraded",
+      "sms_fallback": "active",
+      "send_text": "active",
+      "send_attachment": "active"
+    },
+    "changed": [
+      { "capability": "imessage", "from": "active", "to": "degraded" }
+    ],
+    "changed_at": "2026-10-08T13:05:44.870Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.terminated`
+
+Sent once when a line ends for good: you terminated it, a scheduled cancellation was carried out, or
+iSnap terminated it. It is sent for every line kind.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line` | object | No | The line, with `status: cancelled`. |
+| `origin` | string | No | `customer_initiated`: you terminated the line. `scheduled_cancellation`: a scheduled cancellation was carried out. `admin_terminated`: iSnap terminated the line. |
+| `reason` | string | Yes | The note given at termination. For your own [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) it is the `reason` of the call, which defaults to `terminated by the customer`. For `admin_terminated` it is a note written by iSnap. |
+| `previous_status` | string | Yes | The status of the line before it ended. |
+| `cancel_at` | string | Yes | The scheduled date, when `origin` is `scheduled_cancellation`. `null` otherwise. |
+| `released_macos_session_ids` | array of strings | No | The ids (`mcs_`) of the hosted macOS sessions taken off the line by the termination. Empty when there were none. Each session stays rented: cancel it with [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session) when you no longer need it. |
+| `terminated_at` | string | No | The time the line ended. |
+
+A termination sends other events:
+
+| Termination | Events |
+| --- | --- |
+| You terminate a line, or a scheduled cancellation is carried out | `line.terminated` and `line.disconnected`, plus `message.failed` for each message that was still waiting and `binding.released` for each binding of a shared line. |
+| iSnap terminates a line | The same, without `line.disconnected`. |
+
+`line.terminated` is not sent when a BYOD line is ended because the BYOD slots of the account no
+longer cover it: `line.disconnected` is then sent alone. It is not sent either when a rented line
+returns to the marketplace because its per-line subscription ended.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_rNkXxugjp1RFTRICRIihSmvRU",
+  "event_type": "line.terminated",
+  "created_at": "2026-10-08T18:00:09.601Z",
+  "trace_id": "e1ec25265c65746cb4f818dce47075f8",
+  "data": {
+    "line": {
+      "id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "phone_number": "+14155550124",
+      "area_code": "415",
+      "country_code": "US",
+      "state": "CA",
+      "state_name": "California",
+      "billing_tier": "rental_iphone",
+      "byod": false,
+      "inbound_only": false,
+      "capabilities": ["imessage", "sms"],
+      "status": "cancelled",
+      "monthly_price": 27500,
+      "stripe_subscription_id": null,
+      "activated_at": "2026-09-12T09:30:00.000Z",
+      "expires_at": null,
+      "anniversary_at": "2026-09-12T09:30:00.000Z",
+      "cancel_at": null,
+      "billing_anchor_at": null,
+      "next_anchor_at": null,
+      "pending_variant": null,
+      "created_at": "2026-08-30T11:02:45.000Z",
+      "metadata": { "crm_account_id": "acct_4821" },
+      "test_line": false,
+      "shared": false
+    },
+    "origin": "customer_initiated",
+    "reason": "terminated by the customer",
+    "previous_status": "active",
+    "cancel_at": null,
+    "released_macos_session_ids": [],
+    "terminated_at": "2026-10-08T18:00:09.552Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `line.phone_number`, and `reason` when the note holds any.
+
+## `line.variant_changed`
+
+Rented lines only. Sent when the line moves between inbound-only and two-way, immediately or at its
+billing anchor. A request for the variant the line already has sends nothing.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `inbound_only` | boolean | No | The new value: `true` for inbound-only, `false` for two-way. |
+| `effective_at` | string | No | The time the change took effect. |
+| `scheduled` | boolean | No | `false` for an immediate change, `true` for a change applied at the billing anchor. |
+| `line` | object | No | The line after the change. |
+| `from` | boolean | No | The value of `inbound_only` before the change. |
+| `to` | boolean | No | The value of `inbound_only` after the change. |
+| `changed_at` | string | No | The time the change was recorded. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_COE2ca2gk071oFAhFyFhnuM26",
+  "event_type": "line.variant_changed",
+  "created_at": "2026-10-08T10:15:27.352Z",
+  "trace_id": "dcc89991429c849e8985e04234e66790",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "inbound_only": true,
+    "effective_at": "2026-10-08T10:15:27.318Z",
+    "line": {
+      "id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "phone_number": "+14155550124",
+      "area_code": "415",
+      "country_code": "US",
+      "state": "CA",
+      "state_name": "California",
+      "billing_tier": "rental_iphone",
+      "byod": false,
+      "inbound_only": true,
+      "capabilities": ["imessage", "sms"],
+      "status": "active",
+      "monthly_price": 9700,
+      "stripe_subscription_id": null,
+      "activated_at": "2026-09-12T09:30:00.000Z",
+      "expires_at": null,
+      "anniversary_at": "2026-09-12T09:30:00.000Z",
+      "cancel_at": null,
+      "billing_anchor_at": null,
+      "next_anchor_at": "2026-10-12T09:30:00.000Z",
+      "pending_variant": null,
+      "created_at": "2026-08-30T11:02:45.000Z",
+      "metadata": { "crm_account_id": "acct_4821" },
+      "test_line": false,
+      "shared": false
+    },
+    "from": false,
+    "to": true,
+    "changed_at": "2026-10-08T10:15:27.318Z",
+    "scheduled": false,
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `line.phone_number`.
+
+## `line.variant_scheduled`
+
+Sent when a variant change is scheduled for a billing anchor of the line: the next one, or the first
+one at or after the `not_before` you sent. The change itself is announced by `line.variant_changed`,
+with `scheduled: true`, when it is applied.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `inbound_only` | boolean | No | The value the line takes at `effective_at`. |
+| `effective_at` | string | No | The billing anchor at which the change applies. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_9yx4ovN8v6RbYghwq2ryT7OJ8",
+  "event_type": "line.variant_scheduled",
+  "created_at": "2026-10-08T10:15:27.352Z",
+  "trace_id": "91b7392517d3671eb1f0cf5eb26a10e0",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "inbound_only": true,
+    "effective_at": "2026-10-12T09:30:00.000Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.
+
+## `line.variant_unscheduled`
+
+Sent when you withdraw a scheduled variant change with
+[`DELETE /v1/lines/{id}/variant`](/api-reference/lines/cancel-variant-change).
+
+It is not sent when a scheduled change is dropped: when the line is released, transferred or turned
+into a test line, and at the billing anchor when the line is suspended or already has that variant.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the line. |
+| `inbound_only` | boolean | No | The value the line would have taken. |
+| `effective_at` | string | No | The billing anchor at which the change would have applied. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_aHeYVT8HEj0ewydm0wvekKZlX",
+  "event_type": "line.variant_unscheduled",
+  "created_at": "2026-10-09T08:02:51.774Z",
+  "trace_id": "11a11f8ac3a791def6f11e1a54c33af3",
+  "data": {
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "inbound_only": true,
+    "effective_at": "2026-10-12T09:30:00.000Z",
+    "metadata": { "crm_account_id": "acct_4821" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: none.

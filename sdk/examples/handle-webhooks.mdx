@@ -1,190 +1,152 @@
 ---
-title: "Handle webhooks end-to-end"
-description: "A drop-in webhook receiver: verify, dedupe, dispatch async."
+title: "Example: handling webhooks"
+sidebarTitle: "Handling webhooks"
+description: "Gives a complete Node.js server that verifies webhook deliveries with the SDK, skips the event_id values it has already processed, and handles two message events."
 ---
 
-A working webhook receiver covers four things: signature verification,
-event-ID deduplication, async dispatch (so you can return 200 fast),
-and structured error reporting. Here's the whole thing in one file.
+This script is an HTTP server that receives the deliveries of a webhook subscription. It verifies each request, skips the events it has already processed, and handles two message events. Use it as the starting point of your own endpoint. [Webhooks](/sdk/webhooks) describes the functions it uses.
 
-## Express + PostgreSQL
+<Note>
+The script processes the real events of your account. Message events carry the handles and the text of real messages.
+</Note>
 
-```ts
-import express from 'express'
-import { verifyWebhook, WebhookSignatureError } from '@isnap/sdk'
-import { Pool } from 'pg'
-import { Queue } from 'bullmq'
+## The script
 
-const app = express()
-const db = new Pool({ connectionString: process.env.DATABASE_URL })
-const jobs = new Queue('isnap-events', { connection: { url: process.env.REDIS_URL } })
+```typescript handle-webhooks.ts
+import { createServer, type IncomingMessage } from 'node:http'
+import {
+  WebhookSignatureError,
+  isMessageEvent,
+  verifyWebhook,
+  type WebhookEventBase
+} from '@isnap/sdk'
 
-// CRITICAL: express.raw() so req.body is a Buffer, not a parsed object.
-app.post(
-  '/iSnap/events',
-  express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    let event
-    try {
-      event = verifyWebhook({
-        payload: req.body.toString('utf8'),
-        signature: req.headers['x-isnap-signature'] as string,
-        secret: process.env.ISNAP_WEBHOOK_SECRET!,
-        toleranceSeconds: 300
-      })
-    } catch (err) {
-      if (err instanceof WebhookSignatureError) {
-        // Either a forged event or your secret rotated. Don't 200 on these.
-        return res.status(401).end()
-      }
-      throw err
-    }
+const secret = process.env.ISNAP_WEBHOOK_SECRET
+if (!secret) {
+  console.error('Set ISNAP_WEBHOOK_SECRET to the signing secret of your webhook subscription.')
+  process.exit(1)
+}
 
-    // Dedupe via primary-key insert. ON CONFLICT DO NOTHING means a
-    // replayed event becomes a no-op without DB-side errors.
-    const inserted = await db.query(
-      `INSERT INTO isnap_events (id, type, received_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (id) DO NOTHING
-       RETURNING id`,
-      [event.id, event.type]
-    )
+// The ids of the events already processed. This set is lost on restart and is not
+// shared between processes: replace it with storage of your own.
+const processed = new Set<string>()
 
-    if (inserted.rowCount === 0) {
-      // Already processed. Acknowledge — iSnap stops retrying.
-      return res.status(200).end()
-    }
+const processEvent = async (event: WebhookEventBase): Promise<void> => {
+  // Other families, probes and event types this script does not know: nothing to do.
+  if (!isMessageEvent(event)) return
 
-    // First time we've seen this event. Queue async work, return 200 fast.
-    await jobs.add(event.type, event, {
-      jobId: event.id,                 // bullmq idempotency too — belt + braces
-      attempts: 5,
-      backoff: { type: 'exponential', delay: 5_000 }
-    })
-
-    res.status(200).end()
-  }
-)
-
-// Worker process — separate from the HTTP server.
-import { Worker } from 'bullmq'
-
-new Worker('isnap-events', async (job) => {
-  const event = job.data as WebhookEvent
-
-  switch (event.type) {
+  const { message } = event.data
+  switch (event.event_type) {
     case 'message.received':
-      await handleInbound(event.data.message)
-      break
-    case 'message.delivered':
-      await markDelivered(event.data.message)
+      console.log(`${message.id} received on ${message.line_id}`)
       break
     case 'message.failed':
-      await markFailed(event.data.message)
+      console.log(`${message.id} failed: ${message.error_code ?? 'reported by the device'}`)
       break
-    case 'line.apple_id_flagged':
-      await alertOps(event.data)
-      break
-    case 'line.quota_warning':
-      await throttleSends(event.data.line.id, event.data.bucket)
-      break
-    default:
-      // Unknown event type. Log + skip. NEVER throw — this is what
-      // makes your handler forward-compatible across iSnap MINOR bumps.
-      console.log('unhandled webhook event', event.type, event.id)
   }
-}, { connection: { url: process.env.REDIS_URL } })
-```
+}
 
-## Why this shape
+const handle = async (req: IncomingMessage): Promise<number> => {
+  if (req.method !== 'POST' || req.url !== '/webhooks/isnap') return 404
 
-### Verify before parsing
+  // Keep the body as received. Verification fails on a body that was parsed and serialized again.
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(chunk as Buffer)
+  const rawBody = Buffer.concat(chunks).toString('utf8')
 
-`req.body` is a `Buffer` because of `express.raw()`. The signature is
-computed over the raw bytes, so we must NOT let any middleware parse
-it first. Most signature failures in the field come from a `bodyParser`
-or `express.json()` mounted earlier in the chain — order matters.
+  let event: WebhookEventBase
+  try {
+    event = verifyWebhook(rawBody, req.headers, secret)
+  } catch (err) {
+    if (err instanceof WebhookSignatureError) return 400
+    throw err
+  }
 
-### Dedupe before queuing
+  // A retry or a replay carries the same event_id.
+  if (processed.has(event.event_id)) return 200
 
-`INSERT ... ON CONFLICT DO NOTHING` is the canonical pattern. If
-iSnap retries an event you already processed, the insert no-ops,
-`rowCount === 0`, you return 200 without re-queuing. Same event,
-same outcome — but the side effect happens exactly once.
+  await processEvent(event)
+  // Record the event_id only after the work succeeded. When processEvent throws,
+  // the server responds 500, and the next attempt, if one remains, processes the event.
+  processed.add(event.event_id)
+  return 200
+}
 
-### Queue + 200 fast
+const server = createServer((req, res) => {
+  handle(req).then(
+    (status) => {
+      res.writeHead(status).end()
+    },
+    () => {
+      res.writeHead(500).end()
+    }
+  )
+})
 
-iSnap's webhook timeout is 30 seconds. If your handler takes 25
-seconds, you're racing the timeout. Queue and return 200 in &lt; 1
-second. The actual work happens in the worker, which has its own retry
-budget (BullMQ `attempts: 5`).
-
-### Default to log-and-skip
-
-The `switch` default case does NOT throw. iSnap MINOR bumps add new
-event types; if your handler throws on unknown ones, every backend
-release breaks your integration. Log + skip is the forward-compatible
-default. See [Versioning](/versioning).
-
-## Hono / Next.js variants
-
-For a Hono server (BYOD bridge backend, edge function, etc.):
-
-```ts
-import { Hono } from 'hono'
-import { verifyWebhook } from '@isnap/sdk'
-
-const app = new Hono()
-
-app.post('/iSnap/events', async (c) => {
-  const rawBody = await c.req.text()                  // raw string
-  const event = verifyWebhook({
-    payload: rawBody,
-    signature: c.req.header('x-isnap-signature')!,
-    secret: process.env.ISNAP_WEBHOOK_SECRET!
-  })
-  // ... dedupe + queue, same shape as Express ...
-  return c.body(null, 200)
+server.listen(3000, () => {
+  console.log('Listening on port 3000, path /webhooks/isnap')
 })
 ```
 
-For Next.js App Router (`app/api/isnap/events/route.ts`):
+## Run it
 
-```ts
-import { verifyWebhook } from '@isnap/sdk'
+Install the SDK, and `typescript` and `@types/node` as development dependencies. Set `"type": "module"` in the `package.json` of the project, then save the script as `handle-webhooks.ts` with the [`tsconfig.json` of the overview](/sdk/overview#typescript-settings).
 
-export async function POST(req: Request) {
-  const rawBody = await req.text()                    // raw string
-  const event = verifyWebhook({
-    payload: rawBody,
-    signature: req.headers.get('x-isnap-signature')!,
-    secret: process.env.ISNAP_WEBHOOK_SECRET!
-  })
-  // ... dedupe + queue ...
-  return new Response(null, { status: 200 })
-}
+<Steps>
+  <Step title="Expose the server">
+    The script listens on port 3000 over plain HTTP. A webhook subscription needs a public `https://` URL: put a proxy that terminates TLS in front of the server. [Webhooks overview](/webhooks/overview) lists what an endpoint must do.
+  </Step>
+  <Step title="Create a webhook subscription">
+    Create a subscription for `https://<your host>/webhooks/isnap` with [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook), or with `client.webhooks.create`. The response carries the signing secret: store it in `ISNAP_WEBHOOK_SECRET`. The API returns the secret at creation and at rotation only.
+  </Step>
+  <Step title="Start the server">
+    Set `ISNAP_WEBHOOK_SECRET` in the environment, then start the script with one of the commands below.
+  </Step>
+</Steps>
+
+<CodeGroup>
+
+```bash Bun
+bun handle-webhooks.ts
 ```
 
-## Local development
-
-Use a tunnel to expose your local handler to iSnap:
-
-```bash
-bunx cloudflared tunnel --url http://localhost:3000
+```bash Node.js
+npx tsc
+node handle-webhooks.js
 ```
 
-Register the tunnel URL on a **test** webhook subscription. Iterate.
-Once stable, swap to a stable named tunnel or move to a deployed
-staging endpoint.
+</CodeGroup>
 
-## Production checklist
+To check the verification before you subscribe, run the tests of [Test your verification](/webhooks/verifying-signatures#test-your-verification). Do not send the test vector to this server: its timestamp is in the past, so the server refuses it with `400`.
 
-Same as [Webhooks → Production checklist](/guides/webhooks#production-checklist):
-verify every event, dedupe by ID, return 200 fast, monitor delivery
-health, default to log-and-skip on unknown event types.
+## What it does
 
-## Related
+| Step | Behavior |
+| --- | --- |
+| Raw body | The script reads the body as bytes and decodes it as UTF-8. It never parses the body before verification. |
+| Verification | `verifyWebhook` checks the signature and the timestamp, and returns the event. |
+| Deduplication | The script skips an `event_id` it has already processed, and responds `200`. |
+| Processing | `isMessageEvent` gives `event.data.message` its type. The script handles `message.received` and `message.failed`, and ignores every other event type. |
+| Response | `200` after the processing. Respond within 10 seconds: when your processing can take longer, store the event, respond, then process it. |
 
-- [Webhooks](/guides/webhooks) — full event catalog and retry semantics.
-- [SDK → Webhook signature verification](/sdk/webhooks-verification) — `verifyWebhook` deep dive.
-- [SDK → Errors](/sdk/errors) — `WebhookSignatureError`.
+Ignore response fields, enum values and event types you do not know. The script acknowledges them with `200`.
+
+Events do not announce every change: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile from the resource operations.
+
+## Errors it handles
+
+| Case | Response | What iSnap does |
+| --- | --- | --- |
+| `WebhookSignatureError`: a missing header, a timestamp outside the tolerance, a signature that does not match, or a malformed body. | `400` | Counts a failed attempt. iSnap retries the delivery on its retry schedule. |
+| The processing throws. | `500` | Counts a failed attempt. iSnap retries the delivery on its retry schedule. The script records an `event_id` only after the processing succeeded, so the next attempt processes the event. After the last attempt the delivery ends `failed`: replay it, or read the event from the [events feed](/webhooks/pulling-events). |
+| An event already processed. | `200` | Nothing more. |
+| Another method or another path. | `404` | |
+
+Never respond `410`: it makes the subscription inactive. [Retries](/webhooks/delivery#retries) gives the schedule of the attempts, and [Suspension](/webhooks/delivery#suspension) says what repeated failures do to a subscription.
+
+## Before production
+
+- **Deduplication.** Deduplicate on `event_id`. Replace the in-memory set with storage that your processes share and that survives a restart, with a unique constraint on the event id. See [Duplicates](/webhooks/delivery#duplicates).
+- **Order.** Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival.
+- **Secret.** Keep the signing secret in a secret manager. The script stops when `ISNAP_WEBHOOK_SECRET` is not set: keep that check.
+- **Personal data.** The script prints message ids and line ids only. Do not copy a handle or a message text into logs, tickets or other tools, and refer to a contact by an id of your own.

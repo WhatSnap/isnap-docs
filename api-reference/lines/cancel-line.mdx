@@ -1,0 +1,26 @@
+---
+title: "Cancel a line at its next anniversary"
+description: "Schedules the end of a line at its next anniversary."
+openapi: "POST /v1/lines/{id}/cancel"
+---
+
+- **Credential:** an API key. See [Cancel at the anniversary](/guides/managing-lines#cancel-at-the-anniversary).
+- **Account:** wholesale partners only: a line whose owner is not a wholesale partner returns `409 line_not_wholesale_metered`. A direct account ends a line with [`terminate`](/api-reference/lines/terminate-line), or by canceling its per-line subscription in the dashboard.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Test keys:** a cancellation sent with an `isnap_test_` account key schedules the end of the real line: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. Canceling a line that already has a `cancel_at` returns the same `cancel_at`, so a retry is safe.
+- **Events:** none. When the line ends after `cancel_at`, the events of a termination are sent, with `origin: scheduled_cancellation` in [`line.terminated`](/webhooks/events/line#line-terminated).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 403 | `pool_line_not_cancellable` | The line has `billing_tier: shared_pool`: a test line or a dedicated pool line. End a test line with [`terminate`](/api-reference/lines/terminate-line). |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 409 | `line_not_wholesale_metered` | The owner of the line is not a wholesale partner. |
+| 409 | `line_not_customer_cancellable` | The line is neither `active` nor `suspended`. A line that has ended is in this case. |
+| 409 | `line_has_no_anniversary` | `anniversary_at` is `null`. State it with [`POST /v1/lines/{id}/anniversary`](/api-reference/lines/set-line-anniversary). |
+| 409 | `line_changed_concurrently` | The owner or the status of the line changed during the call. Nothing was written. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,19 @@
+---
+title: "Get the activity of a trial"
+description: "Returns the status of a trial, its message counts and the sends left before it becomes dormant."
+openapi: "GET /v1/trial/activity"
+---
+
+- **Credential:** the trial key of the trial, and no other credential: an API key returns `401 unauthorized`. See [Trial key](/guides/trials#trial-key).
+- **Events:** none.
+- **Personal data:** `paired_handle`, the prospect's phone number or the email address of their Apple ID. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a prospect by an id of your own.
+- **Counters:** `messages_sent_total` and `messages_received_total` count the messages of the trial that iSnap still keeps, not the life of the trial: see [Activity](/guides/trials#activity).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 401 | `unauthorized` | The credential is an API key, or the key of a revoked or unknown trial. |
+| 404 | `trial_not_active` or `trial_not_found` | The trial was revoked while the request was running. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

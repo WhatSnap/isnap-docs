@@ -1,0 +1,23 @@
+---
+title: "Reserve a line"
+description: "Reserves an available line for your account for 15 minutes."
+openapi: "POST /v1/lines/{id}/reserve"
+---
+
+- **Credential:** an API key, on any account. The call checks no payment method. See [Reservations](/guides/getting-a-line#reservations).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Test keys:** a reservation sent with an `isnap_test_` account key reserves a real line: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. A reservation cannot be extended: reserving a line that you have already reserved returns `409 conflict`.
+- **Events:** none. See [Events](/guides/getting-a-line#events).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 409 | `conflict` | The line is not `available`, or no line has this id. A line that you have already reserved is not `available`. |
+| 409 | A code that starts with `line_`, such as `line_apple_id_flagged` | The line is `available` but cannot be acquired now. The set of codes is open. |
+
+Treat any `409` as "choose another line", except after a request whose response you did not receive: read [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) first, since a line that you have already reserved also returns `409 conflict`. This operation never returns `404`.
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

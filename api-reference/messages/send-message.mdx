@@ -1,0 +1,51 @@
+---
+title: "Send a message"
+description: "Sends one message to one phone number from one of your lines, and returns it as queued or held."
+openapi: "POST /v1/messages"
+---
+
+- **Credential:** an API key, or a [trial key](/authentication#trial-keys), which sends text only, from the trial's line to the trial's paired number: see [Send with the trial key](/guides/trials#send-with-the-trial-key) and [With a trial key](#with-a-trial-key). See [The send request](/guides/sending-messages#the-send-request).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless `line_id` is in its list.
+- **Test keys:** a send with an `isnap_test_` account key reaches a real recipient and counts against the same sending limits: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored. The key belongs to the line, and a repeat returns the message already created, as it is now. The checks on the line, and on the trial with a trial key, run before the key is read: a refusal of a repeat does not mean that the first request was refused. See [Retrying a send](/guides/sending-messages#retrying-a-send).
+- **Events:** `message.queued`, or `message.scheduled` for a held message, then the events of [Following a message](/guides/sending-messages#following-a-message).
+- **Personal data:** the message carries the handles in `to` and `from`, the text in `body`, the attachment file names and your `metadata`. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Response:** `202` means that iSnap accepted the message, never that it was sent. `status` is `queued`, or `scheduled` when iSnap holds the message: see [The response](/guides/sending-messages#the-response) and [Held messages](/guides/sending-limits#held-messages). `queue_info` is filled only in this response.
+- **Headers:** with an account API key, the `202` carries `X-iSnap-Quota-Remaining` and `X-iSnap-Quota-Resets-At`: see [Headers on a send](/guides/sending-limits#headers-on-a-send).
+- **Rate limit:** this operation and `GET /v1/messages` share the message-operations limit, 60 requests per rolling 60 seconds per network address, in addition to the request-rate limit: see [Rate limits](/errors-and-rate-limits#rate-limits).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | A required field is missing, a field is too long, `channel` is not `auto`, more than 10 attachments, an unknown effect, `metadata` over 20 keys or 8,192 bytes, or neither `body` nor an attachment. |
+| 400 | `bad_request` | `to` is not a valid phone number, or is an email address. |
+| 400 | `line_not_active` | The line is neither `active` nor `suspended`. |
+| 403 | `forbidden` | The request uses a line-scoped key, and `line_id` is not in its list. |
+| 403 | `line_suspended` | The line is suspended. |
+| 403 | `outbound_first_forbidden` | The line is inbound-only, and the recipient never wrote to it. |
+| 404 | `not_found` | The line does not exist or is not yours, `reply_to_message_id` is unknown or was deleted, or an attachment id is not one your account created. |
+| 409 | `idempotency_conflict` | The `Idempotency-Key` was already used on this line with other content. |
+| 422 | `reply_to_cross_line` | `reply_to_message_id` is a message of another line. |
+| 429 | `minute_limit_exceeded`, `hourly_limit_exceeded`, `total_message_quota_exceeded`, `new_contact_quota_exceeded`, `known_contact_quota_exceeded` | A sending limit is reached on a line set to refuse. See [Refusals](/guides/sending-limits#refusals). |
+| 429 | `queue_full` | The message would be held, and the line holds its maximum. See [Maximum number of held messages](/guides/sending-limits#maximum-number-of-held-messages). |
+| 500 | `internal_error` | An unexpected error. It includes an `Idempotency-Key` longer than 255 characters, and the losing one of two simultaneous requests with the same new key: retry it with that key. |
+| 503 | `line_pool_exhausted` | Shared line: no number can take a new contact. |
+| 503 | `quota_state_unavailable` | Shared line: iSnap could not read the state of the line. Retry. |
+
+### With a trial key
+
+A send with a [trial key](/authentication#trial-keys) can also return these refusals:
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `bad_request` | `to` is not a valid phone number. An email address is refused. |
+| 402 | `trial_needs_inbound` | The trial is `dormant`: see [Unanswered-send limit](/guides/trials#unanswered-send-limit). A repeat of the send that made the trial `dormant` returns it too: iSnap accepted that earlier message, which you read with [`GET /v1/messages`](/api-reference/messages/list-messages). |
+| 403 | `trial_scope_violation` | `line_id` or `to` is outside the trial, or `reply_to_message_id` names a message of another trial. |
+| 403 | `line_not_active` | The pool line is not `active`. |
+| 404 | `not_found` | `reply_to_message_id` is unknown. |
+| 409 | `idempotency_conflict` | The `Idempotency-Key` was already used on the pool line with another body. |
+| 422 | `trial_attachments_unsupported` | The request carries attachments. |
+| 422 | `reply_to_cross_line` | `reply_to_message_id` names a message on another line. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

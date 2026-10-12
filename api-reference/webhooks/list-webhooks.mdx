@@ -1,0 +1,21 @@
+---
+title: "List webhook subscriptions"
+description: "Returns every webhook subscription of your account in one response, newest first, without their secrets."
+openapi: "GET /v1/webhooks"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key lists every subscription of the account.
+- **`Idempotency-Key`:** not needed: the operation changes nothing. See
+  [Retrying safely](/idempotency#retrying-safely).
+- **Events:** none.
+- **Guide:** [Subscription states](/webhooks/overview#subscription-states) explains the fields this
+  operation returns and why a suspended subscription still reads `active: true`. The response has
+  no pages and takes no filter.
+
+## Errors
+
+This operation has no error of its own.
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

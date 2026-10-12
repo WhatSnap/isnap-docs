@@ -1,0 +1,28 @@
+---
+title: "Update a webhook subscription"
+description: "Changes the URL, the event filter, the line filter, the description or the active flag of a webhook subscription."
+openapi: "PATCH /v1/webhooks/{id}"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key changes any subscription of the account, and can set any line filter.
+- **`Idempotency-Key`:** not honored. See
+  [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+- **Events:** none. No event announces the change: see
+  [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+- **Guide:**
+  [Turning off and changing a subscription](/webhooks/delivery#turning-off-and-changing-a-subscription)
+  explains the effect of each field. `active: true` turns on a subscription that you, or a `410`
+  response, turned off. It does not end a [suspension](/webhooks/delivery#suspension).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `wh_` followed by 25 letters or digits. The body holds none of `url`, `events`, `line_ids`, `description` and `active`. `url` is not a URL. `events` is empty, or holds a name that is not an event type. `active` is not a boolean. `description` is longer than 255 characters. An entry of `line_ids` does not have the form of a line id. |
+| 400 | `webhook_url_not_allowed` | The new `url` is refused, for the same reasons as on create: see [URL rules](/webhooks/overview#url-rules). |
+| 404 | `not_found` | Your account has no subscription with this id. |
+| 500 | `internal_error` | The new `url` is longer than 2,048 characters. Shorten it. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

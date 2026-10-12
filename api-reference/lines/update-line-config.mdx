@@ -1,0 +1,25 @@
+---
+title: "Update the configuration of a line"
+description: "Sets per-line overrides of the send configuration of a line."
+openapi: "PATCH /v1/lines/{id}/config"
+---
+
+- **Credential:** an API key of the owner of the line. See [Configuration](/guides/managing-lines#configuration) for the direction rule, the ranges and the way back to a default.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **`Idempotency-Key`:** not honored. The operation sets the keys you send and keeps the others, so the same request sent twice leaves the line in the same state.
+- **Events:** none. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+- **Body:** `null` is not accepted for any key, and an unknown key is refused. To remove an override, send the key with its default value.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The body has an unknown key or a `null` value, a number is outside the range that the schema of this operation accepts, `timezone` is not a valid IANA time zone name, or an `activity_curve` entry has an `hour` outside 0 to 23 or a `weight` that is negative or not an integer. |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 403 | `cannot_increase_limit` | A limit is inside its accepted range and above its default. On a BYOD line, this applies only to `max_queue_depth` and to the three reply limits. |
+| 403 | `cannot_decrease_delay` | `min_inter_message_seconds` or `min_inter_new_contact_seconds` is below its default. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 422 | `limit_out_of_bounds` | One of the five message limits is outside its accepted range. For one key, this check comes before `cannot_increase_limit`: on every line, a value above the range returns this code or `400 validation_failed`, never `cannot_increase_limit`. `error.issues[0]` carries the allowed `min` and `max`. |
+| 422 | `invalid_activity_curve` | `activity_curve` is empty, names an hour twice, or has a total weight of 0. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,23 @@
+---
+title: "Revoke a trial"
+description: "Ends a trial that your account owns, frees the prospect's handle and disables the trial key."
+openapi: "POST /v1/trial/{trial_id}/revoke"
+---
+
+- **Credential:** an API key of the account that owns the trial. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **`Idempotency-Key`:** not honored. A repeated revoke is safe: it returns `200` with `already_revoked: true`. See [Revoking a trial](/guides/trials#revoking-a-trial).
+- **Events:** sends `trial.revoked`. A repeated revoke, and a revoke of a trial that never paired and whose pairing window had already ended, send no event: see [Events](/guides/trials#events).
+- **Limits:** `reason: rebind` can be turned off or limited per rolling 24 hours: see [Revoking a trial](/guides/trials#revoking-a-trial).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | An unknown field, or an unknown `reason`. |
+| 403 | `rebind_not_allowed` | `reason: rebind`, and rebind is turned off for your account. |
+| 404 | `trial_not_found` | The id is unknown, or the trial belongs to another account. |
+| 422 | `admin_reason_forbidden` | `reason: admin` sent with an API key. |
+| 429 | `rebind_cap_reached` | The limit of `rebind` revokes per rolling 24 hours is reached. `error.retry_after` and the `Retry-After` header give the seconds to wait, and `error.retry_at` the timestamp at which the oldest counted revoke leaves the 24 hours. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

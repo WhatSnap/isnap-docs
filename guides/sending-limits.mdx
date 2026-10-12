@@ -1,0 +1,286 @@
+---
+title: "Sending limits"
+description: "Learn the five sending limits of a line, why and for how long iSnap holds a message, quiet hours, spacing, the reply lane and the order of messages to one recipient."
+---
+
+Every line counts what it sends and spaces its messages. When a send would go over a limit, iSnap holds the message or refuses it, depending on the line. This page describes the five limits, the reasons iSnap holds a message and for how long, quiet hours, spacing, the reply lane, the order of messages to one recipient, and how to read the state of a line. Read it before you send in volume, and when a `202` comes back with `status: scheduled`.
+
+Every `POST /v1/messages` also counts against the message-operations limit of your network address: 60 requests per rolling 60 seconds for `POST /v1/messages` and `GET /v1/messages` together, whatever the line and the account. Above it, the API returns `429 rate_limit_exceeded`: see [Rate limits](/errors-and-rate-limits#rate-limits). This limit, not the sending limits of a line, bounds how many messages one server sends per minute through `POST /v1/messages`, across all your lines.
+
+The limits and holds of this page apply to sends with an account API key, on every kind of line. A send with a [trial key](/guides/trials#trial-key) is outside them: the trial has its own [unanswered-send limit](/guides/trials#unanswered-send-limit).
+
+## The five limits
+
+Each line has five sending limits. All five count over a rolling window: no counter resets at midnight.
+
+| Limit | Counts | Window | Setting | Default on an iMessage line | Default on an Android line |
+| --- | --- | --- | --- | --- | --- |
+| Per minute | Messages | The last 60 seconds | `minute_message_limit` | 5 | 10 |
+| Per hour | Messages | The last 60 minutes | `hourly_message_limit` | 60 | 60 |
+| Per 24 hours | Messages | The last 24 hours | `daily_total_message_limit` | 600 | 800 |
+| New contacts | Distinct new contacts messaged | The last 24 hours | `daily_new_contact_limit` | 50 | 80 |
+| Known contacts | Distinct known contacts messaged | The last 24 hours | `daily_known_contact_limit` | 200 | 400 |
+
+The defaults are settings of iSnap. The limits in force on a line are the defaults of its kind of device, replaced by the line's own settings where it has any. Read the values in force with [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-line-sending-limits), and read or change the settings with [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) and [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config): see [Configuration](/guides/managing-lines#configuration). A limit can be lowered below its default, down to its minimum, and raised above it only on a BYOD line, up to its maximum.
+
+iSnap checks the per-minute limit first, then the per-hour limit, then the 24-hour message limit, then the contact limit that applies to the recipient. The first limit reached is the one reported.
+
+### New and known contacts
+
+A recipient is **known** when that number sent at least one message to the line in the last 30 days, by default. Every other recipient is **new**. Sending to someone does not make them known: only a message from them does. iSnap decides the class again at each send.
+
+The rules that depend on a contact having written to the line (known contacts, [inbound-only lines](/guides/sending-messages#inbound-only-lines) and the [reply lane](#reply-lane)) compare the `to` of your send with the sender handle as the line's device stored it: see [Inbound messages](/guides/receiving-messages#inbound-messages).
+
+### What counts
+
+- Each message accepted by [`POST /v1/messages`](/api-reference/messages/send-message) or by [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) counts once in the three message counters.
+- The two contact counters count each distinct recipient once per 24 hours, however many messages the recipient gets.
+- A message counts when it leaves, not when iSnap accepts it: a held message counts only once released.
+- Reactions, typing indicators, read receipts, lookups, inbound messages and sends with a trial key count against no limit.
+
+Two sends accepted at the same time can both pass a limit that had room for one more. A limit can therefore be exceeded by one message for each burst of simultaneous sends.
+
+## Held messages
+
+A held message is a message with `status: scheduled`. iSnap holds it until `scheduled_for`, and `schedule_reason` says why. When a send would go over one of the five limits, the line's `quota_overflow_behavior` decides:
+
+| `quota_overflow_behavior` | Effect |
+| --- | --- |
+| `queue`, the default | iSnap accepts the message and holds it: `202` with `status: scheduled`. |
+| `drop` or `fail` | iSnap refuses the request with `429` and stores nothing. The two values behave the same. See [Refusals](#refusals). |
+
+Spacing, quiet hours, the order of messages to one recipient and, on a shared line, a number that cannot take the message, hold a message in every mode. They return `429 queue_full` only when the line already holds its maximum: see [Maximum number of held messages](#maximum-number-of-held-messages).
+
+| `schedule_reason` | Why iSnap holds the message |
+| --- | --- |
+| `minute_limit_exceeded` | The per-minute limit is reached. |
+| `hourly_limit_exceeded` | The per-hour limit is reached. |
+| `total_message_quota_exceeded` | The 24-hour message limit is reached. |
+| `new_contact_quota_exceeded` | The new-contact limit is reached. |
+| `known_contact_quota_exceeded` | The known-contact limit is reached. |
+| `inter_message_delay` | The [spacing](#spacing) between two messages of the line. |
+| `inter_new_contact_delay` | The spacing between two first messages to new contacts. |
+| `quiet_hours` | The recipient is in [quiet hours](#quiet-hours). |
+| `carrier_retry` | On a [shared line](/guides/sending-messages#shared-lines): the number that serves the contact cannot take the message now. |
+| `pending_retry` | iSnap is retrying the release of the message. |
+
+A message held behind an earlier message to the same recipient takes the `schedule_reason` of that earlier message while the earlier one is held, and `inter_message_delay` (`carrier_retry` on a shared line) while the earlier one waits for the line's device. `schedule_reason` alone does not tell you that a message waits for an earlier one: look for an earlier message to the same `to` in [`GET /v1/lines/{id}/queue`](/api-reference/lines/get-line-queue). See [Order](#order).
+
+Ignore response fields, enum values and event types you do not know.
+
+### How long a hold lasts
+
+| Held for | Until |
+| --- | --- |
+| The per-minute limit | 60 to 62 seconds later. |
+| The per-hour limit | 60 to 60.5 minutes later. |
+| A 24-hour limit | The rolling window frees room, then the next hour in which the line sends. When room frees during the day, the message leaves that day. |
+| Spacing | The end of the spacing. |
+| Quiet hours | The next hour in which the line sends, in the recipient's local time. |
+
+When the end of a per-minute or per-hour hold falls in quiet hours, the message is held until the next hour in which the line sends. This applies to reply-lane messages too.
+
+A held message that has not left 48 hours after iSnap accepted it fails with `error_code: carrier_unavailable`, even when its `scheduled_for` is later. It fails at least 48 hours after its acceptance, and the API does not bound the delay beyond that. A `202` whose `scheduled_for` is more than 48 hours after `created_at` describes a message that can fail before it leaves: cancel it, and resend it when the limit frees room. See [Failures](/guides/sending-messages#failures).
+
+### Release
+
+iSnap looks at the held messages every 5 seconds. When the `scheduled_for` of a message arrives, iSnap checks it again against the limits, the spacing, quiet hours and the order of messages to the recipient. Then it either releases the message, which becomes `queued` and sends [`message.queued`](/webhooks/events/message#message-queued), or holds it again with a new `scheduled_for` and `schedule_reason`.
+
+- A held send produces [`message.scheduled`](/webhooks/events/message#message-scheduled), with `schedule_reason` and `scheduled_for`, instead of `message.queued`.
+- When iSnap moves the departure of a held message by more than 15 minutes, it sends another `message.scheduled`. A smaller move sends nothing: read the message for the current `scheduled_for`.
+- Once released, the message has `schedule_reason: null`, and `scheduled_for` equals `queued_at`: it no longer shows when the message left. `sent_at` gives the time the line's device sent it.
+
+A held message can be canceled with [`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message): see [Canceling a message](/guides/sending-messages#canceling-a-message).
+
+### Maximum number of held messages
+
+A line holds at most `max_queue_depth` messages: 500 on an iMessage line and 1,000 on an Android line, by default. A send that iSnap would hold returns `429 queue_full` when the line already holds that many, or when iSnap finds no time to send it in the next 8 days. Nothing is stored. `Retry-After` is the number of seconds until the next midnight UTC. A hold planned more than 48 hours ahead can fail before it leaves: see [How long a hold lasts](#how-long-a-hold-lasts).
+
+## Quiet hours
+
+By default, a line sends only between 08:00 and 20:59 in the recipient's local time. A message accepted outside those hours is held with `schedule_reason: quiet_hours` until the next allowed time, in every overflow mode. An answer that qualifies for the [reply lane](#reply-lane) is not held by quiet hours.
+
+The hours come from the line's `activity_curve`: an hour to which the curve gives a weight of 0, or that the curve does not list, is a quiet hour. The default curve gives a weight of 0 to every hour from 21:00 to 07:59. Change it with `PATCH /v1/lines/{id}/config`: see [Configuration](/guides/managing-lines#configuration).
+
+Which clock iSnap reads:
+
+| Recipient | Local time |
+| --- | --- |
+| A `+1` number of a US state or territory | The time zone in which most of its area code lies. |
+| Any other number, Canadian and non-geographic `+1` numbers included | The time zone of the line: its `timezone` setting, or the zone that iSnap derives from the line's number. See [Configuration](/guides/managing-lines#configuration). |
+
+On a [shared line](/guides/sending-messages#shared-lines), the time zone of the line, the `activity_curve` and the spacing are those of the number that serves the contact: the `timezone`, `activity_curve` and spacing settings of the shared line do not apply.
+
+## Spacing
+
+Below every limit, iSnap still spaces the messages of a line. Spacing holds a message with `schedule_reason` `inter_message_delay` or `inter_new_contact_delay`, in every overflow mode.
+
+| Setting | Rule | Default on an iMessage line | Default on an Android line |
+| --- | --- | --- | --- |
+| `min_inter_message_seconds` | A message leaves at least this many seconds after the previous message of the line, plus up to 2 random seconds. | 1 | 2 |
+| `min_inter_new_contact_seconds` | A first message to a new contact leaves at least this many seconds after the previous first message to a new contact, plus a random extra of up to the same duration. | 300, so 300 to 600 seconds | 180, so 180 to 360 seconds |
+
+With the defaults, an iMessage line sends first messages to at most 12 new contacts per hour. The two settings can only be raised above their defaults: see [Configuration](/guides/managing-lines#configuration).
+
+## Reply lane
+
+An answer to a contact who wrote to the line in the last 24 hours is not stopped by the per-hour limit, the three 24-hour limits or quiet hours. The per-minute limit, the spacing and the order of messages to the recipient still apply.
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `reply_window_hours` | How long after the contact's message the line can answer in the reply lane. | 24 |
+| `reply_max_per_inbound` | How many messages can use the reply lane after each message from the contact. | 8 |
+| `daily_reply_limit` | How many messages of the line can use the reply lane over a rolling 24 hours. | 150 |
+
+`reply_lane` on the message is `true` when the message qualified. A message uses the `daily_reply_limit` budget only when the reply lane let it pass the per-hour limit or a 24-hour limit. Passing quiet hours uses no budget. Reactions never use the reply lane. The three settings can only be lowered below their defaults.
+
+## Order
+
+Messages to the same recipient on the same line leave iSnap in the order iSnap accepted them. While an earlier message to that recipient is held or waiting for the line's device, a later message is held behind it, at least the line's message spacing later. It takes the `schedule_reason` of the earlier message while the earlier one is held, and `inter_message_delay` (`carrier_retry` on a shared line) while the earlier one waits for the line's device. Reactions are outside this rule.
+
+The line's device keeps that order: it sends one item at a time, 0.5 second apart give or take 15%, and sends the messages to one recipient in the order it received them. A message that the device retries holds back the later messages to that recipient only. Reactions, typing indicators and read receipts take their turn in the same sequence on the device.
+
+The order is not guaranteed beyond that:
+
+- iSnap does not guarantee the order in which the services deliver the messages.
+- There is no order between messages to different recipients.
+- When an earlier message fails or is canceled, the later messages to that recipient still leave.
+- Two requests for the same recipient that arrive at the same time can be accepted in either order. To fix the order, send the second request after the response to the first.
+
+## Headers on a send
+
+A `202` from `POST /v1/messages` sent with an account API key carries two headers:
+
+| Header | Content |
+| --- | --- |
+| `X-iSnap-Quota-Remaining` | The line's new-contact limit minus the new contacts counted in the last 24 hours. |
+| `X-iSnap-Quota-Resets-At` | The next midnight UTC. |
+
+The counters are rolling, so `X-iSnap-Quota-Resets-At` is not the time at which the limit frees room: read `daily_new_frees_at` on [`GET /v1/lines/{id}/quota`](/api-reference/lines/get-line-sending-limits) for that. The two headers are also on the five `429` responses of the limits, and not on `429 queue_full`. A send with a trial key carries neither, and neither does `POST /v1/chats/{chat_id}/share-contact-card`.
+
+The SDK does not return response headers: see [Read response headers with `fetch`](/sdk/configuration#read-response-headers-with-fetch).
+
+## Refusals
+
+On a line whose `quota_overflow_behavior` is `drop` or `fail`, a send over a limit returns `429` with the code of that limit, `Retry-After` and `error.retry_after`:
+
+| `error.code` | Limit | `Retry-After` |
+| --- | --- | --- |
+| `minute_limit_exceeded` | Per minute | 60 |
+| `hourly_limit_exceeded` | Per hour | 3600 |
+| `total_message_quota_exceeded`, `new_contact_quota_exceeded`, `known_contact_quota_exceeded` | A 24-hour limit | The seconds until the next midnight UTC. |
+
+For the three 24-hour limits, `Retry-After` is a hint: the rolling window can free room earlier or later. The `*_frees_at` fields of `GET /v1/lines/{id}/quota` give the time each limit frees room. `429 queue_full` is described in [Maximum number of held messages](#maximum-number-of-held-messages).
+
+These codes are not the request-rate limit, which counts requests per network address: see [Rate limits](/errors-and-rate-limits#rate-limits). In the SDK, `minute_limit_exceeded` and `hourly_limit_exceeded` are a `RateLimitError`, and the three other codes and `queue_full` are a `QuotaExceededError`: see [The two error classes of a `429`](/sdk/errors#the-two-error-classes-of-a-429).
+
+The SDK retries a `RateLimitError` by itself when `Retry-After` is 60 seconds or less: on a line set to refuse, it retries a `minute_limit_exceeded` request 60 seconds later. Pass `maxRetries: 0` in the options of the call to receive the refusal immediately.
+
+## Messages that stop counting
+
+A message stops counting against the sending limits in two cases:
+
+- A message you cancel, when it had counted. A message canceled while held had not counted.
+- A message that iSnap fails itself: `error_code` `carrier_unavailable`, `no_terminal_ack` or `carrier_terminated`.
+
+A message that the line's device reports as failed keeps counting until it leaves the rolling window. A message stops counting against a contact counter only when it was the message that counted that contact.
+
+## Events of the sending limits
+
+| Event | Sent when |
+| --- | --- |
+| [`line.quota_warning`](/webhooks/events/line#line-quota_warning) | A counter of the line reaches 80% of its limit. `percent` is always `0.8`. |
+| [`line.quota_exceeded`](/webhooks/events/line#line-quota_exceeded) | A counter reaches 100% of its limit. |
+
+- Each event is sent at most once per line, per counter, per 24 hours.
+- iSnap evaluates them when a message leaves. A send refused with `429`, and a send that iSnap holds, sends neither.
+- `data` carries `line_id`, `bucket` (`daily_new`, `daily_known`, `daily_total`, `hourly` or `minute`), `used`, `limit` and `resets_at`. `resets_at` is the time of the event plus the length of the window: it is not the time the limit frees room.
+- No event announces that a counter falls back below a threshold. Read `GET /v1/lines/{id}/quota`: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+## Reading the limits and the queue
+
+[`GET /v1/lines/{id}/quota`](/api-reference/lines/get-line-sending-limits) returns the state of the five limits of a line and of its reply lane:
+
+| Fields | Meaning |
+| --- | --- |
+| `minute_messages_used`, `minute_message_limit`; `hourly_messages_used`, `hourly_message_limit`; `daily_messages_used`, `daily_total_message_limit`; `daily_new_contacts_used`, `daily_new_contact_limit`; `daily_known_contacts_used`, `daily_known_contact_limit` | Each counter and the limit in force. |
+| `daily_replies_used`, `daily_reply_limit` | The reply-lane budget. |
+| `minute_frees_at`, `hourly_frees_at`, `daily_total_frees_at`, `daily_new_frees_at`, `daily_known_frees_at`, `daily_reply_frees_at` | When the counter drops back under its limit. `null` when the counter is under its limit, when the limit is 0, or when the time could not be computed: read `null` as "no known wait". |
+| `buckets_warning` | Five booleans, `true` from 80% of a limit. |
+
+[`GET /v1/lines/{id}/queue`](/api-reference/lines/get-line-queue) lists the outbound messages of the line that are held, waiting for the line's device, or sent without a delivery receipt, in the order of `scheduled_for`, with a `summary` of the counters. Each item has a `status` of its own:
+
+| Item `status` | Message `status` | Meaning |
+| --- | --- | --- |
+| `scheduled` | `scheduled` | iSnap holds the message. |
+| `queued` | `queued` | The message waits for the line's device, or the device has it and has not confirmed the send. |
+| `delivered_to_device` | `sent` | The device confirmed the send, and no delivery receipt has arrived. |
+
+A `delivered_to_device` item stays listed until a receipt arrives or iSnap deletes the message, at least 72 hours after it recorded it. On a line whose messages get no delivery receipt, such as messages sent as SMS or RCS, these items pile up for at least 72 hours: filter with `status=scheduled` or `status=queued` to see what is still to leave.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/quota \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+curl -sS -G https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/queue \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "status=scheduled" \
+  --data-urlencode "limit=100"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const lineId = 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd'
+
+const limits = await client.lines.quota(lineId)
+console.log(`New contacts: ${limits.daily_new_contacts_used} of ${limits.daily_new_contact_limit}`)
+if (limits.daily_new_frees_at !== null) {
+  console.log(`The new-contact limit frees room at ${limits.daily_new_frees_at}`)
+}
+
+const queue = await client.lines.queue(lineId, { status: 'scheduled', limit: 100 })
+console.log(`${queue.summary.total_scheduled} held, next at ${queue.summary.next_scheduled_at}`)
+for (const item of queue.items) {
+  console.log(item.id, item.scheduled_for, item.schedule_reason)
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+line_id = "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd"
+
+response = requests.get(f"{API}/v1/lines/{line_id}/quota", headers=HEADERS, timeout=30)
+response.raise_for_status()
+limits = response.json()["data"]
+print(f"New contacts: {limits['daily_new_contacts_used']} of {limits['daily_new_contact_limit']}")
+if limits["daily_new_frees_at"] is not None:
+    print("The new-contact limit frees room at", limits["daily_new_frees_at"])
+
+response = requests.get(
+    f"{API}/v1/lines/{line_id}/queue",
+    headers=HEADERS,
+    params={"status": "scheduled", "limit": 100},
+    timeout=30,
+)
+response.raise_for_status()
+queue = response.json()["data"]
+print(f"{queue['summary']['total_scheduled']} held, next at {queue['summary']['next_scheduled_at']}")
+for item in queue["items"]:
+    print(item["id"], item["scheduled_for"], item["schedule_reason"])
+```
+
+</CodeGroup>
+
+Both operations return `404 not_found` for a line that is not yours. A [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` for a line outside its list, even when the line does not exist.
+
+The items of `GET /v1/lines/{id}/queue` carry personal data: the recipient's number in `to` and the text in `body`. Request them only when needed. Do not copy them into logs, tickets or other tools. Refer to a contact by an id of your own.

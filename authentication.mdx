@@ -1,0 +1,328 @@
+---
+title: "Authentication"
+description: "Describes the three kinds of iSnap key, where a line-scoped key applies, the order in which a request is checked, and every refusal."
+---
+
+A request carries its credential in the `Authorization` header. This page describes the three kinds of key, the order in which iSnap checks a request, the response to each refused request, and two helpers that send the header and apply the retry rules.
+
+```http
+Authorization: Bearer <key>
+```
+
+The word `Bearer` is case-insensitive. Every operation is served at `https://api.isnap.ai`, whatever the key. A plain HTTP request is not served: it returns `301` to the HTTPS URL.
+
+Call the API from a server. iSnap does not grant cross-origin browser access to other websites, and a key in browser code is public.
+
+## API keys
+
+An API key is `isnap_live_` or `isnap_test_` followed by 64 lowercase hexadecimal characters: 75 characters in all.
+
+You create, list and revoke API keys in the [iSnap dashboard](https://platform.isnap.ai). The full key is shown once, when you create it. iSnap cannot show it again: store it in a secret manager, and read it from the environment as `ISNAP_API_KEY`.
+
+| Property | Rule |
+| --- | --- |
+| Reach | The whole account, unless the key was created with a list of lines: see [Line-scoped keys](#line-scoped-keys). |
+| Expiry | None. A key stays valid until you revoke it. |
+| Number of keys | An account can hold any number of keys. |
+| Revocation | Takes effect on the next request and cannot be undone. A revoked key and an unknown key get the same response. |
+| Last use | The dashboard shows the date a key was last used. The date moves on every request the key authenticates, including a request that is then refused for another reason. `GET /v1/lines/{id}` does not move it. |
+
+## Test keys
+
+An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key.
+
+<Warning>
+  A request sent with an `isnap_test_` account key sends real messages to real recipients, causes real webhook deliveries, counts against the same limits and is billed the same way. There is no simulated send.
+</Warning>
+
+The prefix follows a label chosen when the key is created: `live`, the default, or `test`. The label changes nothing else. Use it to tell your own keys apart.
+
+To test an integration, send to a phone number of your own.
+
+## Trial keys
+
+A trial key is the key of one trial. It is `isnap_test_` followed by 43 URL-safe base64 characters: 54 characters in all. Its length tells it apart from an API key. [Trials](/guides/trials) explains how you obtain it. Read it from the environment as `ISNAP_TRIAL_KEY`.
+
+A trial key is accepted while its trial is `active` or `dormant`, and by three operations only:
+
+| Operation | With a trial key |
+| --- | --- |
+| [`POST /v1/messages`](/api-reference/messages/send-message) | Sends from the trial's pool line to the trial's paired number only. |
+| [`GET /v1/messages`](/api-reference/messages/list-messages) | Returns the messages of that trial only. |
+| [`GET /v1/trial/activity`](/api-reference/trials/get-trial-activity) | Returns the trial's activity. This operation takes a trial key only: an API key gets `401 unauthorized`. |
+
+Every other operation that needs a credential returns `401 unauthorized` to a trial key. The [operations without a credential](#operations-without-a-credential) ignore it.
+
+## Line-scoped keys
+
+A line-scoped key is an API key created with a list of lines. On the operations of [Where the list applies](#where-the-list-applies), it is limited to those lines. A key with no list reaches the whole account. A line id that is not one of your account's lines grants nothing.
+
+### Where the list applies
+
+| Operations | With a line-scoped key |
+| --- | --- |
+| Every operation under `/v1/lines/{id}/`: `reserve`, `activate`, `release`, `terminate`, `cancel`, `uncancel`, `anniversary`, `variant`, `convert-to-test`, `convert-from-test`, `transfer-ownership`, `quota`, `queue`, `health` and `config` | `403 forbidden` when the line is outside the list, even when the line does not exist. |
+| `POST /v1/messages` | `403 forbidden` when `line_id` is outside the list. |
+| `POST /v1/chats/{chat_id}/share-contact-card` | `403 forbidden` when the chat's line is outside the list. |
+| `GET /v1/messages/{id}`, `DELETE /v1/messages/{id}`, `POST` and `DELETE /v1/messages/{id}/reactions`, `GET /v1/chats/{chat_id}` | `404 not_found` when the message or the chat is on a line outside the list, as if it did not exist. |
+| `GET /v1/lines/my`, `GET /v1/messages`, `GET /v1/chats`, `GET /v1/attention` | The response contains only what belongs to the lines of the list. On `GET /v1/messages`, a `line_id` filter outside the list returns an empty page. |
+| `POST /v1/lines/assign`, `POST /v1/lines/shared` | `403 forbidden` for every line-scoped key: such a key cannot obtain a new line. |
+
+Inside its list, a line-scoped key can do everything an unscoped key can, terminating and transferring a line included.
+
+### Where the list does not apply
+
+| Operations | What a line-scoped key can do |
+| --- | --- |
+| `PATCH /v1/lines/{id}` | Change the metadata and the billing anchor of any line of the account. |
+| `GET /v1/lines/{id}` | Read the full phone number of any line of the account. |
+| The nine operations under `/v1/webhooks`, the events feed included | Subscribe to the events of every line, and read the events and the delivery records of every line, message content included. |
+| The six operations under `/v1/pre-orders` | Create, read, update, confirm and cancel pre-orders. |
+| `POST /v1/attachments`, `GET /v1/attachments/{id}` | Create attachments, and read every attachment the account can read. |
+| `POST /v1/lookup` | Run a lookup from any line of the account. |
+| `POST` and `DELETE /v1/chats/{chat_id}/typing`, `POST /v1/chats/{chat_id}/read` | Act on any chat of the account. |
+| `POST /v1/trial/init`, `GET` and `PATCH /v1/trial/{trial_id}`, `POST /v1/trial/{trial_id}/revoke` | Start, read, update and revoke trials. |
+| `POST /v1/byod/pair` | Issue activation codes. |
+| The five operations under `/v1/macos-sessions` | Rent, read, update, cancel and uncancel hosted macOS sessions. |
+
+A line-scoped key is not a boundary for the operations of [Where the list does not apply](#where-the-list-does-not-apply): on them it acts on the whole account. Do not use a line-scoped key to separate one system or one team from the rest of your account.
+
+## How a request is checked
+
+iSnap checks a request in this order. The first check that fails decides the response.
+
+<Steps>
+  <Step title="Request rate">
+    A caller over the request-rate limit gets `429 rate_limit_exceeded`. The limit is counted per network address, before the key is read: see [Rate limits](/errors-and-rate-limits#rate-limits). The message-operations limit of `POST` and `GET /v1/messages` is counted between step 2 and step 3, also before the key is read.
+  </Step>
+  <Step title="Authorization header on a write">
+    On `POST`, `PATCH`, `PUT` and `DELETE`, a request whose `Authorization` header is absent, or does not start with `Bearer isnap_live_` or `Bearer isnap_test_`, gets `403 forbidden`, not `401`. A request that carries `X-Requested-With: XMLHttpRequest` skips this check and gets `401` instead. Paths under `/v1/webhooks` are the exception: they return `401 unauthorized`.
+  </Step>
+  <Step title="Credential">
+    A missing, malformed, unknown or revoked credential gets `401 unauthorized`.
+  </Step>
+  <Step title="Line scope and idempotency key">
+    On an operation under `/v1/lines/{id}/`, a line-scoped key whose list does not hold that line gets `403 forbidden`. On `POST /v1/lines/assign`, `POST /v1/lines/shared` and `POST /v1/macos-sessions/rent`, the `Idempotency-Key` header is read at this step: see [Idempotency](/idempotency#operations-that-honor-the-key).
+  </Step>
+  <Step title="Query, path, headers and body">
+    The query is validated first, then the path, then the headers, then the body. The first invalid part gets `400 validation_failed`, and `error.issues` lists every problem of that part.
+  </Step>
+  <Step title="The operation's own rules">
+    The operation applies its rules and returns its own codes, such as `404 not_found` or `409 conflict`.
+  </Step>
+</Steps>
+
+Three consequences:
+
+- A `429` can come before a `401`: a refused key still counts against the request-rate limit.
+- A wrong key with an invalid body gets `401`, not `400`.
+- An invalid query hides an invalid body: fix the query, then resend the request to see the next problem.
+
+## Refusals
+
+Every refusal uses the [error format](/errors-and-rate-limits#error-format). Branch on `error.code`. `error.message` is text for a person and can change.
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| `401` | `unauthorized` | The credential is missing or malformed on a `GET`, or on a write that carries `X-Requested-With: XMLHttpRequest`. The key is unknown or revoked. A trial key is sent to an operation that does not take one, or its trial is not `active` or `dormant`. An API key is sent to `GET /v1/trial/activity`. |
+| `403` | `forbidden` | On a `POST`, `PATCH`, `PUT` or `DELETE` outside `/v1/webhooks`, the `Authorization` header is absent or does not start with `Bearer isnap_live_` or `Bearer isnap_test_`, and the request does not carry `X-Requested-With: XMLHttpRequest`. |
+| `403` | `forbidden` | A line-scoped key acts on a line outside its list, or calls `POST /v1/lines/assign` or `POST /v1/lines/shared`. |
+| `429` | `rate_limit_exceeded` | The caller is over the request-rate limit or the message-operations limit. |
+
+The body of a `401`:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "status": 401,
+    "code": "unauthorized",
+    "message": "Invalid or revoked API key",
+    "retry_after": null,
+    "retry_at": null,
+    "issues": null
+  },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
+}
+```
+
+A `403` has the same shape, with `"status": 403` and `"code": "forbidden"`.
+
+## Operations without a credential
+
+Seven operations need no credential. They count against the request-rate limit like any other request.
+
+| Operation | Note |
+| --- | --- |
+| [`GET /v1/health`](/api-reference/service/get-health) | |
+| [`GET /v1/version`](/api-reference/service/get-version) | |
+| [`GET /v1/lines`](/api-reference/lines/list-available-lines) | A credential is ignored: phone numbers are masked for every caller. |
+| [`GET /v1/lines/{id}`](/api-reference/lines/get-line) | With a valid API key of the line's owner, the response contains the full phone number. An invalid credential is ignored, never refused. |
+| [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes) | |
+| [`GET /v1/apps`](/api-reference/byod/get-app-downloads) | |
+| [`GET /v1/trial/status`](/api-reference/trials/get-trial-status) | The pairing code in the query identifies the trial. |
+
+## Make your first call
+
+To make a first call, follow the [Quickstart](/quickstart).
+
+## Helpers
+
+Put the header and the retry rules in one place. These two helpers do it, and the samples of [Pagination](/pagination) and [Idempotency](/idempotency) import them. Each sends the `Authorization` header and applies the retry rules of [Errors and rate limits](/errors-and-rate-limits#errors):
+
+- Retry a `429` after `Retry-After` seconds. Retry a `500` or a `503` up to 2 times, with exponential backoff. Do not retry any other `4xx`: fix the request.
+- Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt.
+
+<CodeGroup>
+
+```typescript isnap.ts
+import { ISnapClient } from '@isnap/sdk'
+
+// The client sends the Authorization header on every request. It retries a failed
+// connection, a 500 or a 503 with backoff, and a 429 whose delay is 60 seconds or
+// less, except a QuotaExceededError: up to 2 retries. It adds an Idempotency-Key to
+// every write and reuses it on its retries.
+export const client = new ISnapClient({
+  apiKey: process.env.ISNAP_API_KEY ?? '',
+  maxRetries: 2
+})
+
+// Pass as the last argument of a write on an operation that does not honor
+// Idempotency-Key, of chats.shareContactCard and of trial.status, so that a
+// retry cannot run the operation twice:
+//   await client.webhooks.create(body, noRetry)
+export const noRetry = { maxRetries: 0 }
+```
+
+```python isnap.py
+import os
+import time
+
+import requests
+
+BASE_URL = "https://api.isnap.ai"
+MAX_RETRIES = 2
+MAX_WAIT_SECONDS = 60
+
+
+class ISnapError(Exception):
+    """An error response of the iSnap API."""
+
+    def __init__(self, status, body):
+        body = body if isinstance(body, dict) else {}
+        error = body.get("error")
+        error = error if isinstance(error, dict) else {}
+        self.status = status
+        self.code = error.get("code")
+        self.message = error.get("message")
+        self.retry_after = error.get("retry_after")
+        self.issues = error.get("issues")
+        self.trace_id = body.get("trace_id")
+        self.request_id = body.get("request_id")
+        super().__init__(
+            f"{status} {self.code}: {self.message} "
+            f"(trace_id={self.trace_id}, request_id={self.request_id})"
+        )
+
+
+def isnap_request(method, path, *, params=None, json=None, idempotency_key=None, api_key=None):
+    """Call the iSnap API. Return the `data` of the response, or None on a 204.
+
+    Pass `idempotency_key` only to an operation that honors Idempotency-Key: the helper then
+    retries with the same key. Do not use this helper for
+    `POST /v1/chats/{chat_id}/share-contact-card`: send that call once, with a key, and look
+    for the message before you resend it. Do not use it for `GET /v1/trial/status` either:
+    the first read within 1 hour after pairing returns the trial key, and no later read
+    returns it.
+    """
+    headers = {"Authorization": f"Bearer {api_key or os.environ['ISNAP_API_KEY']}"}
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    # A 500, a 503 or a missing response is retried on a read, and on a write only
+    # with an idempotency key.
+    retry_server_errors = method.upper() == "GET" or idempotency_key is not None
+    retries = 0
+    while True:
+        try:
+            response = requests.request(
+                method, BASE_URL + path, params=params, json=json, headers=headers, timeout=30
+            )
+        except (requests.ConnectionError, requests.Timeout):
+            # No response: the request may have run. Retry a read, or a write with a key.
+            if not retry_server_errors or retries == MAX_RETRIES:
+                raise
+            time.sleep(2**retries)
+            retries += 1
+            continue
+        if response.status_code == 204:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if 200 <= response.status_code < 300:
+            return body["data"]
+        delay = None
+        if response.status_code == 429:
+            # A 429 was refused before it ran. Longer waits are left to the caller.
+            retry_after = response.headers.get("Retry-After")
+            if retry_after is not None and int(retry_after) <= MAX_WAIT_SECONDS:
+                delay = int(retry_after)
+        elif response.status_code in (500, 503) and retry_server_errors:
+            delay = 2**retries
+        if delay is None or retries == MAX_RETRIES:
+            raise ISnapError(response.status_code, body)
+        time.sleep(delay)
+        retries += 1
+```
+
+</CodeGroup>
+
+What the helpers do, and what they leave to you:
+
+| Case | TypeScript `client` | Python `isnap_request` |
+| --- | --- | --- |
+| `429` with a delay of 60 seconds or less | Waits, then retries, except the five codes of `QuotaExceededError`. | Waits, then retries, whatever the code. |
+| `429` with a longer delay | Throws immediately. | Raises `ISnapError` immediately. Read `retry_after` and schedule the call. |
+| `500` or `503` on a read | Retries with backoff. | Retries with backoff. |
+| `500` or `503` on a write | Retries with the same `Idempotency-Key`. Pass `noRetry` on an operation that does not honor the key. | Retries only when you pass `idempotency_key`. |
+| No response (timeout or connection error) | Retries with the same `Idempotency-Key`. Pass `noRetry` on an operation that does not honor the key. | Retries a read, and a write only when you pass `idempotency_key`. |
+| Any other `4xx` | Throws. | Raises `ISnapError`. |
+
+The five codes of `QuotaExceededError`, which the SDK does not retry, are `new_contact_quota_exceeded`, `known_contact_quota_exceeded`, `total_message_quota_exceeded`, `queue_full` and `lookup_rate_limit_exceeded`. The SDK pages describe its retries and errors in full: see [SDK errors](/sdk/errors).
+
+Never retry [`GET /v1/trial/status`](/api-reference/trials/get-trial-status) automatically: the first read within 1 hour after pairing returns the trial key, and no later read returns it. Call it with `{ maxRetries: 0 }` in TypeScript, and with `requests` directly in Python.
+
+`isnap_request` reads the standard response envelope. Call `GET /v1/health` without it: that operation returns its body without the envelope.
+
+To call with a trial key, pass it to the helper: `isnap_request("GET", "/v1/trial/activity", api_key=os.environ["ISNAP_TRIAL_KEY"])`. In TypeScript, create a second client with the trial key: a client holds one credential.
+
+## Troubleshooting
+
+| Response | Meaning | What to check |
+| --- | --- | --- |
+| `401 unauthorized` | iSnap refused the credential, or found none on a `GET`. | The header reads `Authorization: Bearer <key>`. The key is whole: 75 characters for an API key. The key has not been revoked in the dashboard. |
+| `401 unauthorized` with a trial key | The operation does not take a trial key, or the trial is not `active` or `dormant`. | A trial key works on `POST /v1/messages`, `GET /v1/messages` and `GET /v1/trial/activity` only. |
+| `401 unauthorized` on `GET /v1/trial/activity` | The operation takes a trial key only. | Send the trial key, not the API key. |
+| `403 forbidden` on a `POST`, `PATCH`, `PUT` or `DELETE` | The `Authorization` header is absent, or its value does not start with `Bearer isnap_live_` or `Bearer isnap_test_`. | The header is sent on writes too, and the environment variable that holds the key is set. |
+| `403 forbidden` with a line-scoped key | The line is outside the key's list, or the operation is `POST /v1/lines/assign` or `POST /v1/lines/shared`. | Use a key whose list holds the line, or a key with no list. |
+| `404 not_found` on a message or a chat, with a line-scoped key | The message or the chat is on a line outside the key's list. | Use a key whose list holds the line. |
+| `429 rate_limit_exceeded`, also with a wrong key | The limit is counted per network address, before the key is read. | Retry a `429` after `Retry-After` seconds. Every system that calls from the same address shares the limit. |
+| `301` | The request used plain HTTP. | Call `https://api.isnap.ai`. |
+| `500 internal_error` on a request with a body | An unexpected error. A body that is not valid JSON also returns it. | The body is valid JSON, and the request carries `Content-Type: application/json`. |
+| A browser reports a cross-origin error | iSnap does not grant cross-origin access to other websites. | Call the API from a server. |
+
+If no row explains the response, report it. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
+
+## If a key leaks
+
+Anyone who holds an API key acts on your account, your lines and your billing. Treat a key that appeared in a log, a ticket, a repository or a client-side bundle as leaked.
+
+1. Create another key in the [iSnap dashboard](https://platform.isnap.ai), and deploy it. The last-use date of the new key in the dashboard moves when your systems use it.
+2. Revoke the leaked key in the dashboard. The revocation takes effect on the next request and cannot be undone.
+
+To disable a leaked trial key, revoke its trial with [`POST /v1/trial/{trial_id}/revoke`](/api-reference/trials/revoke-trial): the key then returns `401 unauthorized`.
+
+Never log request headers: the `Authorization` header holds the key.

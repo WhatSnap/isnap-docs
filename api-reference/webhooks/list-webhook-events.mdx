@@ -1,0 +1,27 @@
+---
+title: "List the events feed"
+description: "Lists the events of the last 72 hours that matched a subscription of your account, newest first, with a cursor."
+openapi: "GET /v1/webhooks/events"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key reads the events of every line of the account, message content included.
+- **`Idempotency-Key`:** not needed: the operation changes nothing. See
+  [Retrying safely](/idempotency#retrying-safely).
+- **Events:** none. The operation lists events: it replays nothing.
+- **Personal data:** each item is a full event, with message text, handles, contact names and
+  attachment file names. Request it only when needed, do not copy it into logs, tickets or other
+  tools, and refer to a contact by an id of your own.
+- **Guide:** [Events feed](/webhooks/pulling-events) explains what the feed holds, how to walk it and
+  its limits. An event is listed only if it matched an active subscription of your account when it
+  occurred: an account without a subscription has an empty feed.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `since` is missing. `since` or `until` is not a timestamp in ISO 8601, in UTC, ending with `Z`. `event` is neither an event type, nor a family wildcard, nor `*`. `line_id` does not have the form of a line id. `limit` is outside 1 to 100. |
+| 400 | `invalid_cursor` | `cursor` is not a cursor this operation returned. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

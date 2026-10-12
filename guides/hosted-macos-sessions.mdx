@@ -1,0 +1,299 @@
+---
+title: "Hosted macOS sessions"
+description: "Rent a hosted macOS session as a wholesale partner, follow its anniversary, and cancel it or keep it through the API."
+---
+
+A hosted macOS session is a macOS user account on a Mac that iSnap hosts. It is meant to run the bridge app of your own BYOD iMessage line, under your own Apple ID: see [BYOD lines](/guides/byod). This page covers what the API does with a session: rent it, read it, cancel it, and learn when it is released. Read it if you are a wholesale partner and rent sessions through the API.
+
+## What a session is
+
+- A session is a macOS user account on a Mac that iSnap hosts. It is signed in to no Apple ID when you receive it.
+- A session is not a line: it has no number and sends nothing.
+- A session has its own resource, under `/v1/macos-sessions`, and its own id: `mcs_` followed by 25 letters or digits.
+
+## Who can rent through the API
+
+Wholesale partners only. [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) returns `403 not_a_wholesale_partner` to any other account. See [Accounts](/concepts#accounts).
+
+A direct account cannot rent a session through the API: to rent one, write to [support@isnap.ai](mailto:support@isnap.ai).
+
+Only the account that rents a session, by a rent call or by an attach from iSnap, can read, update, cancel or uncancel it. Every other account receives `404 macos_session_not_found` on those four operations, never `403`.
+
+## Renting a session
+
+One call to [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) rents one session. iSnap hands over a free session from its stock: one that is signed in to no Apple ID, hosts no line, and sits on a Mac that is delivered. The session is yours immediately, and `anniversary_at` is set to the time of the call. The response is `201` with the session.
+
+The body is optional. Its only field is `metadata`: any other field returns `400 validation_failed`.
+
+The API sets no maximum number of sessions for a wholesale partner, and no rule ties that number to your BYOD lines. To rent three sessions, make three calls.
+
+<Warning>
+Send an `Idempotency-Key` with every rent. Without a key, every call rents one more billable session, a retry after a lost response included.
+
+An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. A rent sent with a test key rents a billable session.
+</Warning>
+
+`POST /v1/macos-sessions/rent` is the only operation of this page that honors `Idempotency-Key`. Use one key per session that you want, and reuse it only to retry the same request with the same body. The API remembers the key for 24 hours: after that, the same request with the same key rents another session. The rules are in [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).
+
+<CodeGroup>
+
+```bash curl
+# One key per session you want. To retry, send the same key with the same body.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the session: reuse it to retry.
+curl -sS -X POST "https://api.isnap.ai/v1/macos-sessions/rent" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"metadata":{"crm_account_id":"acct_1042"}}'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// One key per session you want.
+const idempotencyKey = randomUUID() // Store it with your record of the session: reuse it to retry.
+
+try {
+  const session = await client.macosSessions.rent(
+    { metadata: { crm_account_id: 'acct_1042' } },
+    { idempotencyKey }
+  )
+  // Store session.id: no operation lists your sessions.
+  console.log(session.id, session.anniversary_at)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'no_macos_session_in_stock') {
+    // Nothing was rented. iSnap can attach a session later: watch macos_session.rented.
+    console.error('No session is in stock.')
+  } else if (err instanceof APIError && err.code === 'not_a_wholesale_partner') {
+    console.error('Wholesale partners only.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import json
+import os
+import time
+import uuid
+
+import requests
+
+# One key per session you want, and the same bytes on every attempt:
+# the API compares the body byte for byte.
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the session: reuse it to retry.
+headers = {
+    "Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}",
+    "Content-Type": "application/json",
+    "Idempotency-Key": idempotency_key,
+}
+body = json.dumps({"metadata": {"crm_account_id": "acct_1042"}})
+
+response = None
+for attempt in range(3):
+    if attempt > 0:
+        time.sleep(2**attempt)
+    try:
+        response = requests.post(
+            "https://api.isnap.ai/v1/macos-sessions/rent", headers=headers, data=body, timeout=30
+        )
+    except (requests.ConnectionError, requests.Timeout):
+        # No response: the same key makes the retry safe.
+        response = None
+        continue
+    if response.status_code not in (500, 503):
+        break
+    # 500, or 503 idempotency_in_flight: the same key makes the retry safe.
+
+if response is None:
+    raise SystemExit("No response. Retry within 24 hours with the same key and the same body.")
+
+if response.status_code == 201:
+    session = response.json()["data"]
+    # Store session["id"]: no operation lists your sessions.
+    print(session["id"], session["anniversary_at"])
+elif response.status_code == 409 and response.json()["error"]["code"] == "no_macos_session_in_stock":
+    # Nothing was rented. iSnap can attach a session later: watch macos_session.rented.
+    print("No session is in stock.")
+elif response.status_code == 403 and response.json()["error"]["code"] == "not_a_wholesale_partner":
+    print("Wholesale partners only.")
+else:
+    response.raise_for_status()
+```
+
+</CodeGroup>
+
+```json Response
+{
+  "success": true,
+  "data": {
+    "id": "mcs_7Qd3Vx9Kb2Lm5Tn8Wr4Yc6Hz1",
+    "rented": true,
+    "anniversary_at": "2026-10-08T14:22:57.392Z",
+    "cancel_at": null,
+    "status": "created",
+    "created_at": "2026-09-12T09:41:03.118Z",
+    "metadata": { "crm_account_id": "acct_1042" }
+  },
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "request_id": "req_6Tn3Vb8Kx2Wq9Lc4Rz7Yd1Hm5"
+}
+```
+
+### When no session is in stock
+
+With no free session, rent returns `409 no_macos_session_in_stock` and records nothing: a retry with the same key runs again.
+
+After that refusal, iSnap can attach a session to your account later, without a new call from you, and then sends `macos_session.rented`. A session attached this way is not linked to the call that was refused. If you also call rent again and that call succeeds, you have two sessions. Choose one path: wait for `macos_session.rented`, or call rent again. Cancel a session that you do not need.
+
+## The session object
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `mcs_` followed by 25 letters or digits. |
+| `rented` | `true` on every session that you can read. |
+| `anniversary_at` | The start of your rental. Its day of the month and its time of day are the [anniversary](#anniversary) of the session. |
+| `cancel_at` | When the rental ends. `null` when the session is not canceled. |
+| `status` | `pending_provisioning` when iSnap marked the Mac that hosts the session as not delivered, `created` in every other case. iSnap hands over a session only on a delivered Mac, so `pending_provisioning` appears only when iSnap marks the Mac as not delivered afterward. |
+| `created_at` | When iSnap created the session. It is not the start of your rental: that is `anniversary_at`. |
+| `metadata` | Your own keys and values, or `null`. |
+
+There is no operation that lists sessions. Store the `id` from the response of rent, and the `macos_session_id` of each `macos_session.rented` event.
+
+## Anniversary
+
+The anniversary of a session is the UTC day of the month and time of day of `anniversary_at`. In a month that does not have that day, the anniversary falls on the last day of the month, then returns to the original day: a session with `anniversary_at` on January 31 at 14:32 UTC has its anniversary on the last day of February, then on March 31, both at 14:32 UTC. A cancellation ends the rental at an anniversary: see [Canceling and keeping a session](#canceling-and-keeping-a-session).
+
+## Canceling and keeping a session
+
+[`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session) schedules the end of the rental. It sets `cancel_at` to the next occurrence of the anniversary day and time strictly after the call: a cancel sent on the anniversary day after the time of `anniversary_at` ends the rental one month later, and one sent earlier that day ends it the same day. The session works until `cancel_at`. A second cancel returns the same `cancel_at`.
+
+The release comes after `cancel_at`; the API does not bound the delay. At the release:
+
+- the session returns to iSnap's stock, and its `metadata` is cleared;
+- iSnap sends `macos_session.released` with `reason: cancelled`;
+- every later call on the session returns `404 macos_session_not_found`.
+
+Treat a session as released when `macos_session.released` arrives, or when a read returns `404`.
+
+[`POST /v1/macos-sessions/{id}/uncancel`](/api-reference/macos-sessions/uncancel-macos-session) withdraws a cancel. It clears `cancel_at` and keeps `anniversary_at`, so the anniversary does not move. Its result depends on when you call it:
+
+| When you call uncancel | Result |
+| --- | --- |
+| The session is not canceled | `200`. Nothing changes. |
+| Before `cancel_at` | `200`. `cancel_at` becomes `null`. |
+| After `cancel_at`, before the release | `409 macos_session_cancellation_already_due` |
+| After the release | `404 macos_session_not_found` |
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/macos-sessions/mcs_7Qd3Vx9Kb2Lm5Tn8Wr4Yc6Hz1/cancel" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+curl -sS -X POST "https://api.isnap.ai/v1/macos-sessions/mcs_7Qd3Vx9Kb2Lm5Tn8Wr4Yc6Hz1/uncancel" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const sessionId = 'mcs_7Qd3Vx9Kb2Lm5Tn8Wr4Yc6Hz1'
+
+try {
+  const canceled = await client.macosSessions.cancel(sessionId)
+  console.log('The rental ends at', canceled.cancel_at)
+
+  const kept = await client.macosSessions.uncancel(sessionId)
+  console.log('cancel_at is now', kept.cancel_at)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'macos_session_not_found') {
+    console.error('Unknown session, released session, or a session that another account rents.')
+  } else if (err instanceof APIError && err.code === 'macos_session_cancellation_already_due') {
+    console.error('cancel_at has passed: the session is about to be released.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+SESSION_ID = "mcs_7Qd3Vx9Kb2Lm5Tn8Wr4Yc6Hz1"
+
+for action in ("cancel", "uncancel"):
+    response = requests.post(f"{API}/v1/macos-sessions/{SESSION_ID}/{action}", headers=HEADERS, timeout=30)
+    payload = response.json()
+    if response.status_code == 200:
+        print(action, "cancel_at:", payload["data"]["cancel_at"])
+    elif payload["error"]["code"] == "macos_session_not_found":
+        print("Unknown session, released session, or a session that another account rents.")
+        break
+    elif payload["error"]["code"] == "macos_session_cancellation_already_due":
+        print("cancel_at has passed: the session is about to be released.")
+        break
+    else:
+        response.raise_for_status()
+```
+
+</CodeGroup>
+
+## What iSnap can do on its own
+
+Two changes can happen without a call from you:
+
+- **iSnap ends a rental.** It can do so at any time. iSnap sends `macos_session.released` with `reason: detached_by_admin`, and the session returns `404` afterward.
+- **iSnap starts a rental.** It attaches a session to your account and sends `macos_session.rented`. The `anniversary_at` of that session can be in the past.
+
+Subscribe to both events, and store the `macos_session_id` that `macos_session.rented` carries.
+
+## The BYOD line of a released session
+
+When a released session was running the bridge app of one of your BYOD lines, even one whose device has stopped reporting, iSnap stops that bridge app and sends `line.disconnected` for the line. `reason` is `scheduled_cancellation` when the release follows your cancel, and `admin_revoked` when iSnap took the session back. A bridge app that runs on a Mac of your own is not affected.
+
+When you terminate a line that a session runs, the session is taken off the line and stays rented: cancel it with [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session).
+
+## Metadata
+
+Set `metadata` when you rent, and change it with [`PATCH /v1/macos-sessions/{id}`](/api-reference/macos-sessions/update-macos-session). The body of the `PATCH` is required and has one field, `metadata`. Send `Content-Type: application/json` with every body.
+
+- The `PATCH` merges: a key that you send replaces the stored value, a key sent as `null` is deleted, and the other keys stay.
+- The result contains at most 20 keys and 8,192 bytes once serialized. Beyond that, the call returns `400 metadata_too_large`.
+- The `PATCH` sends no event.
+- The `macos_session.*` events carry the `metadata` of the session in `data.metadata`.
+- iSnap clears the `metadata` when the session is released.
+
+## Events
+
+| Event | Sent when |
+| --- | --- |
+| [`macos_session.rented`](/webhooks/events/macos-session#macos_session-rented) | iSnap attaches a session to your account outside your own rent call. Sent once per hand-over. |
+| [`macos_session.released`](/webhooks/events/macos-session#macos_session-released) | The rental of a session ends. `reason` is `cancelled` when your scheduled cancel was carried out, and `detached_by_admin` when iSnap took the session back. |
+
+Both events carry no line id: a [webhook subscription](/webhooks/overview) with a line filter never receives them, even when the session runs one of the listed lines. Receive them on a subscription without a line filter. Their `data.line_metadata` is the `metadata` of the line the session runs, or ran until the release, when that line is yours, and `null` otherwise.
+
+The session events announce the two changes above, and no other. Your own calls send no event: rent, cancel, uncancel and `PATCH`. The response of each call is its only signal.
+
+The full list is in [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). To know the state of a session, read it with [`GET /v1/macos-sessions/{id}`](/api-reference/macos-sessions/get-macos-session). Deduplicate on `event_id`: see [Duplicates](/webhooks/delivery#duplicates).
+
+## Line-scoped keys
+
+The list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied to hosted macOS sessions: such a key can rent, read, update, cancel and uncancel a session.
+
+## Errors
+
+The refusals of each operation are on its reference page: [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session), [`GET /v1/macos-sessions/{id}`](/api-reference/macos-sessions/get-macos-session), [`PATCH /v1/macos-sessions/{id}`](/api-reference/macos-sessions/update-macos-session), [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session) and [`POST /v1/macos-sessions/{id}/uncancel`](/api-reference/macos-sessions/uncancel-macos-session). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+The session object and the `macos_session.*` events carry no Apple ID, no email address and no phone number.

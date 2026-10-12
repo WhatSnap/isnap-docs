@@ -1,0 +1,160 @@
+---
+title: "Example: uploading an attachment"
+sidebarTitle: "Uploading an attachment"
+description: "Gives two complete scripts that upload a file with the SDK: one with the attachments helper followed by a send, and one that runs the three steps itself and keeps the attachment id."
+---
+
+These scripts upload a file as an attachment. The first one uses `attachments.upload`, waits until the attachment is `ready`, and sends it in a message. The second one runs the three steps itself, so that the attachment id is known from the first step. [Attachments](/guides/attachments) gives the limits and the retention of a file, and [The attachments helper](/sdk/reference#the-attachments-helper) describes the helper.
+
+<Warning>
+The scripts act on your real account. The first one sends a real message, with the file, to the recipient you give, and the message counts against the sending limits of the line. An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key.
+</Warning>
+
+## Upload with the helper, then send
+
+```typescript upload-attachment.ts
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { APIConnectionError, APIError, ISnapClient } from '@isnap/sdk'
+
+const apiKey = process.env.ISNAP_API_KEY
+const [path, contentType, lineId, to] = process.argv.slice(2)
+
+if (!apiKey || !path || !contentType || !lineId || !to) {
+  console.error('Set ISNAP_API_KEY, then run: upload-attachment.ts <file> <content type> <line id> <recipient>')
+  process.exit(1)
+}
+
+// The upload request has the timeout of the client: allow 2 minutes for the file.
+const client = new ISnapClient({ apiKey, maxRetries: 2, timeoutMs: 120_000 })
+
+// The helper takes the whole file in memory.
+const file = await readFile(path)
+
+try {
+  // 60 polls, 2 seconds apart: up to 120 seconds of waiting for the attachment to be ready.
+  const attachment = await client.attachments.upload(
+    file,
+    { filename: basename(path), contentType },
+    { pollIntervalMs: 2_000, maxPolls: 60 }
+  )
+  console.log(`${attachment.id} is ${attachment.status}`)
+
+  const message = await client.messages.send({
+    line_id: lineId,
+    to,
+    attachments: [attachment.id]
+  })
+  console.log(`${message.id} is ${message.status}`)
+} catch (err) {
+  process.exitCode = 1
+  if (err instanceof APIError && err.code === 'upload_timeout') {
+    // The attachment can still become ready. Its id is in the message only.
+    console.error(`Not ready after the last poll: ${err.message}`)
+  } else if (err instanceof APIError && err.code === 'upload_failed') {
+    console.error(`The upload failed with status ${err.status}: ${err.message}`)
+  } else if (err instanceof APIError) {
+    console.error(`${err.status} ${err.code} (request ${err.requestId})`)
+  } else if (err instanceof APIConnectionError) {
+    console.error(`No usable response: ${err.message}`)
+  } else {
+    throw err
+  }
+}
+```
+
+The client passes `maxRetries: 2`, the rule of this site. Besides that, the script changes two defaults, and states `maxPolls` at its default so that the polling budget reads in one place:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `timeoutMs` | 120,000 | The upload request has the `timeoutMs` of the client, and is sent once. A large file needs more than the default 30 seconds. |
+| `maxPolls` | 60 | The default. At the default interval, 60 polls cover 30 seconds and can end on an upload that succeeds: iSnap confirms a finished upload on a 30-second cycle, and converts an audio file before the attachment is `ready`. |
+| `pollIntervalMs` | 2,000 | 60 polls 2 seconds apart cover 120 seconds and make at most 30 requests per minute when no poll is retried, under the [request-rate limit](/errors-and-rate-limits#rate-limits). Each poll is one API request and counts against it. |
+
+`attachments.upload` resolves only when the attachment is `ready`: the script then sends it. The send has no `body`, which a message with an attachment allows. The SDK adds an idempotency key to the registration and to the send.
+
+### Errors it handles
+
+| Error | Meaning |
+| --- | --- |
+| `APIError` with code `upload_timeout` | The attachment was not `ready` after the last poll. The timeout does not cancel the attachment. Its id is in the text of the error message only. |
+| `APIError` with code `upload_failed` | The upload request was refused (`status` is the status of that response, and the error carries no id), or the attachment became `failed` (`status` is `422`, and the id is in the text of the error message only). |
+| `APIError` with code `attachment_exceeds_storage_limit` | The file is larger than 5,368,709,120 bytes. |
+| Any other `APIError` | The API refused the registration, a poll or the send, for example `404 not_found` when the line is not yours. The errors of the send are those of [Example: sending a message](/sdk/examples/send-message#errors-it-handles). |
+| `APIConnectionError` | No usable response arrived, or the upload request failed or timed out. |
+
+## Keep the attachment id
+
+When the helper throws, it gives you no attachment id. To keep the id, run the three steps yourself: register, upload, poll.
+
+```typescript upload-attachment-steps.ts
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { ISnapClient } from '@isnap/sdk'
+
+const apiKey = process.env.ISNAP_API_KEY
+const [path, contentType] = process.argv.slice(2)
+
+if (!apiKey || !path || !contentType) {
+  console.error('Set ISNAP_API_KEY, then run: upload-attachment-steps.ts <file> <content type>')
+  process.exit(1)
+}
+
+const client = new ISnapClient({ apiKey, maxRetries: 2 })
+const file = await readFile(path)
+
+// 1. Register the attachment. Its id is known from here on.
+const created = await client.attachments.create({
+  filename: basename(path),
+  content_type: contentType,
+  size_bytes: file.byteLength
+})
+console.log(`Registered ${created.id}`)
+
+// 2. Upload the bytes to the URL of the response, with the headers it lists.
+const upload = await fetch(created.upload_url, {
+  method: 'PUT',
+  headers: created.required_headers,
+  body: file
+})
+if (!upload.ok) {
+  throw new Error(`The upload of ${created.id} was refused with status ${upload.status}`)
+}
+
+// 3. Poll until the status is final: every 5 seconds, for up to 5 minutes.
+const final = new Set(['ready', 'failed', 'expired'])
+let attachment = await client.attachments.get(created.id)
+for (let poll = 0; poll < 60 && !final.has(attachment.status); poll++) {
+  await sleep(5_000)
+  attachment = await client.attachments.get(created.id)
+}
+
+console.log(`${attachment.id} is ${attachment.status}`)
+if (attachment.status !== 'ready') process.exitCode = 1
+```
+
+Wait for `status: ready` before you send an attachment. Pass the id in the `attachments` array of `messages.send`, as the first script does.
+
+The script throws the errors of the SDK without catching them: an `APIError` of `attachments.create` or `attachments.get`, or an `APIConnectionError`. It exits with code 1 when the attachment is not `ready` at the end: its status is then `failed` or `expired`, or the 5 minutes are spent.
+
+## Run them
+
+Install the SDK, and `typescript` and `@types/node` as development dependencies. Set `"type": "module"` in the `package.json` of the project, then save the scripts as `upload-attachment.ts` and `upload-attachment-steps.ts` with the [`tsconfig.json` of the overview](/sdk/overview#typescript-settings), and set `ISNAP_API_KEY` in the environment. The arguments of the first script are the path of the file, its content type, the id of one of your lines, and the phone number of the recipient.
+
+<CodeGroup>
+
+```bash Bun
+bun upload-attachment.ts ./invoice.pdf application/pdf line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd +14155550123
+bun upload-attachment-steps.ts ./invoice.pdf application/pdf
+```
+
+```bash Node.js
+npx tsc
+node upload-attachment.js ./invoice.pdf application/pdf line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd +14155550123
+node upload-attachment-steps.js ./invoice.pdf application/pdf
+```
+
+</CodeGroup>
+
+The line id and the phone number above are placeholders: replace them with yours.

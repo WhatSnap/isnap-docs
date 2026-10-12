@@ -1,0 +1,21 @@
+---
+title: "Get a message"
+description: "Returns one message with its current status."
+openapi: "GET /v1/messages/{id}"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `404 not_found` for a message on a line outside its list.
+- **Events:** none.
+- **Personal data:** the message carries the handles in `to` and `from`, the text in `body`, the attachment file names and the `metadata` of a message you sent. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **What is returned:** the message as it is now. `queue_info` is always `null` here. See [Following a message](/guides/sending-messages#following-a-message).
+- **Retention:** iSnap deletes a message at least 72 hours after it recorded it. From then on this operation returns `404 not_found`. See [Retention](/guides/receiving-messages#retention).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The id is not `msg_` followed by 25 characters. |
+| 404 | `not_found` | The id is unknown, the message belongs to another account or to a trial, is on a line outside the list of a line-scoped key, or iSnap has deleted it. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

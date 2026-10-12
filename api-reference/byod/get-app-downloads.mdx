@@ -1,0 +1,15 @@
+---
+title: "Get the bridge app downloads"
+description: "Returns, for macOS and for Android, the link to the installer of the bridge app, its published version and whether an installer is offered."
+openapi: "GET /v1/apps"
+---
+
+- **Credential:** none.
+- **Events:** none.
+- **Availability:** offer a platform only when its `available` is `true`. When it is `false`, no installer is offered and `url` returns `404`. See [Pairing a device](/guides/byod#pairing-a-device).
+- **Links:** `url` is a stable link that redirects to the installer. `POST /v1/byod/pair` returns the same links in `download_urls`.
+- **Versions:** `version` is not `null` exactly when `version_status` is `published`: see [Versions of the bridge app](/guides/byod#versions-of-the-bridge-app).
+
+## Errors
+
+This operation has no error of its own. The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

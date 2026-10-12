@@ -1,0 +1,25 @@
+---
+title: "Confirm a pre-order"
+description: "Commits a draft pre-order and creates the line that iSnap prepares; for a direct account it opens the monthly billing of that line."
+openapi: "POST /v1/pre-orders/{id}/confirm"
+---
+
+- **Credential:** an API key of the account that owns the pre-order.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Test keys:** a confirmation sent with an `isnap_test_` account key is a real order: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored, and a confirmation cannot be repeated. A second call returns `400 pre_order_not_draft`. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
+- **Events:** none. The response is the only signal. `pre_order.fulfilled` is sent later, when iSnap hands the line over: see [Events](/guides/pre-orders#events).
+- **Secret:** `stripe_client_secret` is returned by this response only, to a direct account: it is the secret of the first monthly payment. iSnap provides no way to pay with it through the API: to pay, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order within 23 hours of the confirmation. After 23 hours, that first payment can no longer be completed. It is `null` for a wholesale partner. The response carries `Cache-Control: no-store`, whatever its status.
+- **No way back:** a confirmed pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not a UUID. |
+| 400 | `pre_order_not_draft` | The pre-order is not a draft. |
+| 404 | `not_found` | The id is unknown, or the pre-order belongs to another account. |
+| 409 | `pre_order_not_draft` | Another confirmation or a cancel of the same draft ran at the same time and won. |
+| 500 | `internal_error` | An unexpected failure, which includes a line whose price is missing at iSnap. Read the pre-order before you resend the confirmation: see [Confirm and payment](/guides/pre-orders#confirm-and-payment). If the `500` repeats, write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

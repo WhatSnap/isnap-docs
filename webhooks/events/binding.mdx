@@ -1,0 +1,53 @@
+---
+title: "Binding events"
+description: "Gives the data of binding.released, the event that announces the end of a binding on a shared line, with an example and the personal data it carries."
+---
+
+On a shared line, a binding ties one contact to the number that serves them. The first message to
+the contact creates it. The `binding.*` family has one event type, which announces that a binding
+ended. This page says when it is sent, lists the fields of `data`, and shows a full event. See
+[Shared lines](/guides/getting-a-line#shared-lines) for how a shared line works.
+
+No event announces that a binding is created: the first `message.queued` or `message.scheduled` to a
+new contact is the signal.
+
+## `binding.released`
+
+Sent when the binding between a shared line and one contact ends.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `line_id` | string | No | The id of the shared line. |
+| `contact_handle` | string | No | The handle of the contact. |
+| `outbound_number` | string | Yes | The number that served the contact. |
+| `released_at` | string | No | The time the binding ended. |
+| `reason` | string | No | See the table below. |
+| `metadata` | null | Always `null` | A binding carries no `metadata`. |
+| `line_metadata` | object | Yes | The `metadata` of the shared line. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+| `reason` | Meaning |
+| --- | --- |
+| `inactivity` | No message was exchanged with that contact for the inactivity period, which iSnap sets to 90 days. |
+| `carrier_terminated` | The shared line, or the line that carried the binding, was terminated. It is also the reason when you terminate your own shared line. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_LqOhtsNo1Ls99bUKw0EHCleMv",
+  "event_type": "binding.released",
+  "created_at": "2026-10-08T03:00:12.277Z",
+  "trace_id": "e213cf8d0af9f56bcdbd14e398325cda",
+  "data": {
+    "line_id": "line_5Hd9Tx3Kc7Wn2Qb6Lm8Vz4Ry1",
+    "contact_handle": "+14155550123",
+    "outbound_number": "+14155550126",
+    "released_at": "2026-10-08T03:00:12.000Z",
+    "reason": "inactivity",
+    "metadata": null,
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: `contact_handle`. `outbound_number` is a number of iSnap. Do not copy
+`contact_handle` into logs, tickets or other tools. Refer to a contact by an id of your own.

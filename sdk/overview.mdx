@@ -1,0 +1,135 @@
+---
+title: "TypeScript SDK"
+sidebarTitle: "Overview"
+description: "Gives the install commands of @isnap/sdk 2.2.1, its runtime, module and TypeScript requirements, and a first call to the iSnap API with it."
+---
+
+`@isnap/sdk` is the TypeScript client of the iSnap API, published on npm under the MIT license. It runs in a server process, on Node.js or Bun. Read this page to install it, to check what it requires and to make a first call. These pages describe version 2.2.1.
+
+## Install
+
+<CodeGroup>
+
+```bash npm
+npm install @isnap/sdk
+```
+
+```bash bun
+bun add @isnap/sdk
+```
+
+```bash pnpm
+pnpm add @isnap/sdk
+```
+
+```bash yarn
+yarn add @isnap/sdk
+```
+
+</CodeGroup>
+
+The package has no runtime dependency and no peer dependency. It contains compiled JavaScript, its own type declarations, and four short scripts in its `examples` directory. The [examples](/sdk/examples/send-message) of these pages are other scripts: copy them from here.
+
+The SDK follows Semantic Versioning. Its version is independent of the API version: see [Versions](/sdk/reference#versions).
+
+## Requirements
+
+| Requirement | Detail |
+| --- | --- |
+| Runtime | Node.js 20 or later, or Bun 1.2 or later. |
+| Runtime features | A global `fetch`, `Headers`, `AbortController` and `DOMException`, `crypto.randomUUID()`, a global `Buffer`, and the `node:crypto` module. The SDK includes no polyfill. |
+| Module format | ESM only: the package is an ECMAScript module. There is one entry point, `@isnap/sdk`. Every export is a named export: there is no default export and no subpath export. |
+| Where it runs | On a server. The SDK does not build for a browser. |
+| TypeScript | Type declarations are included. The package declares no minimum TypeScript version. |
+
+### ESM and CommonJS
+
+Import the SDK from an ECMAScript module:
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+```
+
+In Node.js, `require('@isnap/sdk')` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. CommonJS code loads the SDK with a dynamic `import()`:
+
+```javascript
+async function main () {
+  const { ISnapClient } = await import('@isnap/sdk')
+  const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+  const { version } = await client.version()
+  console.log(version)
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exitCode = 1
+})
+```
+
+### Server side only
+
+The SDK is a server-side library. Its entry point imports `node:crypto`, so a browser bundle fails to build even when your code imports only the client. An API key is a secret: keep it on a server, and call the API from there.
+
+### TypeScript settings
+
+The type declarations use the web platform types `HeadersInit`, `Headers`, `RequestInit`, `Response`, `Blob` and `AbortSignal`. A project therefore needs `"lib": ["DOM"]`, or `"skipLibCheck": true`.
+
+Import the SDK from an ECMAScript module, with `moduleResolution` set to `bundler`, `node16` or `nodenext`. A static import from a CommonJS file does not work:
+
+- Under `node16`, and under `nodenext` before TypeScript 5.8, it is a compile error (`TS1479`).
+- Under `nodenext` with TypeScript 5.8 or later, and under `node10` with TypeScript 5, it compiles and then fails at run time with `ERR_PACKAGE_PATH_NOT_EXPORTED`. TypeScript 6 reports `node10` as an error unless `ignoreDeprecations` is set, and TypeScript 7 refuses it.
+
+Load the SDK from CommonJS with a dynamic `import()`, as in [ESM and CommonJS](#esm-and-commonjs). In TypeScript, this needs `module` set to `node16` or `nodenext`: under `commonjs`, TypeScript compiles `import()` to a `require()`, which fails the same way.
+
+This `tsconfig.json` meets both requirements: it includes `DOM`, and it resolves modules with `nodenext`. It also loads the Node.js types, which TypeScript 6 and later do not load by default: install `typescript` and `@types/node` as development dependencies. With `nodenext`, a `.ts` file is an ECMAScript module when the nearest `package.json` has `"type": "module"`:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "strict": true
+  }
+}
+```
+
+## Make a first call
+
+Create an API key in the [iSnap dashboard](https://platform.isnap.ai) and put it in the `ISNAP_API_KEY` environment variable. The SDK reads no environment variable: your code passes the key to the client.
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+// The constructor throws when the key is missing or empty.
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const { version } = await client.version()
+console.log(`API version: ${version}`)
+
+const { lines } = await client.lines.listMine()
+for (const line of lines) {
+  console.log(line.id, line.status)
+}
+```
+
+`client.version()` calls [`GET /v1/version`](/api-reference/service/get-version), which needs no credential. `client.lines.listMine()` calls [`GET /v1/lines/my`](/api-reference/lines/list-my-lines): when the API refuses the key, the call throws `AuthenticationError`. [Authentication](/authentication) describes the keys and the refusals.
+
+Creating a client makes no network call. Every method returns a promise that resolves with the `data` of the response or throws: see [Errors and retries](/sdk/errors). The four list iterators are the exception: they return an `AsyncIterable`, see [Pagination](/sdk/pagination).
+
+## What the SDK adds to plain HTTP
+
+| The SDK adds | What it does | Read |
+| --- | --- | --- |
+| Typed methods | One method for every operation of the API reference except [`GET /v1/attention`](/api-reference/lines/list-attention). Request and response types are generated from the OpenAPI document. | [Method reference](/sdk/reference) |
+| Typed errors | A failed call throws an error class chosen from the status, with `code`, `traceId` and `requestId`. | [Errors](/sdk/errors#classes-by-status) |
+| Automatic retries | A call is retried after a connection failure, a timeout, a `500`, a `503` and some `429` responses. | [Automatic retries](/sdk/errors#automatic-retries) |
+| An idempotency key on every write | By default, every `POST`, `PATCH`, `PUT` and `DELETE` call carries an `Idempotency-Key` header. The API reads it on eight operations only. | [Idempotency keys](/sdk/errors#idempotency-keys) |
+| List iterators | A `for await` loop walks the pages of a cursor list. | [Pagination](/sdk/pagination) |
+| Webhook verification | `verifyWebhook` checks the signature and the timestamp of a delivery and returns the event. | [Webhooks](/sdk/webhooks) |
+
+## Help
+
+Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. The SDK exposes them as `traceId` and `requestId` on the [error it throws](/sdk/errors#fields-of-an-error).

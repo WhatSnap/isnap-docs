@@ -1,0 +1,23 @@
+---
+title: "Cancel a message"
+description: "Cancels a queued or held message that the line's device has not taken."
+openapi: "DELETE /v1/messages/{id}"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `404 not_found` for a message on a line outside its list.
+- **`Idempotency-Key`:** not honored. A repeat of a cancel that succeeded returns `409 too_late_to_cancel`.
+- **Events:** sends `message.cancelled`.
+- **Personal data:** the response carries the handles in `to` and `from`, the text in `body`, the attachment file names and your `metadata`. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **What can be canceled:** a message whose `status` is `queued` or `scheduled`, and that the line's device has not taken. See [Canceling a message](/guides/sending-messages#canceling-a-message).
+- **Sending limits:** a canceled message that had counted against the limits of the line stops counting against them.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The id is not `msg_` followed by 25 characters. |
+| 404 | `not_found` | The id is unknown, the message belongs to another account or to a trial, is on a line outside the list of a line-scoped key, or iSnap has deleted it. |
+| 409 | `too_late_to_cancel` | The message is `sent`, `delivered`, `read`, `failed` or already `cancelled`, or it is `queued` and the line's device has taken it. On a `queued` message, the device goes on with the send. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,27 @@
+---
+title: "Replay a delivery"
+description: "Creates a new delivery of the event of a finished delivery, to the current URL of the subscription."
+openapi: "POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key replays any delivery of the account.
+- **`Idempotency-Key`:** not honored. A call sent twice creates two deliveries of the same event, with
+  the same `event_id`.
+- **Events:** none. The operation delivers again the event of the delivery, with its `event_id` and
+  its content unchanged: it creates no new event.
+- **Guide:** [Replays](/webhooks/delivery#replays). Only a delivery whose `status` is `success`
+  or `failed` can be replayed, while its record exists. The replay goes to the URL the
+  subscription has now, signed with the secret it has now.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `wh_` followed by 25 letters or digits, or `delivery_id` is not `whd_` followed by 25 letters or digits. |
+| 404 | `not_found` | Your account has no subscription with this id, or the subscription has no delivery with this id: the id is unknown, the record was deleted at the end of its retention, or the delivery belongs to another subscription. |
+| 422 | `delivery_not_terminal` | The delivery is still `pending`. |
+| 503 | `replay_enqueue_failed` | iSnap could not queue the replay. The new delivery exists with status `failed`: call again. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

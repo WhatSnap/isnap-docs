@@ -1,0 +1,19 @@
+---
+title: "List available lines"
+description: "Lists the lines that can be acquired now, with masked phone numbers."
+openapi: "GET /v1/lines"
+---
+
+- **Credential:** none. The operation ignores any credential, and phone numbers are masked for every caller. See [The marketplace](/guides/getting-a-line#the-marketplace).
+- **Events:** none.
+- **What is listed:** only lines that can be acquired now. A line can leave the list and come back, so read the list again before each reservation.
+- **Pagination:** by page number, with `page` and `limit`. This list does not use the cursors of the [other list operations](/pagination#list-operations).
+- **Metadata:** each line carries its `metadata`, which can hold keys that an earlier owner left. The query parameter `metadata.<key>=<value>` keeps the lines whose `metadata` holds exactly that string under that key. Anyone can use this filter, without a credential: never put personal data or secrets in line `metadata`. See [Metadata at acquisition](/guides/getting-a-line#metadata-at-acquisition).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `status` is not `available`; `page` is not an integer of at least 1; `limit` is not 1 to 100; `country_code` is not 2 characters; `area_code` is longer than 10 characters; `state` is not 2 to 40 characters; `country` is not 2 to 60 characters; or `billing_tier` is not a known value. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,22 @@
+---
+title: "Withdraw a scheduled variant change"
+description: "Withdraws the variant change that is scheduled on a line."
+openapi: "DELETE /v1/lines/{id}/variant"
+---
+
+- **Credential:** an API key of the owner of the line. The operation works on a line in any status. See [Variant changes](/guides/managing-lines#variant-changes).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **`Idempotency-Key`:** not honored. A second call returns `404 no_pending_variant_change`.
+- **Events:** [`line.variant_unscheduled`](/webhooks/events/line#line-variant_unscheduled).
+- **Response:** `204` with no body.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 404 | `no_pending_variant_change` | No change is scheduled on the line. |
+| 409 | `variant_change_already_applied` | The change was applied during the call. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

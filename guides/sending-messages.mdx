@@ -1,189 +1,503 @@
 ---
 title: "Sending messages"
-description: "POST /v1/messages — request fields, channel selection, attachments, idempotency, errors."
+description: "Send a message from a line, follow it to a final status, know when it goes out as SMS or RCS, and cancel it before it leaves."
 ---
 
-`POST /v1/messages` is the workhorse endpoint. Once you've got an API
-key and at least one active line, this is what every outbound message
-goes through.
+`POST /v1/messages` sends one message to one recipient from one of your lines. This page describes the request, what the `202` response means, the order in which iSnap checks a send, how to follow a message to its final status, what each failure means, and how to cancel a message that has not left. Read it before you write the code that sends. The sending limits of a line, and the reasons iSnap holds a message, have their own page: [Sending limits](/guides/sending-limits).
 
-## Request
+## The send request
 
-<Tabs>
-  <Tab title="TypeScript SDK">
-    ```ts
-    const message = await isnap.messages.send({
-      line_id: 'line_aBcDeF',           // required
-      to: '+15551234567',                // required, E.164 (max 30 chars)
-      channel: 'auto',                   // only accepted value in v1
-      body: 'Hello from iSnap.',         // up to 5000 chars
-      attachments: ['att_xYz...'],       // 0–10 attachment IDs
-      reply_to_message_id: 'msg_...',    // optional thread anchor
-      use_typing_indicator: true,        // iMessage only — show "..." first
-      effect: { type: 'bubble', name: 'slam' },  // iMessage native effects
-      metadata: { campaign_id: 'q4-launch' }     // free-form, returned on webhooks
-    })
-    ```
-  </Tab>
-  <Tab title="cURL">
-    ```bash
-    curl -X POST https://api.isnap.ai/v1/messages \
-      -H "Authorization: Bearer $ISNAP_API_KEY" \
-      -H "Content-Type: application/json" \
-      -H "Idempotency-Key: $(uuidgen)" \
-      -d '{
-        "line_id": "line_aBcDeF",
-        "to": "+15551234567",
-        "channel": "auto",
-        "body": "Hello from iSnap."
-      }'
-    ```
-  </Tab>
-</Tabs>
+[`POST /v1/messages`](/api-reference/messages/send-message) takes a JSON body. Send `Content-Type: application/json` with every body.
 
-### Required fields
+| Field | Rule |
+| --- | --- |
+| `line_id` | Required. A line of your account, `line_` followed by 25 characters. The line must be `active`: see [Line statuses](/concepts#line-statuses). |
+| `to` | Required. One phone number, 1 to 30 characters. A number without a country code is read as a US number. iSnap normalizes it to E.164 and returns that form in `to`. |
+| `body` | The text, at most 5,000 characters, counted in UTF-16 code units. |
+| `attachments` | An ordered list of at most 10 attachment ids. See [Attachments in a send](#attachments-in-a-send). |
+| `channel` | Only `auto`, which is the default. Any other value returns `400 validation_failed`. |
+| `effect` | An effect for the message. See [Effects](#effects). |
+| `reply_to_message_id` | The id of a message on the same line, inbound or outbound, that this message answers. See [Replies](#replies). |
+| `use_typing_indicator` | `true` shows the typing indicator to the contact before this message. See [Typing indicators](/guides/conversations#typing-indicators). |
+| `metadata` | An object of your own keys and values. See [Metadata](#metadata). |
 
-| Field | Type | Notes |
-|---|---|---|
-| `line_id` | string | The iSnap line that sends. Format: `line_<base62>` (25 chars). Caller must own / be scoped to it. |
-| `to` | string | Recipient handle. E.164 phone (`+15551234567`) or email (for iMessage Business). 1–30 chars. |
+A request carries a non-empty `body`, at least one attachment, or both. With neither, it returns `400 validation_failed`.
 
-`body` is optional but you must supply at least one of `body` or
-`attachments` — a message with neither is a 422.
+`to` takes a phone number only. An email address, an Apple ID, or a value that is not a valid phone number returns `400 bad_request`, even when [`POST /v1/lookup`](/api-reference/lookup/look-up-recipient) reports that the address can receive iMessage. One request sends to one recipient.
 
-### Optional fields
+The API cannot choose the [service](/concepts#services): `channel` takes only `auto`, and no setting of a line or of a message changes how the line's device chooses. See [Services and fallback](#services-and-fallback).
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `body` | string | — | Text body, max 5000 characters. UTF-8. |
-| `channel` | enum | `auto` | `auto` is the only accepted value. The line's fallback chain decides (`iMessage → RCS → SMS`) at dispatch time; the resolved transport surfaces on the response as `service`. |
-| `attachments` | string[] | `[]` | Up to 10 attachment IDs from `POST /v1/attachments`. See [Attachments](#attachments). |
-| `effect` | object | — | iMessage native bubble or screen effects. Silently ignored on SMS / RCS. |
-| `reply_to_message_id` | string | — | Quote-reply to an existing message in the same conversation. |
-| `use_typing_indicator` | boolean | `false` | Show "…" on the recipient's iMessage before the bubble. iMessage only. |
-| `metadata` | object | — | Free-form key/value, max 4 KB total. Echoed back on every webhook event. |
+A body field that `POST /v1/messages` does not define is ignored, without an error. A misspelled field is therefore dropped silently: check the field names against this table.
 
-## Response
+### Attachments in a send
+
+Each id in `attachments` is an attachment that your account created with [`POST /v1/attachments`](/api-reference/attachments/create-attachment). An unknown id, an id of another account, and the id of a file received on an inbound message return `404 not_found`.
+
+iSnap does not check the `status` of an attachment when it accepts the send. An attachment that is not `ready` when the line's device takes the message is left out of the message, without an error. Wait for `status: ready` before you send an attachment: see [Attachments](/guides/attachments).
+
+The line's device sends only the first attachment of a message, and the message is still reported `sent`. Send one attachment per message. [How the device sends a file](/guides/attachments#how-the-device-sends-a-file) describes the rest.
+
+A send with no `body` and exactly one attachment whose content type starts with `audio/` is a voice note: its `kind` is `voice`. Every other send has `kind: message`.
+
+### Effects
+
+`effect` names a bubble effect or a screen effect:
+
+| `type` | `name` |
+| --- | --- |
+| `bubble` | `slam`, `loud`, `gentle`, `invisible` |
+| `screen` | `confetti`, `balloons`, `love`, `lasers`, `fireworks`, `celebration`, `shooting_star`, `echo`, `spotlight` |
+
+Any other name returns `400 validation_failed`. iSnap stores the effect and passes it to the line's device. The device applies it only to a message that has a `body` and no attachment, sent over iMessage, and only when the device supports effects: see [Device features](#device-features). In every other case the message goes out without the effect and is still reported `sent`. The API does not report whether the contact saw the effect.
+
+### Replies
+
+`reply_to_message_id` is the `msg_` id of a message on the same line, inbound or outbound.
+
+- An unknown id returns `404 not_found`. So does a message that iSnap has deleted: see [Retention](/guides/receiving-messages#retention).
+- A message of another line returns `422 reply_to_cross_line`.
+- When iSnap later deletes the message that the reply points to, the reply stays and its `reply_to_message_id` becomes `null`.
+
+The contact sees a threaded reply only when the line's device supports threaded replies. Otherwise the device sends an ordinary message, without an error: `reply_to_message_id` never makes a send fail on the device.
+
+### Metadata
+
+`metadata` holds at most 20 keys and 8,192 bytes once serialized as JSON: a larger object returns `400 validation_failed`. iSnap stores it unchanged and returns it on the message and in the `message` object of every event about the message. It is `null` when you send none. Use it to carry the ids of your own records, such as the order that the message is about.
+
+<CodeGroup>
+
+```bash curl
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
+
+curl -sS https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "to": "+14155550123",
+    "body": "Your order has shipped.",
+    "metadata": { "order_id": "ord_20931" }
+  }'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { APIError, ISnapClient, QuotaExceededError, RateLimitError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// One key per message.
+const idempotencyKey = randomUUID() // Store it with your record of the message: reuse it to retry.
+
+try {
+  // The SDK reuses the key on its own retries of this call.
+  const message = await client.messages.send(
+    {
+      line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+      to: '+14155550123',
+      body: 'Your order has shipped.',
+      metadata: { order_id: 'ord_20931' }
+    },
+    { idempotencyKey }
+  )
+  if (message.status === 'scheduled') {
+    console.log(`${message.id} is held until ${message.scheduled_for} (${message.schedule_reason})`)
+  } else {
+    console.log(`${message.id} is ${message.status}`)
+  }
+} catch (err) {
+  if (err instanceof QuotaExceededError || err instanceof RateLimitError) {
+    // A sending limit of a line set to refuse, a full line, or the request-rate limit.
+    console.error(`${err.code}: retry after ${err.retryAfter} seconds`)
+  } else if (err instanceof APIError && err.code === 'outbound_first_forbidden') {
+    console.error('This inbound-only line can write to this contact only after the contact wrote to it.')
+  } else if (err instanceof APIError && err.code === 'bad_request') {
+    console.error('`to` is not a valid phone number.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+
+def send_message(payload, idempotency_key):
+    """POST /v1/messages. Retry a 500, a 503 or a lost response up to 2 times, one after the other, with the same key."""
+    headers = {**HEADERS, "Idempotency-Key": idempotency_key}
+    for attempt in range(3):
+        try:
+            response = requests.post(f"{API}/v1/messages", headers=headers, json=payload, timeout=30)
+        except (requests.ConnectionError, requests.Timeout):
+            # No response: iSnap may have accepted the message. The same key makes the retry safe.
+            if attempt == 2:
+                raise
+        else:
+            if response.status_code not in (500, 503) or attempt == 2:
+                return response
+        time.sleep(2**attempt)
+
+
+# One key per message.
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the message: reuse it to retry.
+response = send_message(
+    {
+        "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+        "to": "+14155550123",
+        "body": "Your order has shipped.",
+        "metadata": {"order_id": "ord_20931"},
+    },
+    idempotency_key,
+)
+body = response.json()
+
+if response.status_code == 202:
+    message = body["data"]
+    if message["status"] == "scheduled":
+        print(f"{message['id']} is held until {message['scheduled_for']} ({message['schedule_reason']})")
+    else:
+        print(f"{message['id']} is {message['status']}")
+elif response.status_code == 429:
+    error = body["error"]
+    print(f"{error['code']}: retry after {error['retry_after']} seconds")
+else:
+    error = body["error"]
+    raise SystemExit(
+        f"{error['status']} {error['code']}: {error['message']} "
+        f"(trace_id={body['trace_id']}, request_id={body['request_id']})"
+    )
+```
+
+</CodeGroup>
+
+## The response
+
+`POST /v1/messages` returns `202` with the [message object](/concepts#messages), whether the message leaves now or iSnap holds it. A `202` means that iSnap accepted the message, never that it was sent.
+
+| `status` in the response | Meaning |
+| --- | --- |
+| `queued` | The message leaves now: it waits for the line's device. |
+| `scheduled` | iSnap holds the message until `scheduled_for`. `schedule_reason` says why: a sending limit, the spacing between messages, quiet hours, an earlier message to the same recipient, or, on a shared line, a number that cannot take the message now. A message still held 48 hours after iSnap accepted it fails, even when its `scheduled_for` is later. See [Held messages](/guides/sending-limits#held-messages). |
 
 ```json
 {
   "success": true,
   "data": {
-    "id": "msg_01HX...",
-    "line_id": "line_aBcDeF",
+    "id": "msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
     "direction": "outbound",
-    "to": "+15551234567",
-    "from": "+15559998888",
+    "kind": "message",
+    "to": "+14155550123",
+    "from": "+14155550124",
+    "body": "Your order has shipped.",
     "channel": "auto",
     "service": null,
-    "body": "Hello from iSnap.",
     "status": "queued",
     "effect": null,
     "reply_to_message_id": null,
-    "metadata": {},
-    "created_at": "2026-05-05T14:32:00Z"
+    "use_typing_indicator": true,
+    "metadata": { "order_id": "ord_20931" },
+    "attachments": [],
+    "reactions": [],
+    "scheduled_for": "2026-10-08T14:22:57.392Z",
+    "schedule_reason": null,
+    "reply_lane": false,
+    "queue_info": {
+      "queue_position": 0,
+      "is_new_contact": true,
+      "daily_new_contacts_used": 12,
+      "daily_new_contact_limit": 50,
+      "daily_known_contacts_used": 41,
+      "daily_known_contact_limit": 200,
+      "daily_messages_used": 131,
+      "daily_total_message_limit": 600,
+      "reply_lane": false,
+      "daily_replies_used": 3,
+      "daily_reply_limit": 150
+    },
+    "created_at": "2026-10-08T14:22:57.392Z",
+    "queued_at": "2026-10-08T14:22:57.392Z",
+    "sent_at": null,
+    "delivered_at": null,
+    "read_at": null,
+    "failed_at": null,
+    "error_code": null,
+    "error_message": null,
+    "cancelled_at": null
   },
-  "trace_id": "tr_...",
-  "request_id": "req_..."
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
 }
 ```
 
-### `status` lifecycle
+`use_typing_indicator` holds the value in force for this message: the one you sent, or the line's `default_use_typing_indicator`. On a line that is not an iMessage line it is always `false`. `reply_lane` is `true` when the message qualified for the [reply lane](/guides/sending-limits#reply-lane), and never changes after the send.
 
+`queue_info` is filled only in this response. It is `null` when you read the message, in a repeated request with the same idempotency key, and in events.
+
+| Field of `queue_info` | Meaning |
+| --- | --- |
+| `queue_position` | `0` when the message leaves now. Otherwise its rank, from 1, among the messages that the line holds. |
+| `is_new_contact` | Whether the recipient counts as a new contact. See [New and known contacts](/guides/sending-limits#new-and-known-contacts). |
+| `daily_new_contacts_used`, `daily_new_contact_limit`, `daily_known_contacts_used`, `daily_known_contact_limit`, `daily_messages_used`, `daily_total_message_limit` | The three 24-hour counters of the line and their limits. |
+| `reply_lane`, `daily_replies_used`, `daily_reply_limit` | Whether the message qualified for the reply lane, and the reply-lane budget of the line. |
+| `messages_ahead_in_queue`, `next_slot_available_at` | On a held message only. |
+| `daily_slot_of`, `target_activity_hour` | On a message held until a sending hour: for a 24-hour limit, for quiet hours, or for a per-minute or per-hour limit that ended in quiet hours. |
+| `last_new_contact_sent_at`, `min_inter_new_contact_seconds`, `jitter_applied_seconds` | On a message held with `schedule_reason: inter_new_contact_delay`. See [Spacing](/guides/sending-limits#spacing). |
+
+A `202` sent with an account API key also carries two headers about the new-contact limit: see [Headers on a send](/guides/sending-limits#headers-on-a-send).
+
+## How iSnap checks a send
+
+After the checks that every request goes through (see [How a request is checked](/authentication#how-a-request-is-checked)), iSnap checks a send in this order. The first check that fails decides the response.
+
+1. The line exists and belongs to your account: `404 not_found` otherwise.
+2. A [line-scoped key](/authentication#line-scoped-keys) has the line in its list: `403 forbidden` otherwise.
+3. The line is `active`: `403 line_suspended` for a suspended line, `400 line_not_active` for any other status.
+4. The `Idempotency-Key`, when present: a repeated request returns the message already created, before the checks below.
+5. `to` is a valid phone number: `400 bad_request` otherwise.
+6. `reply_to_message_id`: `404 not_found` or `422 reply_to_cross_line`.
+7. Each attachment id: `404 not_found`.
+8. On an [inbound-only line](#inbound-only-lines), the recipient has written to the line: `403 outbound_first_forbidden` otherwise.
+9. The [sending limits](/guides/sending-limits#the-five-limits) of the line: the message is held, or refused with `429` on a line set to refuse.
+
+A request refused by one of these checks stores nothing and counts against no sending limit.
+
+## Following a message
+
+The [message statuses](/concepts#message-statuses) table defines each status and says which are final. This section says when each step happens and what to expect from it.
+
+| Step | `status` | Fields set | Event |
+| --- | --- | --- | --- |
+| iSnap accepts the message and it leaves now | `queued` | `queued_at` | [`message.queued`](/webhooks/events/message#message-queued) |
+| iSnap accepts the message and holds it | `scheduled` | `scheduled_for`, `schedule_reason` | [`message.scheduled`](/webhooks/events/message#message-scheduled) |
+| iSnap releases a held message | `queued` | `schedule_reason` becomes `null` | `message.queued` |
+| The line's device reports that it sent the message | `sent` | `sent_at`, and `service` when the device reports it | [`message.sent`](/webhooks/events/message#message-sent), with `origin: "api"` |
+| The device reports a delivery receipt | `delivered` | `delivered_at` | [`message.delivered`](/webhooks/events/message#message-delivered) |
+| The device reports a read receipt | `read` | `read_at` | [`message.read`](/webhooks/events/message#message-read) |
+| The message fails | `failed` | `failed_at`, `error_code`, `error_message` | [`message.failed`](/webhooks/events/message#message-failed) |
+| You cancel the message | `cancelled` | `cancelled_at` | [`message.cancelled`](/webhooks/events/message#message-cancelled) |
+
+Build on these rules:
+
+- Nothing is guaranteed to follow `sent`, `delivered` or `read`. A message can stay `sent` until iSnap deletes it, at least 72 hours after it recorded it. Do not wait in a loop for `delivered`.
+- A `failed` can follow `sent`, `delivered` or `read`.
+- The order of the reports is not strict: a message can be `read` with `delivered_at` still `null`, and a late send confirmation can set `status` back to `sent` while `delivered_at` or `failed_at` stays set. Read the timestamps, not only `status`.
+- Delivery order is not guaranteed. For message events, apply [Building the status from events](#building-the-status-from-events).
+
+A message can reach its recipient more than once when its outcome report was lost. Make message text safe to receive twice.
+
+### Building the status from events
+
+Events about one message can arrive in any order, and the `data.message` of one event can be older than that of another. The message object carries no version, and its timestamps do not order its events: a failure reported after `sent` carries the time of the send in `failed_at`. Apply these rules:
+
+- `cancelled` is final. Treat `failed` as final too: a late send confirmation can set `status` back to `sent`, and send `message.sent`, after a failure that the line's device reported, with `failed_at` still set. Once you store `failed` or `cancelled`, ignore the `status` of every later event about the message, and treat a message that has a `failed_at` as failed.
+- Otherwise keep the furthest of `sent`, `delivered` and `read` that an event reported, whatever the order of arrival. A message with a `delivered_at` was delivered, even when a later snapshot reads `sent`.
+- Copy `sent_at`, `delivered_at`, `read_at` and `failed_at` when a snapshot sets one, and never clear one.
+- Before `sent`, a message can move between `scheduled` and `queued` in both directions. When you need the status for certain, read [`GET /v1/messages/{id}`](/api-reference/messages/get-message).
+
+**When to stop tracking.** `cancelled` is final, and `failed` is final for your records. A message sent as SMS or RCS gets no `delivered` and no `read`, and a `failed` can still follow its `sent`. An iMessage can still become `failed` after `delivered` or `read`, until iSnap deletes it. After that, no event and no read concerns the message: keep the last status you stored.
+
+### Receipts
+
+What `sent`, `delivered` and `read` prove depends on the service that carried the message. This section describes iMessage lines. iSnap makes no statement on this page about what the device of an Android line reports.
+
+- **`sent`** means that the line's device handed the message to Apple's messaging service. It does not mean delivered, and a `failed` can follow.
+- **iMessage.** `delivered` and `read` come from Apple, through the line's device, and `delivered_at` and `read_at` are the times that Apple recorded. `read` arrives only when the contact shares read receipts. A `read` after a `delivered` is not guaranteed: once a message has its first receipt, a later `read` or a later failure can be missed. When Apple records an error on an iMessage already reported `sent`, the message becomes `failed`, with no `error_message`, and its `failed_at` holds the time of the send, not of the failure.
+- **SMS and RCS.** iSnap reports no delivery and no read. A failure after `sent` is reported only while the line's device still reads the message: the API does not bound that time, and a later failure is not reported.
+
+### Failures
+
+A message becomes `failed` in four cases. `error_code` tells three of them apart:
+
+| Case | `error_code` | What to do |
+| --- | --- | --- |
+| The line's device reported that it could not send the message. | `null` | Log `error_message`. Send a new message if it should still go out. |
+| The message waited 48 hours after iSnap accepted it, and no device had taken it. A held message that has not left after 48 hours fails the same way. | `carrier_unavailable` | Check the line's device: see [Health](/guides/managing-lines#health) and [Attention](/guides/managing-lines#attention). |
+| The line's device took the message and reported no outcome within 10 minutes, 4 times in a row: iSnap gave it to the device 3 more times, then failed it, at least 40 minutes after the first hand-off. | `no_terminal_ack` | iSnap never received the outcome: the message can have been sent all the same, and a report that arrives later does not change a `failed` message. Decide whether the contact can receive it twice before you send a new message. |
+| The line was terminated while the message was `queued` or `scheduled`. | `carrier_terminated` | Send from another line. |
+
+`error_code` is set only when iSnap failed the message itself, and takes one of the three values above: branch on it. `error_message` is diagnostic text. When the device reported the failure, it is text written by the line's device, or `null` when the device gave none. Log it with the message id. Do not branch on it: its values are not part of the contract.
+
+iSnap never resends a `failed` message. To try again, send a new message with a new idempotency key: the key of the failed message returns the failed message.
+
+A message sent on a line that has no paired device stays `queued`. It is not given to a device paired later, and it fails after 48 hours with `carrier_unavailable`. A message waiting for a paired device that is offline leaves when that device reconnects. While the line's device cannot send, for example while its iMessage session is not ready, it keeps the messages it took and can send them later. iSnap does not wait for it: a message that the device took and did not report on within 10 minutes, 4 times in a row, fails with `error_code: no_terminal_ack`, and the device can still send it afterward.
+
+A message that iSnap fails itself stops counting against the sending limits. A message that the device reports as failed keeps counting: see [Messages that stop counting](/guides/sending-limits#messages-that-stop-counting).
+
+## Services and fallback
+
+The [service](/concepts#services) is what carried the message: `iMessage`, `SMS` or `RCS`. The `service` field of the message reports it once the device confirms the send. This section describes iMessage lines.
+
+iMessage is the default service of the line's device. The device sends over SMS or RCS when it knows that the recipient is not registered with iMessage: from a lookup, from an earlier send, or from Apple while the device watches the send. When it does not know, it can use an existing SMS or RCS Messages conversation with the recipient. The device does not fall back to SMS or RCS:
+
+- when the iMessage send times out: the device retries it over iMessage;
+- when Apple reports another error: the device can try again, then the message fails;
+- after an iMessage reported `sent`, even when it is never delivered or fails later;
+- when Apple's "not registered" verdict arrives after the device stopped watching the send.
+
+Apple and the carrier choose between SMS and RCS, not iSnap. `service` shows which one carried the message.
+
+The line needs a route for SMS and RCS. Rented iMessage lines have one. On a BYOD iMessage line, the route exists only when an iPhone forwards its text messages to the Mac: `sms_fallback` is then `active` in [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health). Without it, a message to a recipient who is not on iMessage fails, and no SMS is attempted.
+
+[`message.fallback_triggered`](/webhooks/events/message#message-fallback_triggered) means that the message went out, or was attempted, over SMS or RCS instead of iMessage. It does not mean that an iMessage attempt failed first. `fallback_service` names the service, and the same report also produces `message.sent` or `message.failed`. When the SMS attempt times out, the device retries the whole send, iMessage first.
+
+## Device features
+
+Several features depend on what the line's device can do. This section describes iMessage lines. iSnap makes no statement on this page about the device of an Android line.
+
+Rented iMessage lines provide every feature of the table. On a BYOD iMessage line, the features depend on your own Mac and iPhone: read `runtime_capabilities` in [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health). A feature works when its capability is `active`.
+
+| Feature | Capability on a BYOD line | When the capability is not `active` |
+| --- | --- | --- |
+| Adding a [reaction](/guides/conversations#reactions) | `reactions_out` | The reaction fails. No event is sent. |
+| Removing a reaction | `reaction_remove_out` | Nothing reaches the contact. The call still returns `removed: true`, and no event is sent. |
+| [Typing indicators](/guides/conversations#typing-indicators) | `typing_out` | Nothing is shown. The call and the send succeed. |
+| [Read receipts](/guides/conversations#read-receipts) | `mark_read_out` | Nothing reaches the contact. `read_at` is still set. |
+| [Effects](#effects) | `effects` | The message goes out without the effect and is reported `sent`. |
+| Threaded [replies](#replies) | `reactions_out` | The message goes out as an ordinary message and is reported `sent`. |
+| Voice notes | `reactions_out` | The voice note fails. |
+| [Lookups](/guides/lookup) | `lookup_probe` | The line cannot run a check. |
+| SMS or RCS to a recipient who is not on iMessage | `sms_fallback` | The message fails, and no SMS is attempted. |
+
+`reactions_out`, `reaction_remove_out`, `mark_read_out` and `effects` always have the same value. `typing_out` has it too, unless typing was turned off on the device. `lookup_probe` is `active` when they are. `sms_fallback` is `active` only when an iPhone forwards its text messages to the Mac.
+
+The device reports its capabilities every 30 seconds by default, so a value can be that old. After 3 failed attempts in a row of one feature, the device pauses that feature for 30 seconds to 300 seconds while the capability still reads `active`: a feature can fail while its capability is `active`.
+
+## Retrying a send
+
+`POST /v1/messages` honors the `Idempotency-Key` header. Always send one: generate it once per message, and store it with your own record of the message.
+
+A repeat with the same key and the same content returns the message already created, as it is now: see [Messages, reactions and contact cards](/idempotency#messages-reactions-and-contact-cards) for the scope, the lifetime and the conflicts of the key. Checks 1 to 3 of [How iSnap checks a send](#how-isnap-checks-a-send) run before the key: a repeat to a line that is no longer `active` is refused, even when the first request was accepted.
+
+Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt.
+
+By default, the SDK sends a key of its own with every write, and reuses it only on its automatic retries of that call. To retry a send yourself, pass the key of the first attempt in `idempotencyKey`, as the sample of [The send request](#the-send-request) does.
+
+## Canceling a message
+
+[`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message) cancels a message whose `status` is `queued` or `scheduled` and that the line's device has not taken: any held message, and a `queued` message whose device is offline or has not taken it. The response is `200` with the message, `status: cancelled` and `cancelled_at` set.
+
+- A canceled message is not given to the device again. A message that the device took and did not report on within 10 minutes can be canceled once iSnap has taken it back, and the device can still send the copy it kept. iSnap sends [`message.cancelled`](/webhooks/events/message#message-cancelled).
+- A message that had counted against the sending limits stops counting against them. A held message had not counted.
+- Later messages to the same recipient still leave: see [Order](/guides/sending-limits#order).
+
+The call returns `409 too_late_to_cancel` when the message is `sent`, `delivered`, `read`, `failed` or already `cancelled`, and when it is `queued` and the line's device has taken it. On a `queued` message, the `409` means that the device has the message: it cannot be recalled, and the device goes on with the send. Read the message, or wait for its events, to know its outcome.
+
+The operation ignores `Idempotency-Key`. Repeating it is harmless: a second cancel of a canceled message returns `409 too_late_to_cancel`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X DELETE https://api.isnap.ai/v1/messages/msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
 ```
-queued → sent → delivered
-   ↓       ↓
-scheduled  failed
-   ↓
-cancelled
+
+```typescript TypeScript
+import { ConflictError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const messageId = 'msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz'
+
+try {
+  const message = await client.messages.cancel(messageId)
+  console.log(`${message.id} canceled at ${message.cancelled_at}`)
+} catch (err) {
+  if (err instanceof ConflictError && err.code === 'too_late_to_cancel') {
+    // The device has the message, or the message already reached a later status.
+    const message = await client.messages.get(messageId)
+    console.log(`Too late to cancel: ${message.id} is ${message.status}`)
+  } else {
+    throw err
+  }
+}
 ```
 
-| Status | Meaning |
-|---|---|
-| `queued` | Accepted by iSnap, waiting for the device. Cancellable. |
-| `scheduled` | Held for the smart-overflow scheduler or a future `send_at`. Cancellable. |
-| `sent` | The device dispatched it. Carriers / Apple have it. |
-| `delivered` | Confirmation received. Final state for delivered messages. |
-| `failed` | Permanent failure. `error.code` carries the reason. Final. |
-| `cancelled` | Caller cancelled before send. Final. |
+```python Python
+import os
 
-### `channel` vs `service`
+import requests
 
-`channel` on the request is your **preference** (`auto` is the right
-default). `service` on the response is what iSnap **actually used** —
-it stays `null` until the line dispatches and commits to one of
-`iMessage`, `SMS`, or `RCS`. See [Concepts → Channels](/concepts/channels)
-for how the fallback chain decides.
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
 
-## Attachments
+message_id = "msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz"
+response = requests.delete(f"{API}/v1/messages/{message_id}", headers=HEADERS, timeout=30)
 
-Attachments are uploaded **before** the message:
-
-```ts
-// 1. Mint a presigned R2 URL.
-const upload = await isnap.attachments.create({
-  filename: 'receipt.pdf',
-  content_type: 'application/pdf',
-  size_bytes: 124_500
-})
-
-// 2. PUT the bytes directly to R2 (the SDK helper handles this).
-await isnap.attachments.upload(upload, fileBytes)
-
-// 3. Reference the attachment_id on the message send.
-await isnap.messages.send({
-  line_id, to,
-  body: 'Here you go.',
-  attachments: [upload.attachment_id]
-})
+if response.status_code == 409 and response.json()["error"]["code"] == "too_late_to_cancel":
+    # The device has the message, or the message already reached a later status.
+    current = requests.get(f"{API}/v1/messages/{message_id}", headers=HEADERS, timeout=30)
+    current.raise_for_status()
+    print("Too late to cancel:", current.json()["data"]["status"])
+else:
+    response.raise_for_status()
+    message = response.json()["data"]
+    print(message["id"], "canceled at", message["cancelled_at"])
 ```
 
-iMessage accepts images, video, audio, vCards, and arbitrary files up
-to the 100 MB R2 ceiling (carriers cap MMS lower; iSnap surfaces the
-real cap per line in the line's `config`).
+</CodeGroup>
 
-## Idempotency
+## Shared lines
 
-Every `POST /v1/messages` call accepts an `Idempotency-Key` header. The
-SDK auto-generates one per call (UUIDv4). Two requests with the same
-key within 24h return the same response — no duplicate send.
+A [shared line](/guides/getting-a-line#shared-lines) has no number of its own. The first message to a contact creates a [binding](/concepts#other-terms): one of iSnap's own numbers serves that contact until the binding ends, see [Shared lines](/guides/getting-a-line#shared-lines). That number is the `from` of the message and the `outbound_number` of the [chat](/guides/receiving-messages#chats).
 
-When in doubt about whether a previous request succeeded (network blip,
-process crash mid-retry), **just retry with the same key**. iSnap will
-return the original response, not duplicate the message.
+- When no number can take a new contact, the send returns `503 line_pool_exhausted`. `503 quota_state_unavailable` means that iSnap could not read the state of the shared line: retry.
+- When the number that serves the contact cannot take the message now, iSnap holds the message with `schedule_reason: carrier_retry` until `scheduled_for`: 60 seconds later when the number is not available, and until the number's own limits or spacing free room otherwise.
+- The sending limits, the headers and `queue_info` of a send are those of the shared line itself.
+- A reply from the contact is recorded only while a number serves the contact.
 
-See [SDK → Idempotency](/sdk/idempotency) for the full contract.
+## Inbound-only lines
+
+An [inbound-only line](/concepts#line-kinds) can message a contact only after that contact wrote to it, at any time in the past. A send to any other recipient returns `403 outbound_first_forbidden`: nothing is stored, and no sending limit is used. Once the contact has written, the line sends to them like a two-way line.
+
+## Test lines and trial keys
+
+A [test line](/guides/managing-lines#test-lines) sends through `POST /v1/messages` like any other line you own, under the same sending limits. It records an inbound message only when the sender is the paired contact of a trial that runs on the line: a reply from anyone else is not recorded, and no event is sent for it.
+
+A [trial key](/authentication#trial-keys) sends text only, from the trial's line to the trial's paired number, outside the sending limits of the line. See [Send with the trial key](/guides/trials#send-with-the-trial-key).
+
+An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. A send with a test key reaches a real recipient. To test an integration, send to a phone number of your own.
+
+## Events
+
+A send produces these events:
+
+| Event | Sent when |
+| --- | --- |
+| [`message.queued`](/webhooks/events/message#message-queued) | iSnap accepts the message to leave now, or releases a held message. |
+| [`message.scheduled`](/webhooks/events/message#message-scheduled) | iSnap accepts the message and holds it, and again when it moves the departure by more than 15 minutes. |
+| [`message.sent`](/webhooks/events/message#message-sent) | The line's device reports that it sent the message. `origin` is `"api"`. |
+| [`message.delivered`](/webhooks/events/message#message-delivered) | The device reports a delivery receipt, the first time. |
+| [`message.read`](/webhooks/events/message#message-read) | The device reports a read receipt. |
+| [`message.failed`](/webhooks/events/message#message-failed) | The message fails, in any of the four cases of [Failures](#failures). Read `message.error_code` and `message.error_message`. |
+| [`message.cancelled`](/webhooks/events/message#message-cancelled) | You cancel the message. |
+| [`message.fallback_triggered`](/webhooks/events/message#message-fallback_triggered) | The message went out, or was attempted, over SMS or RCS. |
+
+Every one of them carries the whole message in `data.message`. The sending limits produce `line.quota_warning` and `line.quota_exceeded`: see [Events of the sending limits](/guides/sending-limits#events-of-the-sending-limits).
+
+These events do not announce everything. A delivery receipt or a read receipt for a message that iSnap has deleted sends nothing, and a status that the message already has is not sent again. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile from [`GET /v1/messages`](/api-reference/messages/list-messages) and [`GET /v1/messages/{id}`](/api-reference/messages/get-message). Deduplicate on `event_id`. Delivery order is not guaranteed: apply [Building the status from events](#building-the-status-from-events).
+
+After a line changes owner, by a transfer or by a return to the marketplace, the events about the messages you sent on it go to the next owner, and you no longer receive them; the message events carry the message they concern. See [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
 
 ## Errors
 
-| HTTP | `error.code` | What to do |
-|---|---|---|
-| 400 | `validation_error` | Fix the payload. `error.issues[]` lists the offending fields. |
-| 401 | `invalid_api_key` | Key revoked or wrong env. |
-| 403 | `line_not_owned` | API key not scoped to that `line_id`. |
-| 404 | `line_not_found` | `line_id` doesn't exist on the caller's account. |
-| 409 | `idempotency_key_conflict` | Same `Idempotency-Key` reused with a different body. Mint a new key. |
-| 422 | `body_or_attachments_required` | Empty `body` AND empty `attachments`. |
-| 429 | `*_quota_exceeded` | Quota gate fired — see `bucket` and `Retry-After`. Don't retry blindly; back off. |
-| 503 | `service_unavailable` | iSnap is degraded. SDK auto-retries with backoff; you can too. |
+The refusals of each operation are on its reference page: [`POST /v1/messages`](/api-reference/messages/send-message) and [`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message). A trial key has refusals of its own: see [With a trial key](/api-reference/messages/send-message#with-a-trial-key). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors). Retry a `429` after `Retry-After` seconds. Retry a `500` or a `503` up to 2 times, with exponential backoff. Do not retry any other `4xx`: fix the request.
 
-The SDK throws a typed error per HTTP status — see
-[SDK → Errors](/sdk/errors) for the class hierarchy.
+## Personal data
 
-## Cancelling a queued message
+A message carries personal data: the handles in `to` and `from`, the text in `body`, attachment file names, and whatever you put in `metadata`. Request it only when needed. Do not copy it into logs, tickets or other tools. Refer to a contact by an id of your own, and keep only ids in `metadata`.
 
-```ts
-const cancelled = await isnap.messages.cancel('msg_01HX...')
-// cancelled.status === 'cancelled'
-```
+## Next steps
 
-Cancellable iff `status` is `queued` or `scheduled` AND the device
-hasn't picked it up yet. After `sent` the cancel is a 409
-`too_late_to_cancel` — once it's on the carrier you can't pull it back.
-
-## Related
-
-- [Concepts → Channels](/concepts/channels) — when to force a channel vs let `auto` decide.
-- [Concepts → Quotas + warming](/concepts/quotas-and-warming) — what triggers 429.
-- [SDK → Idempotency](/sdk/idempotency) — auto-keys, replay window.
-- [Webhooks](/guides/webhooks) — track delivery via `message.delivered` / `message.failed`.
+- [Sending limits](/guides/sending-limits): the limits, holds, quiet hours and order that apply to every send.
+- [Receiving messages](/guides/receiving-messages): inbound messages and chats.
+- [Attachments](/guides/attachments): upload a file before you send it.

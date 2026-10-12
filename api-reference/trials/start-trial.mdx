@@ -1,0 +1,24 @@
+---
+title: "Start a trial"
+description: "Starts a trial on a pool line and returns the pairing code that the prospect texts to that line."
+openapi: "POST /v1/trial/init"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Test keys:** an `isnap_test_` account key starts a real trial: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. For a wholesale partner, a repeated call starts another trial. A direct account receives `409 trial_already_active`, a repeat of a call whose response was lost included. See [How a trial works](/guides/trials#how-a-trial-works).
+- **Events:** none. `trial.linked` is sent later, when the prospect pairs: see [Events](/guides/trials#events).
+- **Secret:** `token` is the pairing code. The response carries `Cache-Control: no-store`, whatever its status. See [How a trial works](/guides/trials#how-a-trial-works).
+- **Limit:** a direct account has one live trial at a time: see [Limits on live trials](/guides/trials#limits-on-live-trials).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | An unknown field, a value out of range, or a `metadata` over 20 keys or 8,192 bytes. |
+| 409 | `trial_already_active` | A direct account already has a live trial. Revoke it first. If you lost its `trial_id` before the prospect paired, the limit frees when its pairing window ends, 15 minutes after the call. |
+| 503 | `line_pool_exhausted` | No pool line is available. No trial is started: retry up to 2 times with exponential backoff, then write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 503 | `pairing_code_unavailable` | iSnap could not allocate a pairing code. No trial is started: call again. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

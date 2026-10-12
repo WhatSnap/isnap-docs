@@ -1,0 +1,21 @@
+---
+title: "Show the typing indicator"
+description: "Asks the line's device to show the typing indicator to the contact of a chat for 15 seconds."
+openapi: "POST /v1/chats/{chat_id}/typing"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Typing indicators](/guides/conversations#typing-indicators).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied: such a key acts on any chat of the account.
+- **`Idempotency-Key`:** not honored. Call the operation again to keep the indicator: it lasts 15 seconds after the last start, until `expires_at`.
+- **Events:** none.
+- **What reaches the contact:** the line's device shows the indicator when it supports typing indicators and there is a Messages conversation with the contact on the device. Otherwise nothing is shown, and the call still succeeds. On a line with no paired device, and on every shared line, the request is dropped.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 404 | `not_found` | The chat is unknown, or its line is not yours. |
+| 422 | `sms_typing_not_supported` | The chat's line is not an iMessage line. |
+| 422 | `unsupported_handle` | The chat's contact is not a phone number in E.164. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,363 @@
+---
+title: "Webhooks overview"
+sidebarTitle: "Overview"
+description: "Describes how to subscribe a URL to iSnap events, what your endpoint must do, and what each delivery contains."
+---
+
+iSnap sends an HTTP request to a URL of yours when something happens on your account: a message is
+received, a send fails, a line goes offline. This page shows how to subscribe, states what your
+endpoint must do, and describes the request iSnap sends. Read it before you write a receiver.
+
+Events are a fast signal, not a complete record. Some changes produce no event, and an event can be
+lost before it is recorded: see
+[What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile
+from the resource operations.
+
+## Terms
+
+The webhook pages use the terms of [Core concepts](/concepts#other-terms): webhook subscription, your
+endpoint, event, delivery, attempt, signing secret, probe and events feed.
+
+## Subscribing
+
+Create a subscription with [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook). The body
+takes three fields:
+
+| Field | Required | Value |
+| --- | --- | --- |
+| `url` | Yes | The URL of your endpoint. See [URL rules](#url-rules). |
+| `events` | Yes | The event filter: an array of at least one entry. See [Event filter](#event-filter). |
+| `line_ids` | No | The line filter: an array of line ids. See [Line filter](#line-filter). |
+
+The call returns `201` with the subscription and its signing secret. The subscription is active
+immediately. `description` and `active` are ignored on create: set them with
+[`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook).
+
+Four rules apply to every webhook operation:
+
+- A subscription belongs to your account. Every API key of the account reads and changes every
+  subscription of the account.
+- A [line-scoped key](/authentication#line-scoped-keys) is not restricted on webhook operations. It
+  creates subscriptions for all lines, reads every delivery record and reads the events feed of every
+  line of the account, message content included. Do not treat a line-scoped key as a boundary here.
+- An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines
+  and billing as an `isnap_live_` key. Both kinds of key see the same subscriptions, and an event
+  carries no mark of the key that caused it. See [Test keys](/authentication#test-keys).
+- A trial key cannot call a webhook operation: the API returns `401 unauthorized`.
+
+`POST /v1/webhooks` does not honor `Idempotency-Key`. The same request sent twice creates two
+subscriptions, and each event is then delivered twice to that URL. Retry a write only on an
+operation that honors `Idempotency-Key`, with the key of the first attempt. After a lost response,
+list your subscriptions with [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) before you
+create one again. The API sets no limit on the number of subscriptions of an account, and two
+subscriptions can use the same URL.
+
+Give each subscription its own URL, for example with a path segment of your own. A delivery does not
+carry the `wh_` id of its subscription, so a receiver that serves several subscriptions on one URL
+has to try each signing secret.
+
+### URL rules
+
+| Rule | When the URL breaks it |
+| --- | --- |
+| The value is an absolute URL. | `400 validation_failed`, or `400 webhook_url_not_allowed` with issue code `invalid_url`. |
+| The scheme is `https://`. | `400 webhook_url_not_allowed`, issue code `not_https`. |
+| The host is public. A host that is, or resolves to, a loopback, link-local, private, carrier-grade NAT, multicast or reserved address is refused, for IPv4 and IPv6. Every address the host resolves to is checked: one non-public address refuses the URL. | `400 webhook_url_not_allowed`, issue code `ssrf_blocked`. |
+| The host resolves when you create or update the subscription. | `400 webhook_url_not_allowed`, issue code `dns_failed`. |
+| The URL is 2,048 characters or shorter. | `500 internal_error`. |
+
+The issue code is in `error.issues[0].code`, and `error.issues[0].path` is `["url"]`. The API sets no
+restriction on the port, the path or the query string.
+
+iSnap checks the host again before every attempt and every probe. If the URL then points to a
+non-public address, no request is sent, the delivery ends `failed`, and the subscription is suspended
+immediately: see [Suspension](/webhooks/delivery#suspension).
+
+### Event filter
+
+An entry of `events` is one of:
+
+| Entry | Matches |
+| --- | --- |
+| An exact event type, such as `message.received` | That type only. |
+| A family wildcard, such as `line.*` | Every event type of that family. |
+| `*` | Every event. |
+
+The families are `message`, `reaction`, `line`, `typing_indicator`, `trial`, `binding`, `pre_order`,
+`macos_session` and `webhook`. The [event catalog](/webhooks/event-catalog#event-types) lists the 37
+event types.
+
+- There is no default filter. A missing or empty `events` returns `400 validation_failed`.
+- An exact name that is not an event type returns `400 validation_failed`.
+- A wildcard is accepted for any lowercase family name, including a family that does not exist. It
+  then matches nothing: check the spelling of a wildcard yourself.
+- The API sets no maximum number of entries, and accepts duplicates.
+- Subscribing to `webhook.test` or `webhook.*` has no effect: `webhook.test` is sent only as a probe,
+  whatever the filter.
+
+The filter is evaluated once, when the event occurs. An event that matches no active subscription at
+that moment is not recorded: it is never delivered, and it is never listed in the events feed.
+
+### Line filter
+
+| `line_ids` | The subscription receives |
+| --- | --- |
+| Absent or `[]` | The events of all lines, and the events tied to no line. An empty array means all lines, not none. |
+| A non-empty array | Only the events tied to one of those lines. |
+
+`POST /v1/webhooks` refuses `line_ids: null` with `400 validation_failed`. On
+`PATCH /v1/webhooks/{id}`, `line_ids: null` removes the line filter. A subscription without a line
+filter reads back with `line_ids: null`, or with `[]` when you sent `[]`: both mean all lines.
+
+With a non-empty `line_ids`:
+
+- Events that carry no line id never reach the subscription: `pre_order.cancelled`,
+  `macos_session.rented` and `macos_session.released`. The two `macos_session.*` events stay out even
+  when the session runs one of the listed lines.
+- `trial.*` events, and the message, reaction and typing events of a trial, are tied to the line the
+  trial runs on (`pool_line_id`). The subscription receives them only if it lists that line id.
+- `pre_order.fulfilled` is tied to the line the pre-order produces. The pre-order does not give you
+  that line id beforehand: receive pre-order events on a subscription without a line filter.
+
+Each entry is checked for its format only: `line_` followed by 25 letters or digits. An id that does
+not exist, or the id of a line that is not yours, is accepted. It matches nothing, with one
+exception: the `pool_line_id` of your trials matches the events of those trials, whoever owns the
+pool line. The API sets no maximum number of line ids.
+
+## What your endpoint must do
+
+- **Serve HTTPS on a public host.** The certificate must be one a standard HTTP client accepts. A
+  self-signed or expired certificate is a failed attempt.
+- **Verify the signature on the raw body.** Compute the signature over the bytes you received, before
+  any JSON parsing: see [Verifying signatures](/webhooks/verifying-signatures). iSnap promises no
+  `User-Agent` value and no list of source addresses: a delivery is authenticated by its signature,
+  and by nothing else.
+- **Return a `2xx` status within 10 seconds.** Any status from `200` to `299`, received within 10
+  seconds, is a success. iSnap does not interpret the response body, but it keeps its first 1,024
+  characters in the delivery record, readable with any API key of your account for at least 72
+  hours, or until you delete the subscription: return an empty body. Every other outcome is a failed
+  attempt, retried except after a `410`: see [Retries](/webhooks/delivery#retries).
+- **Do not redirect.** iSnap never follows a redirect. A `3xx` response is a failed attempt.
+- **Respond first, process later.** Store the event, return `2xx`, then do the work. A response that
+  arrives after 10 seconds counts as a failure even if you processed the event, and the event is then
+  delivered again.
+- **Deduplicate, and do not rely on order.** Deduplicate on `event_id`. Delivery order is not
+  guaranteed. Order events by the timestamps inside `data`, not by arrival. See
+  [Duplicates](/webhooks/delivery#duplicates) and [Order](/webhooks/delivery#order).
+- **Accept what you do not handle.** Return `2xx` for an event type you do not handle, and for a
+  probe (`webhook.test`). Ignore response fields, enum values and event types you do not know.
+
+<Warning>
+  Never return `410` unless you want the subscription turned off. A `410` response sets the
+  subscription to `active: false` immediately, and the events that occur while it is inactive are
+  lost. See [A 410 response](/webhooks/delivery#a-410-response).
+</Warning>
+
+## What a delivery contains
+
+A delivery is an HTTP `POST` to your URL. The body is one event, as compact JSON in UTF-8: see the
+[envelope](/webhooks/event-catalog#envelope). The API sets no maximum size for the body.
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `webhook-id` | The `event_id` of the event. The same on every attempt, on a replay, and for every subscription that receives the event. |
+| `webhook-timestamp` | The time the attempt is sent, in Unix seconds. It changes on every attempt. |
+| `webhook-signature` | `v1,` followed by the signature of this attempt, in base64. |
+| `X-iSnap-Event` | The event type. |
+| `X-iSnap-Delivery-Id` | The id of the delivery (`whd_`). On a probe, a `whd_` id that names no delivery record. |
+| `X-iSnap-Attempt` | The number of the attempt, starting at 1. It restarts at 1 for a replay and for a delivery that iSnap resends after a suspension or a stall. A probe does not carry it. |
+| `X-iSnap-Webhook-Id` | An opaque identifier of the subscription, not its `wh_` id: do not rely on it. |
+| `X-iSnap-Probe` | `1`, on a probe only. |
+
+The three `webhook-*` headers carry the signature. The `X-iSnap-*` headers are informational and are
+not signed: read the event type and the `event_id` from the verified body.
+
+Events can carry personal data: handles (phone numbers and email addresses), message text, names and
+attachment file names. Each [event page](/webhooks/event-catalog#event-types) says which fields.
+Subscribe only to the event types you need. Do not copy personal data into logs, tickets or other
+tools. Refer to a contact by an id of your own.
+
+### Lines that change owner
+
+A line changes owner when you transfer it to another account, or when it returns to the marketplace
+and another account gets it. The events about its earlier messages follow the line: they go to the
+account that owns the line when the event occurs:
+
+- `message.sent`, `message.delivered`, `message.read`, `message.failed` and
+  `message.fallback_triggered` about a message that an earlier owner sent, each with the full
+  message: its text, its handles, its attachment file names and its `metadata`;
+- `reaction.received` and `reaction.removed` about a reaction of a contact to an earlier message;
+- the `message.read` events of a mark-read: a
+  [`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read) by the next owner also
+  marks read the inbound messages that an earlier owner had not marked read, and sends each of them
+  in full.
+
+The earlier owner receives none of these events, and no account receives them while the line has no
+owner. The chats of the line follow it too: see [Chats](/guides/receiving-messages#chats).
+
+Before you transfer a line or let it return to the marketplace, export what you need. After a line
+becomes yours, ignore the events about messages older than your ownership of the line, and do not
+store their content:
+
+- a `message.*` event whose `data.message.created_at` is earlier than the time the line became
+  yours;
+- a `reaction.*` event whose `parent_message_id` is not a message that you sent or received on the
+  line.
+
+Note that time when you get the line: the time of your `reserve` or `assign` call, or, for a
+transfer, the time that the sender gives you. No event announces a transfer, and `activated_at` takes
+the time of the transfer only on the line of a wholesale partner: see
+[Transfer](/guides/managing-lines#transfer). With a time later than the real one, the first rule
+drops your own events of the interval.
+
+With the exact time, these rules never drop `message.received`, or `message.sent` with
+`origin: "device"`: both announce a message that the line records while it is yours.
+
+## Subscription states
+
+| State | Meaning | How it changes |
+| --- | --- | --- |
+| Active | The subscription receives events. | It is the state of a new subscription. |
+| Suspended | iSnap stopped deliveries to the subscription, after 10 deliveries in a row ended `failed` at the last attempt of their retry schedule, or after its URL was refused. | iSnap resumes it when a probe succeeds. No operation resumes it. |
+| Inactive | `active` is `false`: you turned the subscription off, or your endpoint returned `410`. | `PATCH /v1/webhooks/{id}` with `active: true` turns it on again. |
+
+The API shows `active` only. A suspended subscription still reads `active: true`, and no field says
+that a subscription is suspended, since when, or why.
+[Suspension](/webhooks/delivery#suspension) explains how to detect it.
+
+<Warning>
+  While a subscription is suspended or inactive, the events it would have matched are not recorded
+  for it. They are not delivered when it resumes, they cannot be replayed, and they are absent from
+  the events feed unless another active subscription of your account matched them.
+</Warning>
+
+A subscription is returned in two shapes:
+
+| Operations | Fields |
+| --- | --- |
+| [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook), [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) | `id`, `url`, `events`, `line_ids`, `active`, `failure_count`, `last_success_at`, `last_failure_at`, `created_at`, and `secret` on create. |
+| [`GET /v1/webhooks/{id}`](/api-reference/webhooks/get-webhook), [`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook) | `id`, `url`, `events`, `line_ids`, `description`, `active`, `created_at`, `updated_at`. |
+
+`failure_count`, `last_success_at` and `last_failure_at` are described in
+[Suspension](/webhooks/delivery#suspension). `GET /v1/webhooks` returns every subscription of the
+account in one response, newest first, without pages and without a filter.
+
+## Example: create a subscription
+
+Replace the URL with the URL of your endpoint. The samples do not retry: the operation does not
+honor `Idempotency-Key`. The response contains the signing secret: run the command where its output
+is not logged, and store the secret in your secret manager.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST https://api.isnap.ai/v1/webhooks \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://hooks.your-domain.example/isnap",
+    "events": ["message.*", "line.*"]
+  }'
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  // maxRetries: 0, because a retry after a lost response would create a second subscription.
+  const subscription = await client.webhooks.create(
+    { url: 'https://hooks.your-domain.example/isnap', events: ['message.*', 'line.*'] },
+    { maxRetries: 0 }
+  )
+  console.log(subscription.id)
+  // Store subscription.secret in your secret manager now: no other call returns it.
+} catch (err) {
+  if (err instanceof APIError && err.code === 'webhook_url_not_allowed') {
+    console.error(`URL refused: ${err.issues?.[0]?.code}`)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+response = requests.post(
+    f"{API}/v1/webhooks",
+    headers=HEADERS,
+    json={
+        "url": "https://hooks.your-domain.example/isnap",
+        "events": ["message.*", "line.*"],
+    },
+    timeout=30,
+)
+body = response.json()
+if response.status_code != 201:
+    error = body["error"]
+    if error["code"] == "webhook_url_not_allowed":
+        raise SystemExit(f"URL refused: {error['issues'][0]['code']}")
+    raise SystemExit(f"{error['status']} {error['code']} (trace_id {body['trace_id']})")
+
+subscription = body["data"]
+print(subscription["id"])
+# Store subscription["secret"] in your secret manager now: no other call returns it.
+```
+
+</CodeGroup>
+
+The response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6",
+    "url": "https://hooks.your-domain.example/isnap",
+    "events": ["message.*", "line.*"],
+    "line_ids": null,
+    "active": true,
+    "failure_count": 0,
+    "last_success_at": null,
+    "last_failure_at": null,
+    "created_at": "2026-10-08T14:22:57.392Z",
+    "secret": "whsec_00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+  },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_5Hn2Wq8Kd3Lx7Vb1Zt9Rm4Yc6"
+}
+```
+
+<Warning>
+  The signing secret is returned by create and by
+  [rotate](/api-reference/webhooks/rotate-webhook-secret), and by no other operation. Store it when
+  you receive it. If you lose it, rotate the secret to get a new one.
+</Warning>
+
+A signing secret is `whsec_` followed by 64 lowercase hexadecimal characters: 70 characters in all.
+Keep it in the environment of your receiver as `ISNAP_WEBHOOK_SECRET`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Event catalog" href="/webhooks/event-catalog">
+    The envelope, the 37 event types, and what events do not announce.
+  </Card>
+  <Card title="Verifying signatures" href="/webhooks/verifying-signatures">
+    The three signature headers, code in three languages, and a test vector.
+  </Card>
+  <Card title="Delivery guarantees" href="/webhooks/delivery">
+    Duplicates, order, retries, suspension, replays, secret rotation and retention.
+  </Card>
+  <Card title="Events feed" href="/webhooks/pulling-events">
+    The events feed, and a scheduled poll as a safety net.
+  </Card>
+</CardGroup>

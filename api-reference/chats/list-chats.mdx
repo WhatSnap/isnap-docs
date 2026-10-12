@@ -1,0 +1,21 @@
+---
+title: "List chats"
+description: "Lists the chats of the lines you own, most recent activity first, with a cursor."
+openapi: "GET /v1/chats"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets only the chats of the lines of its list.
+- **Events:** none.
+- **Personal data:** `contact_handle` is a phone number or an email address, and it stays after the messages are deleted. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Line owner:** a chat belongs to its line: after a line changes owner, the account that owns the line lists its chats, those of earlier owners included. See [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+- **Pagination:** a cursor, not tied to the filters. A chat that has a new message during a walk moves to the front of the list, before the cursor, and the walk does not return it. A message that the device reports late can move a chat back, and the walk can then return it twice. Deduplicate on the chat id, then list again with `since` set earlier than the start of your walk by the reporting delay that you accept. See [Cursors](/pagination#cursors).
+- **Counters:** `message_count` does not go down when iSnap deletes messages, and `unread_count` counts every inbound message ever received. See [Chats](/guides/receiving-messages#chats).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | A malformed `line_id`, `limit`, `since` or `until`. A cursor that cannot be read is not an error: the list restarts from the first page. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

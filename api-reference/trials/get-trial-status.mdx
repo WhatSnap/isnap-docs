@@ -1,0 +1,23 @@
+---
+title: "Get the pairing status of a trial"
+description: "Reads a trial by its pairing code, without a credential, and returns the trial key once after pairing."
+openapi: "GET /v1/trial/status"
+---
+
+- **Credential:** none. The pairing code in `token` identifies the trial, and the prospect sees that code. Call this operation from your backend only, never from a browser: see [How a trial works](/guides/trials#how-a-trial-works).
+- **Events:** none. A call made after the pairing window ended, for a trial that the prospect has not paired, sets the trial to `revoked` and sends no event: see [Statuses](/guides/trials#statuses).
+- **Personal data:** `paired_handle`, the prospect's phone number or the email address of their Apple ID. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a prospect by an id of your own.
+- **Trial key:** the first call after pairing returns `trial_api_key`, if it is made within 1 hour of pairing. Every later call omits it.
+- **Retries:** do not retry this call automatically: the first read after pairing returns the trial key once. See [Read the status and the trial key](/guides/trials#read-the-status-and-the-trial-key).
+- **Caching:** the response carries `Cache-Control: no-store`, whatever its status.
+- **Rate limit:** each call counts against the [request-rate limit](/errors-and-rate-limits#rate-limits).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `token` is missing, empty or longer than 64 characters. |
+| 404 | `trial_not_found` | No trial has this pairing code. |
+| 410 | `pairing_expired` | The pairing window ended before the prospect paired, or the trial is revoked, whatever the reason. A `200` never carries `status: revoked`. Start another trial. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

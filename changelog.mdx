@@ -1,48 +1,10 @@
 ---
 title: "Changelog"
-description: "Every change to the iSnap API contract, dated and versioned."
+description: "Lists the versions of the iSnap API from the first version these docs describe, newest first."
 ---
 
-Every change to the iSnap API contract lands here, with the date, the
-new version, and what changed.
+This changelog starts at version 2.39.0, the version these docs describe: earlier versions are not listed. Each version has one entry, newest first. [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) says what each part of a version number means and how a deprecation is announced, and [`GET /v1/version`](/api-reference/service/get-version) returns the version the API runs.
 
-## 1.0.0
-
-The v1 launch contract. Stable surface, frozen from here on.
-
-What ships in v1:
-
-- **Messaging** — `POST /v1/messages` queues sends on real-device
-  lines; `GET`, `DELETE`, and the reactions endpoints round out the
-  message lifecycle.
-- **Channels** — `iMessage`, `SMS`, `RCS` exposed via the `service`
-  response field. The `channel` request field is pinned to `auto` and
-  iSnap picks the best channel based on recipient reachability.
-- **Webhooks** — register subscriptions, verify HMAC-SHA256
-  signatures, deduplicate by `event.id`, replay within 24 h. Full
-  event catalog covering message lifecycle, inbound messages, line
-  health, quotas, and trial state.
-- **Lookup** — `POST /v1/lookup` probes whether a handle is reachable
-  on iMessage; cached server-side.
-- **Trials** — per-session pairings against a shared pool number,
-  streak-counter capped, identity-agnostic correlation via opaque
-  token.
-- **BYOD pairing** — `POST /v1/byod/pair` mints an activation code so
-  customers can attach their own Mac+iPhone or Android.
-- **Lines + Billing** — list / assign / release lines, manage
-  subscriptions and payment methods.
-- **`GET /v1/version`** — unauthenticated probe returning the
-  current API version, useful for compatibility checks at startup.
-- **Deprecation lifecycle** — routes flagged for removal emit
-  `Deprecation`, `Sunset`, and `Link rel="successor-version"` headers
-  (RFC 9745 / RFC 8594 / RFC 8288). Removed routes return **410
-  Gone** with `removed_at` and `successor` fields. The TypeScript SDK
-  warns once per (method × path × sunset) when it sees a
-  `Deprecation` header.
-
-From this point forward:
-
-- Breaking changes require a `/v2/*` namespace and a migration window.
-- Additive changes (new fields, endpoints, webhook events) ship as
-  `1.x` minor bumps and stay backward-compatible.
-- Every contract change lands here with a dated entry.
+<Update label="2.39.0" description="2026-10-09">
+  The changelog starts at this version: earlier versions are not listed. The `monthly_price` field of a line is deprecated: no removal date is set.
+</Update>

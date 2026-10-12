@@ -1,0 +1,339 @@
+---
+title: "Pre-orders"
+description: "Order one rented iMessage line in the area codes you prefer, confirm the order, and receive the line when iSnap hands it over."
+---
+
+A pre-order asks iSnap to prepare one rented iMessage line (`billing_tier: rental_iphone`) for your account, preferably with a number in one of up to 5 area codes that you choose. It has two steps: a draft, which has no effect, then a confirmation, which commits the order. Read this page when you order a line instead of taking one from the [marketplace](/guides/getting-a-line).
+
+One pre-order is one line. To order several lines, create several pre-orders.
+
+## How a pre-order works
+
+<Steps>
+
+<Step title="Choose area codes">
+
+Call [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes). It needs no credential and returns the whole list in one response:
+
+- `area_codes`: each entry has `area_code`, `region`, `country_code`, `purchase_zip`, `alt_zips` and `shared_with`. The list is ordered by `country_code`, then by `area_code`.
+- `countries`: each entry has `country_code`, `name` and `calling_code`.
+
+The query parameter `country` takes 2 letters, case-insensitive, and keeps the area codes of that country. A country with no area code returns an empty `area_codes`. `countries` is never filtered.
+
+The list contains the area codes that you can request on a pre-order. It does not say which lines are in stock: the [marketplace](/guides/getting-a-line) does. When `shared_with` is not empty, it names the other area codes of the list that cover the same geography, and the number that you obtain can carry any of them. `purchase_zip`, which can be `null`, and `alt_zips` are ZIP codes of that geography.
+
+</Step>
+
+<Step title="Create a draft">
+
+Call [`POST /v1/pre-orders`](/api-reference/pre-orders/create-pre-order). Every field of the body is optional:
+
+| Field | Meaning |
+| --- | --- |
+| `preferred_area_codes` | 0 to 5 area codes, in your order of preference. Each is a string of 1 to 10 characters. The default is `[]`: any area code. The API does not check the values against `GET /v1/area-codes`. |
+| `inbound_only` | `false`, the default, orders a two-way line. `true` orders an inbound-only line. See [Line kinds](/concepts#line-kinds). |
+| `billing_anchor_at` | The [billing anchor](/guides/managing-lines#anniversary-and-billing-anchor) to give the line. A timestamp more than 31 days after the call returns `400 billing_anchor_too_far`. The pre-order returns it, and the line receives it at confirmation. |
+| `billing_tier` | Leave it out. The only accepted value is `rental_iphone`, and the pre-order neither stores nor returns it. |
+| `metadata` | Your own keys and values: at most 20 keys and 8,192 bytes once serialized. |
+
+Any other field, `quantity` included, returns `400 validation_failed`.
+
+The response is `201` with the pre-order, `status: draft`. A draft creates no line, takes no payment and starts nothing at iSnap. A draft never expires, and the API sets no maximum number of drafts.
+
+</Step>
+
+<Step title="Confirm">
+
+Call [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order). Only a draft can be confirmed. The confirmation does three things:
+
+- The pre-order gets `status: provisioning`.
+- `estimated_fulfillment` is set to the time of the confirmation plus 72 hours.
+- iSnap creates a line on your account with `status: provisioning`: a rented iMessage line (`billing_tier: rental_iphone`), with the `inbound_only` that you ordered and your `billing_anchor_at`. When a number is in stock in one of your area codes, in their order of preference, the line receives it at confirmation. A pre-order with no `preferred_area_codes` takes any number in stock.
+
+What the confirmation opens depends on your [account](/concepts#accounts): see [Confirm and payment](#confirm-and-payment).
+
+</Step>
+
+<Step title="Receive the line">
+
+When iSnap hands the line over, the pre-order becomes `fulfilled` and iSnap sends `pre_order.fulfilled` once, with `pre_order_id`, `line_id`, `phone_number` (the full number of the line, which can be `null`), `billing_tier` and `fulfilled_at`. The pre-order itself carries no line id: you learn the line from this event, or by reading your lines with [`GET /v1/lines/my`](/api-reference/lines/list-my-lines). A line-scoped key does not see the new line in `GET /v1/lines/my`, since the line is not in its list: read the line id from the event, or list with a key that has no list of lines.
+
+A direct account also receives an email that says the line is ready. A wholesale partner receives no email.
+
+</Step>
+
+</Steps>
+
+## Confirm and payment
+
+**Direct account.** The confirmation creates the line and opens its monthly billing: the first month must be paid. The line is created whether or not that payment completes. The response carries `stripe_client_secret`, the secret of that first payment: do not log it. iSnap provides no way to pay with it through the API: to pay the first month, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order within 23 hours of the confirmation. After 23 hours, that first payment can no longer be completed.
+
+**Wholesale partner.** Nothing is paid at confirmation, and `stripe_client_secret` is `null`. The line is counted on your monthly invoice from the day it goes live.
+
+<Warning>
+`stripe_client_secret` is returned by the `confirm` response only: every other read of the pre-order returns `null`. A confirmation cannot be repeated, and `confirm` does not honor `Idempotency-Key`.
+
+A confirmed pre-order cannot be canceled through the API. Confirm only when the order is final.
+</Warning>
+
+When the response to a confirmation is lost, or the call returns a `500`, do not resend the confirmation blindly. Read the pre-order with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order):
+
+- `status: draft`: the confirmation did not happen. Resend it.
+- `status: provisioning`: the confirmation happened, and no operation returns the secret again. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order.
+
+A confirmation acts the same way with every API key:
+
+- **Test keys.** An `isnap_test_` account key is not a separate test environment: it acts on the same account, lines and billing as an `isnap_live_` key. A confirmation sent with a test key is a real order, billed like any other. See [Test keys](/authentication#test-keys).
+- **Line-scoped keys.** The list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied to pre-orders: such a key can create and confirm a pre-order.
+
+### Create a draft and confirm it
+
+<CodeGroup>
+
+```bash curl
+# No credential needed.
+curl -sS "https://api.isnap.ai/v1/area-codes?country=US"
+
+curl -sS -X POST "https://api.isnap.ai/v1/pre-orders" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"preferred_area_codes":["415","628"],"inbound_only":false,"metadata":{"crm_account_id":"acct_1042"}}'
+
+# Confirm once: a confirmation cannot be repeated. The response is saved before you read it.
+# For a direct account it contains stripe_client_secret: keep the file out of logs, and delete it once read.
+curl -sS -X POST "https://api.isnap.ai/v1/pre-orders/7f3c9a52-1d4e-4b8a-9c6f-2e5d8a1b4c7d/confirm" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -o confirm-response.json
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Neither call honors Idempotency-Key, so the SDK must not retry them on its own.
+const once = { maxRetries: 0 }
+
+const draft = await client.preOrders.create(
+  {
+    preferred_area_codes: ['415', '628'],
+    inbound_only: false,
+    metadata: { crm_account_id: 'acct_1042' }
+  },
+  once
+)
+console.log(draft.id, draft.status)
+
+try {
+  const confirmed = await client.preOrders.confirm(draft.id, once)
+  // For a direct account, confirmed.stripe_client_secret is the secret of the first
+  // monthly payment: do not log it.
+  console.log(confirmed.status, confirmed.estimated_fulfillment)
+} catch (err) {
+  if (err instanceof APIError && err.code === 'pre_order_not_draft') {
+    // Already confirmed or canceled: read it with preOrders.get, do not resend the confirmation.
+    console.error('This pre-order is not a draft.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+# Neither call honors Idempotency-Key: do not retry them blindly.
+created = requests.post(
+    f"{API}/v1/pre-orders",
+    headers=HEADERS,
+    json={
+        "preferred_area_codes": ["415", "628"],
+        "inbound_only": False,
+        "metadata": {"crm_account_id": "acct_1042"},
+    },
+    timeout=30,
+)
+created.raise_for_status()
+draft = created.json()["data"]
+print(draft["id"], draft["status"])
+
+confirmed = requests.post(f"{API}/v1/pre-orders/{draft['id']}/confirm", headers=HEADERS, timeout=30)
+payload = confirmed.json()
+
+if confirmed.status_code == 200:
+    pre_order = payload["data"]
+    # For a direct account, pre_order["stripe_client_secret"] is the secret of the first
+    # monthly payment: do not log it.
+    print(pre_order["status"], pre_order["estimated_fulfillment"])
+elif payload["error"]["code"] == "pre_order_not_draft":
+    # Already confirmed or canceled: read it, do not resend the confirmation.
+    print("This pre-order is not a draft.")
+else:
+    confirmed.raise_for_status()
+```
+
+</CodeGroup>
+
+```json Draft
+{
+  "success": true,
+  "data": {
+    "id": "7f3c9a52-1d4e-4b8a-9c6f-2e5d8a1b4c7d",
+    "preferred_area_codes": ["415", "628"],
+    "inbound_only": false,
+    "billing_anchor_at": null,
+    "status": "draft",
+    "stripe_client_secret": null,
+    "estimated_fulfillment": null,
+    "device_status": "awaiting_hardware",
+    "created_at": "2026-10-08T14:22:57.392Z",
+    "updated_at": "2026-10-08T14:22:57.392Z",
+    "metadata": { "crm_account_id": "acct_1042" }
+  },
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "request_id": "req_6Tn3Vb8Kx2Wq9Lc4Rz7Yd1Hm5"
+}
+```
+
+The `id` of a pre-order is a UUID, with no prefix.
+
+## Estimated date
+
+`estimated_fulfillment` is `null` on a draft. The confirmation sets it once, to the time of the confirmation plus 72 hours, and nothing revises it afterward. The 72 hours are a setting of iSnap, the same for every pre-order. No field and no event tells you that the date has passed without a hand-over.
+
+## Statuses
+
+| `status` | Meaning | Set by |
+| --- | --- | --- |
+| `draft` | The pre-order has no effect. | `POST /v1/pre-orders` |
+| `provisioning` | The pre-order is confirmed and iSnap prepares the line. | `POST /v1/pre-orders/{id}/confirm` |
+| `fulfilled` | iSnap handed the line over to you. | iSnap, at the hand-over. |
+| `cancelled` | You canceled the draft. | `POST /v1/pre-orders/{id}/cancel` |
+
+A confirmed pre-order never becomes `cancelled`. If iSnap withdraws the line before the hand-over, the pre-order stays `provisioning` and no event is sent.
+
+`device_status` tells how far the line is. It is always present and never `null`:
+
+| `device_status` | Meaning |
+| --- | --- |
+| `awaiting_hardware` | The pre-order is a draft or a canceled draft, or the line is not finished. |
+| `ready` | The line is built. |
+| `deployed` | The line is handed over. |
+
+The schema also lists `received` and `setup_in_progress`. The API does not return them. Ignore response fields, enum values and event types you do not know.
+
+## Canceling
+
+[`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) cancels a draft: the pre-order gets `status: cancelled`, nothing was charged, and iSnap sends `pre_order.cancelled`. The event is sent after the cancel is recorded: if it cannot be sent, the cancel stands.
+
+Only a draft can be canceled. A pre-order that is confirmed, fulfilled or already canceled returns `400 pre_order_already_confirmed`.
+
+No operation ends a confirmed pre-order. The message of the `400` above points to `POST /v1/lines/{id}/release`, but release only gives back a line that you have reserved: it returns `404` for a line that is being prepared. `POST /v1/lines/{id}/terminate` refuses that line too. To withdraw a confirmed pre-order, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order.
+
+## Metadata
+
+Set `metadata` when you create the draft, and change it with [`PATCH /v1/pre-orders/{id}`](/api-reference/pre-orders/update-pre-order). The body of the `PATCH` is required and has one field, `metadata`. Send `Content-Type: application/json` with every body.
+
+- The `PATCH` merges: a key that you send replaces the stored value, a key sent as `null` is deleted, and the other keys stay. `{"metadata": {}}` changes nothing.
+- The `metadata` of the request and the result each contain at most 20 keys and 8,192 bytes once serialized. A request that only deletes keys is never refused for the size of the result.
+- The `PATCH` works in every status.
+- The events sent after the `PATCH` carry the new `metadata` in `data.metadata`.
+- The `metadata` of a pre-order is not copied to the line that it produces.
+
+## Listing
+
+[`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders) lists your pre-orders, newest first.
+
+| Parameter | Meaning |
+| --- | --- |
+| `status` | Keeps one status: `draft`, `provisioning`, `fulfilled` or `cancelled`. |
+| `limit` | 1 to 100. The default is 25. A value outside the range returns `400 validation_failed`. |
+| `cursor` | The `next_cursor` of the previous page. |
+
+The response has `data.items`, `data.has_more` and `data.next_cursor`. `next_cursor` is `null` on the last page.
+
+Two rules of the cursor, described with the other lists in [Cursors](/pagination#cursors):
+
+- A cursor that cannot be read does not return an error: the list starts again from the first page, with `200`.
+- The cursor does not carry the `status` filter. Send the same `status` on every page of one walk, or pre-orders are skipped.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/pre-orders?status=provisioning&limit=100" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// preOrders.list returns one page: pass next_cursor back as cursor, with the same status.
+let cursor: string | undefined
+do {
+  const page = await client.preOrders.list({ status: 'provisioning', limit: 100, cursor })
+  for (const preOrder of page.items) {
+    console.log(preOrder.id, preOrder.device_status, preOrder.estimated_fulfillment)
+  }
+  cursor = page.has_more && page.next_cursor ? page.next_cursor : undefined
+} while (cursor)
+```
+
+```python Python
+import os
+
+import requests
+
+params = {"status": "provisioning", "limit": 100}
+
+while True:
+    response = requests.get(
+        "https://api.isnap.ai/v1/pre-orders",
+        headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    page = response.json()["data"]
+    for pre_order in page["items"]:
+        print(pre_order["id"], pre_order["device_status"], pre_order["estimated_fulfillment"])
+    if not page["has_more"] or page["next_cursor"] is None:
+        break
+    # Keep the same status on every page of the walk.
+    params["cursor"] = page["next_cursor"]
+```
+
+</CodeGroup>
+
+## Events
+
+| Event | Sent when | Line filter |
+| --- | --- | --- |
+| [`pre_order.fulfilled`](/webhooks/events/pre-order#pre_order-fulfilled) | The line of a pre-order is handed over. | Tied to the new line: a subscription with a line filter receives it only when the filter lists that line. |
+| [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | You cancel a draft. | Tied to no line: a subscription with a line filter never receives it. |
+
+A pre-order does not give you its line id before the hand-over: receive pre-order events on a [webhook subscription](/webhooks/overview) without a line filter. When the line is handed over with its device already connected, iSnap also sends `line.connected` for it.
+
+The pre-order events announce the two changes above, and no other. No event announces:
+
+- a draft that is created;
+- a confirmation: its response is the only signal;
+- a change of `metadata`;
+- an `estimated_fulfillment` that passes;
+- an order that iSnap withdraws behind a confirmed pre-order.
+
+The full list is in [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). To know the state of a pre-order, read it with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order). Deduplicate on `event_id`: see [Duplicates](/webhooks/delivery#duplicates).
+
+## Errors
+
+The refusals of each operation are on its reference page: [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes), [`POST /v1/pre-orders`](/api-reference/pre-orders/create-pre-order), [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders), [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order), [`PATCH /v1/pre-orders/{id}`](/api-reference/pre-orders/update-pre-order), [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) and [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+A pre-order carries no data beyond what you put in its `metadata`. `pre_order.fulfilled` carries the full phone number of the new line. Do not copy it into logs, tickets or other tools.

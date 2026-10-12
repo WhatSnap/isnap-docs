@@ -1,0 +1,1012 @@
+---
+title: "Managing lines"
+description: "Read a line you own, attach metadata to it, configure and watch it, change its variant, transfer it and end it, with the effect of each operation on billing and events."
+---
+
+Once a line is yours, you read it, attach your own `metadata` to it, adjust how it sends, watch its state, change its variant, transfer it and end it. This page covers each of these operations, with who can call it, its effect on billing and the events it sends. Read it when you build the part of your product that looks after lines you already own. To get a line, see [Getting a line](/guides/getting-a-line).
+
+## Your lines
+
+[`GET /v1/lines/my`](/api-reference/lines/list-my-lines) returns the lines of your account whose `status` is `active` or `reserved`, of every [kind](/concepts#line-kinds): rented, BYOD, shared and test lines. The response is `{ lines: [...] }`, ordered by `created_at`, oldest first, with full phone numbers. It has no pagination and no filter, and the API does not bound the number of lines in one response.
+
+The list leaves out the lines whose [status](/concepts#line-statuses) is `suspended`, `provisioning` or `cancelled`. A line that disappears from the list has not necessarily ended: keep the ids of your lines, and read a missing rented or BYOD line by its id.
+
+[`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns one rented or BYOD line, in any status, to any caller. It requires no credential.
+
+| Caller | What the response contains |
+| --- | --- |
+| A valid API key of the owner | The line with its full `phone_number`. |
+| Anyone else, with or without a credential | The same line with `phone_number` masked. Every other field is returned as it is: `status`, `metadata`, `stripe_subscription_id`, `activated_at`, `anniversary_at`, `billing_anchor_at`, `next_anchor_at`, `cancel_at` and `pending_variant`. |
+
+A missing, malformed or revoked credential gets the masked view with `200`, never `401`. A masked number in a response to your own key therefore means that the API did not accept that key as the owner's.
+
+Shared lines, test lines and dedicated pool lines are not served by this operation: it returns `404 not_found` for them, even to their owner. Read them with `GET /v1/lines/my`. No read operation returns a shared, test or dedicated pool line that is neither `active` nor `reserved`: keep its id. [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line) still returns it, and so does [`terminate`](/api-reference/lines/terminate-line) for a shared or test line that has ended.
+
+Some fields of the line object need a note:
+
+| Field | Meaning |
+| --- | --- |
+| `phone_number` | The line's own number in E.164, never `null`. It is `""` on a line that has no number: a shared line, or a BYOD line whose device has not reported one. For the masked form, see [The marketplace](/guides/getting-a-line#the-marketplace). |
+| `area_code` | The 3-digit North American area code. `null` for other numbers and for unknown numbers. |
+| `country_code` | The ISO 3166-1 alpha-2 country of the number. `null` until the number is known. |
+| `state`, `state_name` | The US state of the area code. `null` outside the US. |
+| `capabilities` | The [services](/concepts#services) the line sends, in lowercase: `["imessage","sms"]` on `rental_iphone` and `byod_imessage`, `["sms","rcs"]` on `rental_android` and `byod_android`, `["imessage"]` on a shared line. A test line that you converted keeps the `capabilities` it had as a rented line. On a test line or a dedicated pool line that iSnap created for your account, `capabilities` does not tell the services and can be `["sms"]`: see [Line kinds](/concepts#line-kinds). |
+| `activated_at` | When the line became `active`. A transfer to a wholesale partner sets it to the time of the transfer; a transfer to a direct account keeps the earlier value. `null` on a line that was never activated. |
+| `expires_at` | The end of the reservation while `status` is `reserved`. It has no meaning in any other status. |
+| `created_at` | When the line record was created. It is not the date you got the line. |
+| `metadata` | Your own keys, or `null` when the line has none. A line created with `"metadata": {}` reads `{}`: treat `null` and `{}` the same. A line you reserve keeps the keys that an earlier owner left: see [Metadata](#metadata). |
+| `stripe_subscription_id` | The id of the line's per-line subscription. `null` on a line billed on the monthly invoice of a wholesale partner, on BYOD, shared and test lines, and on a rented line that a direct account received by transfer while the line was not `active`. |
+| `monthly_price` | Deprecated: no removal date is set. An integer in US cents derived from the line kind. It is not the amount billed. |
+| `fulfillment_status` | Present only in `GET /v1/lines/my`: `open` while an order on the line is still being fulfilled, `null` otherwise. |
+
+The operations of this page return the line's own phone number, in full to its owner. Request it only when you need it, and do not copy it into logs, tickets or other tools. These operations return no Apple ID, no email address and no message body.
+
+A `suspended` line still belongs to you but cannot send. A line billed by a per-line subscription is suspended when a payment of that subscription fails, and iSnap can also suspend a line. A suspended line of a wholesale partner stays on the monthly count. No event announces a suspension or its end, and only iSnap lifts one: write to [support@isnap.ai](mailto:support@isnap.ai).
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/lines/my" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const { lines } = await client.lines.listMine()
+for (const line of lines) {
+  console.log(line.id, line.billing_tier, line.status, line.phone_number)
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/lines/my",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+response.raise_for_status()
+
+for line in response.json()["data"]["lines"]:
+    print(line["id"], line["billing_tier"], line["status"], line["phone_number"])
+```
+
+</CodeGroup>
+
+## Metadata
+
+`metadata` is an object of your own keys on a line, for example the id of the account that the line serves in your system. iSnap stores the values as given and does not interpret them. The events about a line carry its `metadata`: see [Envelope](/webhooks/event-catalog#envelope).
+
+<Warning>
+Line `metadata` is readable by anyone who holds the line id, and it stays on a line that returns to the marketplace or that you transfer. Never put personal data or secrets in line `metadata`. Refer to a contact, or to an account in your own system, by an id of your own.
+</Warning>
+
+A line that you reserve from the marketplace keeps the keys that an earlier owner left. Read its `metadata` and remove the keys you do not know: see [Metadata at acquisition](/guides/getting-a-line#metadata-at-acquisition).
+
+[`PATCH /v1/lines/{id}`](/api-reference/lines/update-line) merges the `metadata` you send into the stored object:
+
+| In the request | Effect |
+| --- | --- |
+| A key with a value | The key is set or replaced. A value can be any JSON value. |
+| A key with `null` | The key is removed. Removing the last key leaves `metadata: null`. |
+| A key that is absent | The key is kept. |
+
+The limits and the refusals:
+
+- A `metadata` object holds at most 20 keys and 8,192 bytes once serialized as JSON. A request over the limit returns `400 validation_failed`. A merge whose result is over the limit returns `400 metadata_too_large`. A request that only removes keys is never refused with `metadata_too_large`.
+- The keys `migration_ref` and `proof_line` are reserved. A request that names either, even with `null`, returns `400 reserved_metadata_key`. The same rule applies to the `metadata` of `POST /v1/lines/assign` and `POST /v1/lines/shared`.
+- The body must contain `metadata`, `billing_anchor_at`, or both: `400 no_fields_to_patch` otherwise. For `billing_anchor_at`, see [Anniversary and billing anchor](#anniversary-and-billing-anchor).
+- When a request carries both fields, the API applies `billing_anchor_at` first and `metadata` second, as two separate changes. If it refuses the `metadata`, the change of the billing anchor is already stored. Send the two fields in separate requests when that matters to you.
+
+The operation works on any line you own, in any status and of any kind, shared and test lines included. It returns `404 not_found` for any other line. It sends no event.
+
+A [line-scoped key](/authentication#line-scoped-keys) is not restricted to its list here: it can change the `metadata` and the billing anchor of any line of its account. It also gets the full phone number of any line of its account from `GET /v1/lines/{id}`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X PATCH "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"crm_account_id":"acct_1042","campaign":null}}'
+```
+
+```typescript TypeScript
+import { BadRequestError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  const line = await client.lines.patch('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', {
+    metadata: {
+      crm_account_id: 'acct_1042', // set or replace this key
+      campaign: null // remove this key
+    }
+  })
+  console.log(line.metadata)
+} catch (err) {
+  if (err instanceof BadRequestError && err.code === 'metadata_too_large') {
+    console.error('The merged metadata is over 20 keys or 8,192 bytes. Remove keys first.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.patch(
+    "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    # A value sets or replaces a key. None is sent as null and removes the key.
+    json={"metadata": {"crm_account_id": "acct_1042", "campaign": None}},
+    timeout=30,
+)
+
+if response.status_code == 400 and response.json()["error"]["code"] == "metadata_too_large":
+    print("The merged metadata is over 20 keys or 8,192 bytes. Remove keys first.")
+else:
+    response.raise_for_status()
+    print(response.json()["data"]["metadata"])
+```
+
+</CodeGroup>
+
+## Configuration
+
+Each line has a send configuration: its [sending limits](/guides/sending-limits#the-five-limits), its [spacing](/guides/sending-limits#spacing), its [reply lane](/guides/sending-limits#reply-lane), what happens when a limit is reached, its time zone and its typing indicator default. [Sending limits](/guides/sending-limits) explains what each setting does to your messages. This section explains how to read and change the settings.
+
+[`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) works on any line you own and returns:
+
+| Field | Content |
+| --- | --- |
+| `config` | The value in force for every key. |
+| `overridden_keys` | The keys that have a value of their own on this line. |
+| `knobs` | For eight limits, the value in force (`current`), the `default`, and the bounds `min` and `max`. A value outside `min` to `max` is refused on every line. Inside the bounds, a value above `default` is accepted only for the five message limits of a BYOD line: elsewhere it returns `403 cannot_increase_limit`. The eight are the five message limits and the three reply limits of the next table. |
+
+Default values depend on the kind of device the line runs on, and iSnap can change them. Do not hardcode them: read `knobs.<key>.default`, or the value of `config` for a key that is not in `overridden_keys`.
+
+[`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) sets the keys you send and keeps the others. One rule governs the numbers: a limit can only be lowered below its default, and a delay can only be raised above its default.
+
+| Key | Accepts | Direction |
+| --- | --- | --- |
+| `daily_new_contact_limit` | 5 to 200 | Down only. Up to `knobs.<key>.max` on a BYOD line. |
+| `daily_known_contact_limit` | 10 to 1000 | Down only. Up to `knobs.<key>.max` on a BYOD line. |
+| `daily_total_message_limit` | 10 to 1000 | Down only. Up to `knobs.<key>.max` on a BYOD line. |
+| `hourly_message_limit` | 5 to 200 | Down only. Up to `knobs.<key>.max` on a BYOD line. |
+| `minute_message_limit` | 1 to 60 | Down only. Up to `knobs.<key>.max` on a BYOD line. |
+| `reply_window_hours` | 1 to 168 | Down only. |
+| `reply_max_per_inbound` | 0 to 50 | Down only. |
+| `daily_reply_limit` | 0 to 1000 | Down only. |
+| `max_queue_depth` | 10 to 5000 | Down only. |
+| `min_inter_message_seconds` | 1 to 300 | Up only. |
+| `min_inter_new_contact_seconds` | 30 to 3600 | Up only. |
+| `quota_overflow_behavior` | `queue`, `drop` or `fail` | Free. |
+| `default_use_typing_indicator` | `true` or `false` | Free. |
+| `timezone` | An IANA time zone name | Free. |
+| `activity_curve` | An array of `{ hour, weight }` | Free. |
+
+The refusals:
+
+- For each key, the range is checked first, on every line: a number outside its range returns `422 limit_out_of_bounds` or `400 validation_failed`, even when it is above the default. `limit_out_of_bounds` carries the allowed `min` and `max` in `error.issues[0]`.
+- A limit inside its range and above its default returns `403 cannot_increase_limit`. On a BYOD line, the first five keys of the table are exempt: they can go above the default, up to `knobs.<key>.max`.
+- `min_inter_message_seconds` or `min_inter_new_contact_seconds` below its default returns `403 cannot_decrease_delay`.
+- `null` is not accepted for any key, and an unknown key is refused: both return `400 validation_failed`.
+
+To return a key to its default, send the key with its default value: the override is removed and the key leaves `overridden_keys`.
+
+Three keys have rules of their own:
+
+- **`timezone`** must be a valid IANA time zone name: `400 validation_failed` otherwise. Once set, it stays in `overridden_keys`: this operation can replace it, not remove it. With no override, the time zone in force comes from the line's US area code, else from its country when the country has a single time zone, else it is `Europe/London` for a `+44` number, else `America/Chicago`. See [Quiet hours](/guides/sending-limits#quiet-hours).
+- **`activity_curve`** holds at least one entry. A curve that is empty, names an hour twice or has a total weight of 0 returns `422 invalid_activity_curve`. An `hour` outside 0 to 23, or a `weight` that is negative or not an integer, returns `400 validation_failed`.
+- **`default_use_typing_indicator`** is `true` unless you override it. A message that does not state `use_typing_indicator` takes the line's value.
+
+A change of configuration sends no event. A [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` on both operations for a line outside its list.
+
+<CodeGroup>
+
+```bash curl
+# Read the configuration, the overridden keys and the bounds.
+curl -sS "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/config" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+# Lower one limit. Send its default value later to remove the override.
+curl -sS -X PATCH "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/config" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"hourly_message_limit": 10}'
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const REFUSED = ['cannot_increase_limit', 'limit_out_of_bounds', 'validation_failed']
+
+async function setHourlyLimit(lineId: string, value: number) {
+  try {
+    const { config, overridden_keys } = await client.lines.updateConfig(lineId, {
+      hourly_message_limit: value
+    })
+    return {
+      value: config.hourly_message_limit,
+      overridden: overridden_keys.includes('hourly_message_limit')
+    }
+  } catch (err) {
+    if (err instanceof APIError && REFUSED.includes(err.code)) {
+      // The value is above the default or outside the range: read the bounds and choose again.
+      const { knobs } = await client.lines.getConfig(lineId)
+      const { min, max, default: byDefault } = knobs.hourly_message_limit
+      console.error(`Refused (${err.code}). Range ${min} to ${max}, default ${byDefault}.`)
+      return null
+    }
+    throw err
+  }
+}
+
+console.log(await setHourlyLimit('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', 10))
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+REFUSED = {"cannot_increase_limit", "limit_out_of_bounds", "validation_failed"}
+
+
+def set_hourly_limit(line_id, value):
+    url = f"{API}/v1/lines/{line_id}/config"
+    response = requests.patch(url, headers=HEADERS, json={"hourly_message_limit": value}, timeout=30)
+
+    if response.status_code in (400, 403, 422) and response.json()["error"]["code"] in REFUSED:
+        # The value is above the default or outside the range: read the bounds and choose again.
+        current = requests.get(url, headers=HEADERS, timeout=30)
+        current.raise_for_status()
+        knob = current.json()["data"]["knobs"]["hourly_message_limit"]
+        print(f"Refused. Range {knob['min']} to {knob['max']}, default {knob['default']}.")
+        return None
+
+    response.raise_for_status()
+    data = response.json()["data"]
+    return {
+        "value": data["config"]["hourly_message_limit"],
+        "overridden": "hourly_message_limit" in data["overridden_keys"],
+    }
+
+
+print(set_hourly_limit("line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd", 10))
+```
+
+</CodeGroup>
+
+## Health
+
+[`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) returns the health of a BYOD line: what its device last reported. It serves BYOD lines only. For a rented, shared or test line that you own, it returns `403 rental_health_not_exposed`: use [Attention](#attention) for those lines. For a line you do not own, it returns `404 not_found`.
+
+`state` is the summary. The API evaluates the three values in this order:
+
+| `state` | Meaning |
+| --- | --- |
+| `offline` | The device has not reported for 5 minutes, and the line was not already `degraded` by its reception checks. |
+| `degraded` | The device reports, and either the line can send but its reception checks fail, or its `send_text` capability is not `active`, or, on an iMessage line, its `imessage` capability is not `active`. A line that is `degraded` because its reception checks fail stays `degraded` when its device stops reporting: read `last_heartbeat_at`. |
+| `active` | Neither of the above. |
+
+The other fields:
+
+| Field | Meaning | `null` when |
+| --- | --- | --- |
+| `last_heartbeat_at` | The last report of the paired device. | The line has no active device session, or the device never reported. |
+| `device_state` | The state the device itself last reported: `online`, `degraded`, `offline`, `initializing` or `blocked`. | Same. |
+| `runtime_capabilities` | For each capability, `active`, `degraded` or `disabled`, as last reported. The keys include `imessage`, `sms_fallback`, `send_text`, `send_attachment`, `reactions_out`, `reaction_remove_out`, `mark_read_out`, `typing_out`, `effects`, `reactions_in`, `read_receipts_in`, `typing_in` and `lookup_probe`. Ignore keys you do not know. | Same. |
+| `bridge_version` | The version of the bridge app on the device. | Same. |
+| `storage_free_bytes` | The free disk space last reported. | Same. `null` means not reported, not zero. |
+| `last_offline_at` | The start of the most recent offline period. It is kept after the line recovers. | The line was never offline. |
+| `last_error` | Free text of at most 1,000 characters: the reason reported with an Apple ID flag, the reception reasons of a degraded line separated by commas (`apple_account_reauth_required`, `phone_alias_unregistered`, `not_receiving`), or the text the device reported for the last message that failed. It is cleared when the line recovers from an offline or degraded state or from an Apple ID flag, so it can hold a message failure while `state` is `active`. Do not treat it as a list of fixed values. | The line has no error. |
+| `apple_id_flagged` | `true` once the device reports that Apple disabled or challenged the line's Apple ID. | Never. |
+| `daily_quota_remaining` | The smallest remaining room among the three daily limits: new contacts, known contacts and total messages. Never below 0. | Never. |
+| `byod` | Always `true`. | Never. |
+
+When `apple_id_flagged` becomes `true`, the API sends [`line.apple_id_flagged`](/webhooks/events/line#line-apple_id_flagged) once, for rented and BYOD lines alike. Only iSnap clears the flag, and no event announces that it was cleared: read `apple_id_flagged` again to know.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/health" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient, PermissionDeniedError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  const health = await client.lines.health('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd')
+  console.log(health.state, health.last_heartbeat_at, health.apple_id_flagged, health.last_error)
+} catch (err) {
+  if (err instanceof PermissionDeniedError && err.code === 'rental_health_not_exposed') {
+    console.error('Not a BYOD line: read GET /v1/attention instead.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/health",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+
+if response.status_code == 403 and response.json()["error"]["code"] == "rental_health_not_exposed":
+    print("Not a BYOD line: read GET /v1/attention instead.")
+else:
+    response.raise_for_status()
+    health = response.json()["data"]
+    print(health["state"], health["last_heartbeat_at"], health["apple_id_flagged"], health["last_error"])
+```
+
+</CodeGroup>
+
+## Connectivity events
+
+The events about the connection of a line differ by line kind. A BYOD line runs on your own device, so you get each change with its detail. For a rented line or a test line, you get only an outage that lasts.
+
+| Event | BYOD line | Rented line or test line |
+| --- | --- | --- |
+| [`line.offline`](/webhooks/events/line#line-offline) | Sent when the device has not reported for 5 minutes, or has not reported at all since it was paired. A line that is `degraded` because its reception checks fail gets no `line.offline`. The API checks every minute. | Sent once per outage, when the outage has lasted 15 minutes, with `durable: true` and no diagnostic field. |
+| [`line.connected`](/webhooks/events/line#line-connected) | Sent when the device completes pairing, at the first report after an offline period, and when a degraded line receives again. | Sent when the line recovers from an outage that `line.offline` announced, and when iSnap hands a line over to your account with its device already connected: the line of a pre-order, or another line that iSnap delivers to your account once it is ready. |
+| [`line.degraded`](/webhooks/events/line#line-degraded) | Sent when the line can still send but its reception checks fail. | Never sent. |
+| [`line.capability_changed`](/webhooks/events/line#line-capability_changed) | Sent when `imessage`, `sms_fallback`, `send_text` or `send_attachment` moves between `active` and `degraded`. | Never sent. |
+| [`line.disconnected`](/webhooks/events/line#line-disconnected) | Sent when the line's device signs out, when you terminate the line or its scheduled cancellation is carried out, when the BYOD slots of your account stop covering a BYOD line, and when a hosted macOS session under the line is released while a device session of the line runs on it, even when the device has stopped reporting. When you terminate a line, when a scheduled cancellation is carried out, and when BYOD slots no longer cover the line, it is sent even if the line had no device session, with `device_session_id: null`. | Same as for a BYOD line. |
+| [`line.apple_id_flagged`](/webhooks/events/line#line-apple_id_flagged) | Sent once when the flag is raised. | Sent once when the flag is raised. |
+
+A shared line has no device of its own. Of these events, it gets only `line.disconnected`, with `device_session_id: null`.
+
+These events do not cover every change. For a line that is not BYOD, no event announces an outage shorter than 15 minutes, a line that stops receiving, or a change of capability. No event announces that iSnap suspended a line, or that a device session was replaced or revoked by iSnap. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile from the operations of this page: [Attention](#attention) for every line, [Health](#health) for a BYOD line.
+
+Deduplicate on `event_id`. Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. See [Duplicates](/webhooks/delivery#duplicates) and [Order](/webhooks/delivery#order).
+
+## Attention
+
+[`GET /v1/attention`](/api-reference/lines/list-attention) lists the lines of your account that have a fault at the time of the call: an open incident, a degraded state, or a failing device check. The response is `{ entries: [...] }`, with one entry per line, even when the line has several faults.
+
+| Line | When it is listed | `reasons` | `detail_withheld` |
+| --- | --- | --- | --- |
+| BYOD line | As soon as the fault is seen. | The reasons of the fault. | `false` |
+| Any other line | Once the fault has lasted 15 minutes. | `[]` | `true` |
+
+The fields of an entry:
+
+| Field | Meaning |
+| --- | --- |
+| `line_id` | The line. |
+| `phone_number` | The full number of the line, or `null` when the line has none. |
+| `ownership` | `rental`, `byod`, `shared`, or `pool` for a test line or a dedicated pool line. |
+| `since` | The start of the oldest fault. It can be `null` on a BYOD line only. |
+| `reasons` | Zero or more reasons: see the table below. Treat the list as open: ignore a value you do not know. |
+| `detail_withheld` | `true` when the API lists the line without its reasons. |
+
+| `reasons` value | Meaning |
+| --- | --- |
+| `line_bridge_not_reporting` | The line's device has stopped reporting. |
+| `line_apple_id_flagged` | Apple disabled or challenged the Apple ID that the device is signed in to. |
+| `apple_account_reauth_required` | The device's check of its Apple ID sign-in fails: the Apple ID must be signed in again on the device. |
+| `phone_alias_unregistered` | The line's number is not registered for iMessage on the device. |
+| `not_receiving` | The device's reception check fails: messages sent to the line do not arrive on it. |
+| `device_blocked` | The device has reported the state `blocked` for longer than iSnap allows. |
+| `full_disk_access_failed` | The bridge app cannot read the messages on the device: it lacks the permission to read them. |
+| `private_api_failed` | Some sending features of the device keep failing. Receiving still works. |
+| `storage_below_floor` | The free storage of the device is below the minimum iSnap sets: received files can stop being stored. |
+| `phone_drift` | The number the device reports is not the line's number. |
+
+On a line that is not a BYOD line, `reasons` is empty and `detail_withheld` is `true`: the API does not disclose why. To report the fault, write to [support@isnap.ai](mailto:support@isnap.ai) with the `line_id`. The list holds faults, not statuses: a `suspended` line is not listed for its suspension, and `GET /v1/lines/my` leaves it out. Read each rented or BYOD line whose id you keep with [`GET /v1/lines/{id}`](/api-reference/lines/get-line) to see its `status`.
+
+Entries are ordered by `since`, oldest first, then by `line_id`. Entries with `since: null` come last. There is no pagination, and the API does not bound the number of entries. A [line-scoped key](/authentication#line-scoped-keys) gets only the entries of the lines in its list.
+
+The list is the state at the time of the call, not a history: an entry disappears when the fault ends. Use it to rebuild what you know after a missed event, or on a schedule:
+
+1. Call `GET /v1/attention`.
+2. Replace the faults you stored with the entries of the response.
+3. Treat each of your lines that is not in the response as having no fault to report. For a line that is not BYOD, that means no fault that has lasted 15 minutes.
+
+<CodeGroup>
+
+```bash curl
+curl -sS "https://api.isnap.ai/v1/attention" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+interface AttentionEntry {
+  line_id: string
+  phone_number: string | null
+  ownership: string
+  since: string | null
+  reasons: string[]
+  detail_withheld: boolean
+}
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// The SDK has no method for this operation: call it with client.request.
+const { entries } = await client.request<{ entries: AttentionEntry[] }>('GET', '/v1/attention')
+
+// The response is the whole state: replace what you stored with it.
+const faults = new Map(entries.map(entry => [entry.line_id, entry]))
+for (const [lineId, entry] of faults) {
+  const detail = entry.detail_withheld ? 'no detail' : entry.reasons.join(', ')
+  console.log(lineId, entry.since, detail)
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.get(
+    "https://api.isnap.ai/v1/attention",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+response.raise_for_status()
+
+# The response is the whole state: replace what you stored with it.
+faults = {entry["line_id"]: entry for entry in response.json()["data"]["entries"]}
+for line_id, entry in faults.items():
+    detail = "no detail" if entry["detail_withheld"] else ", ".join(entry["reasons"])
+    print(line_id, entry["since"], detail)
+```
+
+</CodeGroup>
+
+## Ending a line
+
+Three operations end a line or change when it ends. To give back a line that is only `reserved`, use `release` instead: see [Reservations](/guides/getting-a-line#reservations).
+
+| | [`terminate`](/api-reference/lines/terminate-line) | [`cancel`](/api-reference/lines/cancel-line) | [`uncancel`](/api-reference/lines/uncancel-line) |
+| --- | --- | --- | --- |
+| Effect | Ends the line immediately and for good. | Schedules the end of the line at `cancel_at`. | Withdraws the scheduled end. |
+| Who can call it | The owner of the line, on any account. | Wholesale partners only: `409 line_not_wholesale_metered` otherwise. | The owner of the line. |
+| Lines | `active` or `suspended`. Rented, BYOD, shared and test lines. A dedicated pool line returns `403 pool_line_not_terminable`. | `active` or `suspended`. Rented, BYOD and shared lines. A test line or a dedicated pool line returns `403 pool_line_not_cancellable`. | Any line that has not ended. |
+| Billing | See [Terminate](#terminate). | The line is billed as before until `cancel_at`. | None. |
+| Events at the call | `line.terminated`, `line.disconnected`, and one event per failed message and per released binding. | None. | None. |
+
+### Terminate
+
+[`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) changes the line immediately:
+
+- `status` becomes `cancelled`, which is final: the line never returns to another status. It keeps its owner.
+- Its `queued` and `scheduled` messages fail with `carrier_terminated`.
+- Its device sessions are revoked.
+
+The effect on billing depends on how the line is billed:
+
+| Line | Effect |
+| --- | --- |
+| Billed by a per-line subscription | The subscription is canceled immediately, without a credit for the rest of the current month. |
+| Billed on the monthly invoice of a wholesale partner | The line is left out of the following monthly counts. The month already counted stands, with no credit. |
+
+A direct account can also cancel the per-line subscription of a rented line in the [iSnap dashboard](https://platform.isnap.ai). The line then stays `active` until the end of the paid month, and returns to the marketplace with no owner instead of becoming `cancelled`: see [Ends you do not request](#ends-you-do-not-request).
+
+The optional `reason` is a note of 1 to 255 characters, without control characters. It defaults to `terminated by the customer` and comes back as `reason` in the `line.terminated` event.
+
+The events of a termination are [`line.terminated`](/webhooks/events/line#line-terminated) with `origin: customer_initiated`, [`line.disconnected`](/webhooks/events/line#line-disconnected) with `reason: customer_initiated`, one [`message.failed`](/webhooks/events/message#message-failed) for each failed message, and one [`binding.released`](/webhooks/events/binding#binding-released) for each released binding of a shared line.
+
+Hosted macOS sessions that ran the line are taken off it and listed in `released_macos_session_ids` of `line.terminated`. Each stays rented until you cancel it with [`POST /v1/macos-sessions/{id}/cancel`](/api-reference/macos-sessions/cancel-macos-session).
+
+Terminating a line that is already `cancelled` returns `200` with the line unchanged and sends no event, so a retry is safe. A `reserved` or `provisioning` line returns `409 line_not_customer_terminable`. A test line returns `409 test_line_in_use` while a trial that is not revoked uses it; after it ends, its `cancel_at` holds the time it ended.
+
+When the per-line subscription cannot be read or canceled, the call returns `409` with `subscription_cancel_failed`, `subscription_lookup_failed` or `subscription_id_untrustworthy`, and the line is not terminated. Branch on `error.code`, never on `error.message`. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
+
+After a termination, the owner can still read a rented or BYOD line with `GET /v1/lines/{id}`. A shared or test line cannot be read after it ends.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/terminate" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Account acct_1042 closed"}'
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  const line = await client.lines.terminate('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', {
+    reason: 'Account acct_1042 closed'
+  })
+  console.log(line.status) // cancelled
+} catch (err) {
+  if (err instanceof ConflictError) {
+    // The line was not terminated. err.code says why, for example test_line_in_use.
+    console.error(err.code, err.traceId, err.requestId)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/terminate",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    json={"reason": "Account acct_1042 closed"},
+    timeout=30,
+)
+
+if response.status_code == 409:
+    # The line was not terminated. error.code says why, for example test_line_in_use.
+    body = response.json()
+    print(body["error"]["code"], body["trace_id"], body["request_id"])
+else:
+    response.raise_for_status()
+    print(response.json()["data"]["status"])  # cancelled
+```
+
+</CodeGroup>
+
+### Cancel at the anniversary
+
+[`POST /v1/lines/{id}/cancel`](/api-reference/lines/cancel-line) sets `cancel_at` and changes nothing else: the line keeps working, and it is billed as before until that time. Wholesale partners only. A direct account ends a line with `terminate`, or by canceling its per-line subscription in the dashboard.
+
+- `cancel_at` is the next occurrence of `anniversary_at` strictly after the call, computed in UTC: the same day of the month, moved to the last day of a shorter month, at the same time of day.
+- Canceling a line that already has a `cancel_at` returns the same `cancel_at`, so a retry is safe.
+- A line with `anniversary_at: null` returns `409 line_has_no_anniversary`: state the anniversary first, as described in [Anniversary and billing anchor](#anniversary-and-billing-anchor).
+- A test line returns `403 pool_line_not_cancellable`: end it with `terminate`. A dedicated pool line returns the same code: to end it, write to [support@isnap.ai](mailto:support@isnap.ai).
+- A line that is neither `active` nor `suspended` returns `409 line_not_customer_cancellable`.
+
+iSnap ends the line after `cancel_at` passes; the API does not bound the delay. The line then ends as with `terminate`, and the same events are sent, with `origin: scheduled_cancellation` and the `cancel_at` in `line.terminated`, and `reason: scheduled_cancellation` in `line.disconnected`.
+
+[`POST /v1/lines/{id}/uncancel`](/api-reference/lines/uncancel-line) sets `cancel_at` back to `null`. On a line with no `cancel_at`, it returns `200` and changes nothing. On a line that has ended, it returns `409 line_already_terminated`.
+
+Neither `cancel` nor `uncancel` sends an event: the events come when the line ends.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/cancel" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+# Withdraw the scheduled end.
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/uncancel" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const lineId = 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd'
+
+try {
+  const line = await client.lines.cancel(lineId)
+  console.log(`Ends at ${line.cancel_at}`)
+
+  // Withdraw the scheduled end.
+  const kept = await client.lines.uncancel(lineId)
+  console.log(kept.cancel_at) // null
+} catch (err) {
+  if (err instanceof ConflictError && err.code === 'line_not_wholesale_metered') {
+    console.error('Wholesale partners only. A direct account ends a line with terminate.')
+  } else if (err instanceof ConflictError && err.code === 'line_has_no_anniversary') {
+    console.error('State the anniversary of the line first.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+LINE = "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd"
+
+response = requests.post(f"{API}/v1/lines/{LINE}/cancel", headers=HEADERS, timeout=30)
+code = response.json()["error"]["code"] if response.status_code == 409 else None
+
+if code == "line_not_wholesale_metered":
+    print("Wholesale partners only. A direct account ends a line with terminate.")
+elif code == "line_has_no_anniversary":
+    print("State the anniversary of the line first.")
+else:
+    response.raise_for_status()
+    print("Ends at", response.json()["data"]["cancel_at"])
+
+    # Withdraw the scheduled end.
+    kept = requests.post(f"{API}/v1/lines/{LINE}/uncancel", headers=HEADERS, timeout=30)
+    kept.raise_for_status()
+    print(kept.json()["data"]["cancel_at"])  # None
+```
+
+</CodeGroup>
+
+### Ends you do not request
+
+A line can also end, or leave your account, without a call of yours. Not every such end sends `line.terminated`:
+
+| What happens | Result | Events |
+| --- | --- | --- |
+| iSnap terminates the line. | `status: cancelled`. | `line.terminated` with `origin: admin_terminated`, without `line.disconnected`. |
+| The [BYOD slots](/guides/byod#byod-slots) of your account stop covering a BYOD line. | `status: cancelled`. | `line.disconnected` with `reason: customer_initiated`, without `line.terminated`. |
+| The per-line subscription of a rented line ends. | The line returns to the marketplace: it is `available` and has no owner. | None. |
+
+A line that returns to the marketplace keeps its `metadata` and its chats. The account that gets it next lists the chats, and can receive your inbound messages that were not marked read and the events about your earlier messages. Before you let a line return to the marketplace, export what you need from its chats: see [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+
+To catch these, read your lines on a schedule and compare: see [Your lines](#your-lines) and [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+## Anniversary and billing anchor
+
+A line carries two monthly dates, and they can differ: the anniversary decides when a scheduled cancellation ends the line, and the billing anchor decides the day of the month on which the line is billed.
+
+| Field | Meaning |
+| --- | --- |
+| `anniversary_at` | When your account took the line. `cancel` ends the line at its next occurrence. |
+| `cancel_at` | The scheduled end of the line, or `null`. |
+| `billing_anchor_at` | The billing anchor that you stated, or `null`. |
+| `next_anchor_at` | The next occurrence of `billing_anchor_at`, or of `activated_at` when no billing anchor is stated. |
+
+An occurrence is computed in UTC: the same day of the month, moved to the last day of a shorter month, at the same time of day.
+
+**The anniversary.** iSnap sets `anniversary_at` once, when a line becomes the line of a wholesale partner: at `activate`, `assign`, the creation of a shared line, the pairing of a BYOD line, a transfer, or the hand-over of the line of a pre-order. It is `null` on a line of a direct account. A line that you brought in from another system has none until you state it.
+
+[`POST /v1/lines/{id}/anniversary`](/api-reference/lines/set-line-anniversary) records the `anniversary_at` that you state and overwrites any earlier value. Wholesale partners only: `409 line_not_wholesale_metered` otherwise. The call returns `400 anniversary_in_the_future` for a timestamp after the call, `409 line_cancellation_pending` while the line has a `cancel_at`, and `403 pool_line_not_cancellable` on a test line or a dedicated pool line.
+
+**The billing anchor.** State it at `activate`, or with [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line) and `billing_anchor_at`. `null` clears it. A past timestamp is accepted. A timestamp more than 31 days after the call returns `400 billing_anchor_too_far`. Sending the value that the line already has changes nothing.
+
+**The next billing anchor.** `next_anchor_at` is the next occurrence strictly after the time of the read. Only a line billed on the monthly invoice of a wholesale partner is billed at it: a line billed by a per-line subscription also shows a value, and its per-line subscription does not charge at that time. It is `null` when the line is neither `active` nor `suspended`, when it was never activated, and when it has a `cancel_at` on or before that occurrence.
+
+**Two dates, two days.** `cancel_at` follows `anniversary_at`, and `next_anchor_at` follows `billing_anchor_at`. On a line with a stated billing anchor, the two can fall on different days of the month: a line taken on the 2nd with a billing anchor on the 11th is billed on the 11th, and a cancellation ends it on the 2nd.
+
+**The dates follow the owner.** `anniversary_at`, `billing_anchor_at`, `cancel_at` and `pending_variant` are cleared when a line leaves its owner without ending: a release, a transfer, or a return to the marketplace. A terminated line keeps its `cancel_at` and its `pending_variant`.
+
+None of these changes sends an event.
+
+## Variant changes
+
+The variant of a rented line is its `inbound_only` value: `false` for a [two-way line](/concepts#line-kinds), `true` for an inbound-only line. [`POST /v1/lines/{id}/variant`](/api-reference/lines/change-line-variant) moves a line from one to the other and keeps its number. The request takes `inbound_only` (required), and `effective`: `now`, the default, or `next_anchor`.
+
+The operation works on an `active` rented line that has no per-line subscription:
+
+| Line | Response |
+| --- | --- |
+| Not a rented line | `409 not_a_rental_line` |
+| Not `active` | `409 line_not_active` |
+| Billed by a per-line subscription | `409 variant_bound_to_stripe_price` |
+
+### Immediate change
+
+With `effective` absent or `now`, the variant changes immediately: the next send obeys the new value. Asking for the value that the line already has returns `200` and changes nothing.
+
+| Change | Billing |
+| --- | --- |
+| Inbound-only to two-way | A prorated charge is added to the monthly invoice. |
+| Two-way to inbound-only | No credit is given. |
+
+### Scheduled change
+
+With `effective: "next_anchor"`, the change is stored and `inbound_only` does not move. `pending_variant` holds the change, for example `{ "inbound_only": true, "effective_at": "2026-11-08T14:22:57.392Z" }`.
+
+- `effective_at` is the first occurrence of the billing anchor at or after `not_before`. `not_before` is optional and defaults to the time of the call. A past `not_before` returns `400 not_before_in_the_past`. With `effective: "now"`, `not_before` is ignored.
+- When no change is pending, scheduling the value that the line already has stores nothing and returns `pending_variant: null`.
+- Resending the pending change returns it unchanged. A different change while one is pending returns `409 variant_change_already_pending`.
+- An immediate change does not clear a pending one.
+- A line with neither a billing anchor nor an activation timestamp returns `409 line_has_no_billing_anchor`.
+
+iSnap applies a scheduled change after `effective_at` passes, and before it charges the line for the new month. The API does not bound the delay.
+
+A scheduled change can be dropped without any event. `pending_variant` then reads `null`, and `inbound_only` is unchanged:
+
+- At `effective_at`, when the line is `suspended`, is not a rented line, has a per-line subscription, or already has the scheduled value.
+- When the line leaves its owner: a release, a transfer, or a return to the marketplace.
+- When the line becomes a test line.
+
+A terminated line is the exception: it keeps its `pending_variant`, and the change never applies.
+
+Read `pending_variant` and `inbound_only` after `effective_at` to know what happened.
+
+[`DELETE /v1/lines/{id}/variant`](/api-reference/lines/cancel-variant-change) withdraws the pending change and returns `204` with no body. It returns `404 no_pending_variant_change` when nothing is pending, and `409 variant_change_already_applied` when the change was applied during the call. It works on a line in any status.
+
+### Variant events
+
+| Event | Sent when |
+| --- | --- |
+| [`line.variant_changed`](/webhooks/events/line#line-variant_changed) | A change is applied. `scheduled` is `false` for an immediate change and `true` for a change applied at a billing anchor. |
+| [`line.variant_scheduled`](/webhooks/events/line#line-variant_scheduled) | A change is scheduled. |
+| [`line.variant_unscheduled`](/webhooks/events/line#line-variant_unscheduled) | You withdraw a scheduled change. |
+
+A request for the variant that the line already has sends no event, and a dropped change sends none either: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/variant" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"inbound_only": true, "effective": "next_anchor"}'
+
+# Withdraw the scheduled change. A success is 204 with no body.
+curl -sS -o /dev/null -w "%{http_code}\n" -X DELETE \
+  "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/variant" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient, NotFoundError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const lineId = 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd'
+
+try {
+  const line = await client.lines.setVariant(lineId, { inbound_only: true, effective: 'next_anchor' })
+  console.log(line.inbound_only, line.pending_variant)
+} catch (err) {
+  if (err instanceof ConflictError && err.code === 'variant_change_already_pending') {
+    console.error('Another change is scheduled. Withdraw it first.')
+  } else {
+    throw err
+  }
+}
+
+// Withdraw the scheduled change. A success resolves with no value.
+try {
+  await client.lines.cancelVariantChange(lineId)
+  console.log('Withdrawn.')
+} catch (err) {
+  if (err instanceof NotFoundError && err.code === 'no_pending_variant_change') {
+    console.log('Nothing was scheduled.')
+  } else if (err instanceof ConflictError && err.code === 'variant_change_already_applied') {
+    console.log('The change was already applied.')
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+URL = "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/variant"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+scheduled = requests.post(
+    URL, headers=HEADERS, json={"inbound_only": True, "effective": "next_anchor"}, timeout=30
+)
+if scheduled.status_code == 409 and scheduled.json()["error"]["code"] == "variant_change_already_pending":
+    print("Another change is scheduled. Withdraw it first.")
+else:
+    scheduled.raise_for_status()
+    line = scheduled.json()["data"]
+    print(line["inbound_only"], line["pending_variant"])
+
+# Withdraw the scheduled change. A success is 204 with no body.
+withdrawn = requests.delete(URL, headers=HEADERS, timeout=30)
+if withdrawn.status_code == 204:
+    print("Withdrawn.")
+elif withdrawn.json()["error"]["code"] == "no_pending_variant_change":
+    print("Nothing was scheduled.")
+elif withdrawn.json()["error"]["code"] == "variant_change_already_applied":
+    print("The change was already applied.")
+else:
+    withdrawn.raise_for_status()
+```
+
+</CodeGroup>
+
+## Test lines
+
+A [test line](/concepts#line-kinds) is a line set aside for the [trials](/guides/trials) of its owner: a two-way rented line that a wholesale partner converted, or a line that iSnap created for the account. It reads `billing_tier: shared_pool`, `test_line: true` and `inbound_only: false`. A converted line keeps its number and its `capabilities`, and you can still send from a test line. Both conversions are for wholesale partners only: any other account receives `402 checkout_required`.
+
+[`POST /v1/lines/{id}/convert-to-test`](/api-reference/lines/convert-to-test-line) turns a line into a test line. The line must be an `active`, two-way rented line with no per-line subscription and no `cancel_at`. Any pending variant change is cleared. The refusals are all `409`:
+
+| `error.code` | The line |
+| --- | --- |
+| `already_test_line` | Is a test line already. |
+| `line_not_rental` | Is not a rented line. |
+| `line_not_active` | Is not `active`. |
+| `line_has_subscription` | Has a per-line subscription. |
+| `test_line_not_inbound_only` | Is an inbound-only line. |
+| `line_cancellation_pending` | Has a `cancel_at`. |
+
+[`POST /v1/lines/{id}/convert-from-test`](/api-reference/lines/convert-from-test-line) turns an `active` test line back into a rented line. It returns `409 not_a_test_line`, `409 line_not_active`, or `409 test_line_in_use` while a trial that is not revoked uses the line.
+
+What a conversion does not change:
+
+- **Billing.** A test line is billed like a two-way rented line. A converted line keeps its dates: both conversions keep `anniversary_at`, `billing_anchor_at` and `activated_at`. A line that had no `activated_at` gets the time of its conversion to a test line.
+- **The end.** A test line cannot be canceled at a date: `cancel` and `anniversary` return `403 pool_line_not_cancellable`. End it with [`terminate`](#terminate).
+- **Events.** Neither conversion sends an event.
+
+`GET /v1/lines/{id}` returns `404 not_found` for a test line: read it with `GET /v1/lines/my`. To get a line as a test line in one call, see `as_test_line` in [Assignment](/guides/getting-a-line#assignment).
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/convert-to-test" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient, PaymentRequiredError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  // The operation does not honor Idempotency-Key: the SDK must not retry it on its own.
+  const line = await client.lines.convertToTest('line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', { maxRetries: 0 })
+  console.log(line.test_line) // true
+} catch (err) {
+  if (err instanceof PaymentRequiredError) {
+    console.error('Wholesale partners only.')
+  } else if (err instanceof ConflictError) {
+    // err.code says why the line cannot become a test line.
+    console.error(err.code)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/convert-to-test",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    timeout=30,
+)
+
+if response.status_code == 402:
+    print("Wholesale partners only.")
+elif response.status_code == 409:
+    # error.code says why the line cannot become a test line.
+    print(response.json()["error"]["code"])
+else:
+    response.raise_for_status()
+    print(response.json()["data"]["test_line"])  # True
+```
+
+</CodeGroup>
+
+## Transfer
+
+[`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) moves a line that you own to another iSnap account.
+
+<Warning>
+A transfer takes effect immediately, and the receiving account is not asked to accept it. When an `active` rented line goes to a direct account, that account is charged immediately. The line goes to the receiving account with its `metadata` and its chats, with their `contact_handle`. The delivery statuses, read receipts and reactions that the line's device reports afterward about the messages you sent on it go to the receiving account; the message events carry the message they concern. When the receiving account marks one of these chats read, it receives in `message.read` each inbound message of the chat that iSnap still keeps and that you had not marked read, with its text. Before you transfer a line, export what you need from its chats: see [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+</Warning>
+
+| Field | Meaning |
+| --- | --- |
+| `to_user_id` | Required. The UUID of the receiving iSnap account. An unknown value returns `400 invalid_recipient`. The API has no operation that returns the UUID of an account. Ask [support@isnap.ai](mailto:support@isnap.ai) for the UUID of the receiving account. |
+| `preserve_device_session` | Defaults to `true`: the paired device stays connected, and the line keeps working for the next owner. With `false`, every device session of the line is revoked and the device must be paired again. No `line.disconnected` event is sent for those sessions. |
+
+The status of the line is not checked and does not change. What moves and what is cleared:
+
+| Kept | Cleared |
+| --- | --- |
+| The id, the number, the variant, the `metadata` and the chats of the line. | `anniversary_at`, `billing_anchor_at`, `cancel_at` and `pending_variant`. A scheduled end is therefore dropped. |
+
+A receiving wholesale partner gets a new `anniversary_at` and a new `activated_at`, both set to the time of the transfer.
+
+The effect on billing depends on the line and on the receiving account:
+
+| Transfer | Effect |
+| --- | --- |
+| An `active` rented line to a direct account | The receiving account must have a payment method on file: `409 recipient_no_payment_method` otherwise. It adds one by writing to [support@isnap.ai](mailto:support@isnap.ai). A per-line subscription is created for it and charged immediately. When that charge is declined, the call returns `409 payment_failed` and nothing moves. |
+| An `active` `rental_android` line to a direct account | Refused: `409 android_rental_not_purchasable`. |
+| A shared line, a test line or a dedicated pool line to a direct account | Refused: `409 line_recipient_not_wholesale`. These lines can only go to a wholesale partner. |
+| A BYOD line, or a line that is not `active`, to a direct account | No charge. |
+| A line with a per-line subscription of yours, to any account | Your per-line subscription is canceled immediately with a prorated credit. |
+| The call fails with `409 subscription_cancel_failed` or `409 transfer_conflict`, or with `409 line_on_rented_macos_session` or `409 line_takes_no_macos_session` when the hosted macOS session of the line changed during the call | The line does not move. A direct receiving account can already have been charged: iSnap then tries to cancel its new per-line subscription with a prorated credit. The charge is not returned to its card, and when that cancellation fails, the new per-line subscription can keep billing the receiving account. After `409 transfer_conflict`, and after the two hosted macOS session codes, your per-line subscription of the line, when it had one, is already canceled, with a prorated credit. After the two hosted macOS session codes, a line that carried that per-line subscription then leaves your account and returns to the marketplace, and no event announces it: see [Concurrency refusals](#concurrency-refusals). Read the line. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+
+A transfer sends no event to either account. After it, the events about the line go to the next owner, and they carry the `metadata` that you left on the line.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/transfer-ownership" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"to_user_id":"6f1c2b9e-3d4a-4f6b-8a7c-9e0d1c2b3a4f","preserve_device_session":true}'
+```
+
+```typescript TypeScript
+import { ConflictError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+try {
+  // The operation does not honor Idempotency-Key: the SDK must not retry it on its own.
+  const line = await client.lines.transferOwnership(
+    'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+    { to_user_id: '6f1c2b9e-3d4a-4f6b-8a7c-9e0d1c2b3a4f', preserve_device_session: true },
+    { maxRetries: 0 }
+  )
+  console.log(line.id, 'moved')
+} catch (err) {
+  if (err instanceof ConflictError) {
+    // The line did not move. err.code says why, for example recipient_no_payment_method.
+    // Quote traceId and requestId to support after subscription_cancel_failed or transfer_conflict.
+    console.error(err.code, err.traceId, err.requestId)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+response = requests.post(
+    "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/transfer-ownership",
+    headers={"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"},
+    json={"to_user_id": "6f1c2b9e-3d4a-4f6b-8a7c-9e0d1c2b3a4f", "preserve_device_session": True},
+    timeout=30,
+)
+
+if response.status_code == 409:
+    # The line did not move. error.code says why, for example recipient_no_payment_method.
+    # Quote trace_id and request_id to support after subscription_cancel_failed or transfer_conflict.
+    body = response.json()
+    print(body["error"]["code"], body["trace_id"], body["request_id"])
+else:
+    response.raise_for_status()
+    print(response.json()["data"]["id"], "moved")
+```
+
+</CodeGroup>
+
+## Concurrency refusals
+
+When an operation loses a race with another change of the same line, it returns `409` with a code that says so, and the line is not changed:
+
+| `error.code` | Operations |
+| --- | --- |
+| `line_changed_concurrently` | `cancel`, `uncancel` |
+| `line_terminated_concurrently`, `line_ownership_changed_concurrently`, `line_status_changed_concurrently` | `terminate` |
+| `variant_change_conflict` | `variant` |
+| `transfer_conflict` | `transfer-ownership` |
+| `billing_anchor_change_conflict` | `PATCH /v1/lines/{id}` |
+| `conflict` | `convert-to-test` |
+
+Read the line again, then decide whether the operation still applies. A terminate or a transfer that loses a race can already have canceled the line's per-line subscription. A line that has not ended and still carried that subscription then leaves your account, and no event announces it. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
+
+`reserve`, `assign`, `transfer-ownership` and the two test line conversions can also return `409 line_on_rented_macos_session` or `409 line_takes_no_macos_session`, when the [hosted macOS session](/guides/hosted-macos-sessions) of the line does not fit the change. Only iSnap can resolve it: write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.

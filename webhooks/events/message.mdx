@@ -1,0 +1,873 @@
+---
+title: "Message events"
+description: "Gives the data of message.queued, message.scheduled, message.sent, message.delivered, message.read, message.failed, message.received, message.cancelled and message.fallback_triggered, with an example of each and the personal data they carry."
+---
+
+The `message.*` events follow a message from the moment iSnap accepts or receives it. For each of the
+nine event types, this page says when it is sent and when it is not, lists the fields of `data`, and
+shows a full event. You need it to track a send to its final status and to receive inbound messages.
+
+A send through the API produces `message.queued`, or `message.scheduled` when the message is held and
+then `message.queued` when it is released. `message.sent` or `message.failed` follows, then
+`message.delivered` and `message.read` if the line's device reports them, and
+`message.fallback_triggered` when the device sent, or tried to send, the message over SMS or RCS.
+Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival:
+`message.delivered` can reach you before `message.sent`. See
+[Sending messages](/guides/sending-messages) for the statuses of a message.
+
+## Common fields
+
+Every `message.*` event carries these fields in `data`. The sections below list the fields each
+event type adds.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The full message object, as [`GET /v1/messages/{id}`](/api-reference/messages/get-message) returns it, in its state after the change. Its `queue_info` is always `null` in an event. |
+| `metadata` | object | Yes | The `metadata` of the message. `null` when the message has none, on every inbound message, and when the message belongs to an account that owned the line before you: `message.metadata` still carries it then. |
+| `line_metadata` | object | Yes | The `metadata` of the message's line, when that line belongs to your account. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+The message object has no `chat_id`. Three events carry the chat id beside `message`:
+`message.received`, `message.sent` with `origin: "device"`, and the `message.read` that follows your
+own mark-read call.
+
+The message events of a trial are tied to the trial's pool line. A subscription with a line
+filter receives them only if it lists that line id.
+
+On a line that another account owned before you, you receive the device reports about the messages
+of that account: see [Lines that change owner](/webhooks/overview#lines-that-change-owner).
+
+**Personal data.** `data.message` carries the message text, the handles of the contact and of the
+line (phone numbers or email addresses), attachment file names and the handles of the senders of
+reactions. `message.received` can add `contact_name`. Subscribe to message events only when you need
+them. Do not copy this data into logs, tickets or other tools. Refer to a contact by an id of your
+own.
+
+## `message.queued`
+
+Sent when:
+
+- a message is accepted for immediate sending, by
+  [`POST /v1/messages`](/api-reference/messages/send-message), by
+  [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card), or by a
+  send with a trial key;
+- a held message is released for sending. In that case the event is skipped if the message is no
+  longer `queued` at that moment.
+
+`data` holds the common fields only.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_I2SF9H5zjDJohjDQ7alT1PNEF",
+  "event_type": "message.queued",
+  "created_at": "2026-10-08T14:22:57.431Z",
+  "trace_id": "9e1629cfee10b2f2a2a4b12396852806",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": null,
+      "status": "queued",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": null,
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.scheduled`
+
+Sent when a message is accepted but held, and again each time its planned send time moves by more
+than 15 minutes. A smaller move sends nothing. `message.queued` follows when the message is
+released. See [Held messages](/guides/sending-limits#held-messages).
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message, with `status: scheduled`. |
+| `schedule_reason` | string | No | Why the message is held. The same value as `message.schedule_reason`. |
+| `scheduled_for` | string | No | The planned send time, as a timestamp. The same value as `message.scheduled_for`. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_n61XRp14Xsni5Rp62vR9lBiKR",
+  "event_type": "message.scheduled",
+  "created_at": "2026-10-08T02:41:10.152Z",
+  "trace_id": "299b3b176e98407380e87a39919121b3",
+  "data": {
+    "message": {
+      "id": "msg_6Lw2Qd8Vn4Kc9Tx3Hb7Zm5Ry1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Good morning. Your order ships today.",
+      "channel": "auto",
+      "service": null,
+      "status": "scheduled",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T13:00:00.000Z",
+      "schedule_reason": "quiet_hours",
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T02:41:10.118Z",
+      "queued_at": "2026-10-08T02:41:10.118Z",
+      "sent_at": null,
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "schedule_reason": "quiet_hours",
+    "scheduled_for": "2026-10-08T13:00:00.000Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.sent`
+
+Sent in two cases, told apart by `data.origin`.
+
+Common fields:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message. |
+| `sent_at` | string | No | The time of the send. For `origin: "api"` it is the time iSnap recorded the confirmation. For `origin: "device"` it is the time the device gives. |
+| `origin` | string | No | `api` or `device`. |
+
+### A message created through the API
+
+`origin` is `api`: the line's device confirms that it sent a message created through the API. `data`
+holds the three common fields. `message.status` is `sent`, and `message.service` is the service the
+device used, when the device reports one.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_0S4QUDmNi9GqD9yppQsQ9DJhl",
+  "event_type": "message.sent",
+  "created_at": "2026-10-08T14:23:01.902Z",
+  "trace_id": "1464eb794189512e0758ee26757eac80",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": "iMessage",
+      "status": "sent",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": "2026-10-08T14:23:01.870Z",
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "sent_at": "2026-10-08T14:23:01.870Z",
+    "origin": "api",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### A message typed on the device
+
+`origin` is `device`: someone typed a message on the line's own device. The message is recorded with
+`direction: outbound` and `status: delivered`, and `message.sent_at` and `message.delivered_at` both
+hold the device's time. `data` adds one field:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `chat_id` | string | No | The chat of the message. |
+
+This case exists only for a line that has a device of its own: a rented line or a BYOD line. It is
+not sent for a shared line or for a line that runs trials, nor for the device's own copy of a message
+created through the API.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_UlmsT2cQjlbkhkiUcCxVnTeDL",
+  "event_type": "message.sent",
+  "created_at": "2026-10-08T15:04:12.688Z",
+  "trace_id": "84745ca9429e268635ee886d58c035cd",
+  "data": {
+    "message": {
+      "id": "msg_3Vn8Tc5Kx2Wq9Hb6Lm4Zd7Ry1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Running five minutes late.",
+      "channel": "iMessage",
+      "service": "iMessage",
+      "status": "delivered",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": null,
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T15:04:12.640Z",
+      "queued_at": null,
+      "sent_at": "2026-10-08T15:04:11.000Z",
+      "delivered_at": "2026-10-08T15:04:11.000Z",
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "sent_at": "2026-10-08T15:04:11.000Z",
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "origin": "device",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.delivered`
+
+Sent the first time the line's device reports that an outbound message was delivered. iSnap learns
+of a delivery only from the device: no report means no event. A report for a status the message
+already has, or for a message that iSnap has deleted, sends nothing. A message can reach `read` with
+no `message.delivered` and with `delivered_at` still `null`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message, with `delivered_at` set. |
+| `message_id` | string | No | The id of the message. |
+| `line_id` | string | No | The id of the message's line. |
+| `status` | string | No | Always `delivered`. |
+| `delivered_at` | string | No | The time the device reports for the delivery. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_SbiiTpvshM4lGJPoeKchYYHyi",
+  "event_type": "message.delivered",
+  "created_at": "2026-10-08T14:23:03.412Z",
+  "trace_id": "aafdc3addad1168b986065c50f4653ce",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": "iMessage",
+      "status": "delivered",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": "2026-10-08T14:23:01.870Z",
+      "delivered_at": "2026-10-08T14:23:03.000Z",
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "message_id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "status": "delivered",
+    "delivered_at": "2026-10-08T14:23:03.000Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.read`
+
+Sent in two cases. Every case carries `message` and `read_at`: rely on these two fields, and treat
+the others as present only in their case.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message, with `read_at` set. |
+| `read_at` | string | No | The time the message was read, or the time of your mark-read call. |
+
+The first case concerns a message you sent, whose `message.status` is `read`. The second concerns an
+inbound message: `message.direction` is `inbound`, and `message.status` stays `delivered`.
+
+### The recipient read your message
+
+The line's device reports that the recipient read an outbound message. `data` holds the two common
+fields and can add `message_id`, `line_id` and `status` (always `read`); on an iMessage line it
+always adds them.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message_id` | string | Absent on some lines; always present on an iMessage line | The id of the message. |
+| `line_id` | string | Absent on some lines; always present on an iMessage line | The id of the message's line. |
+| `status` | string | Absent on some lines; always present on an iMessage line | Always `read`. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_tc5AKMfMbrsUZEZdm7XgjiaAg",
+  "event_type": "message.read",
+  "created_at": "2026-10-08T14:25:40.377Z",
+  "trace_id": "4f6534b89390ecd3e346afa132aa64d1",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": "iMessage",
+      "status": "read",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": "2026-10-08T14:23:01.870Z",
+      "delivered_at": "2026-10-08T14:23:03.000Z",
+      "read_at": "2026-10-08T14:25:40.000Z",
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "message_id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "status": "read",
+    "read_at": "2026-10-08T14:25:40.000Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### Your own mark-read call
+
+[`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read) sends one event per inbound
+message it newly marks read. On a line that another account owned before you, that includes the
+inbound messages that account had not marked read: see
+[Lines that change owner](/webhooks/overview#lines-that-change-owner). `data` adds:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `chat_id` | string | No | The chat you marked read. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_vIZN6E1swEh6mraYO9hezzOdj",
+  "event_type": "message.read",
+  "created_at": "2026-10-08T14:24:05.260Z",
+  "trace_id": "006ae482da320fbaec882046b4465f46",
+  "data": {
+    "message": {
+      "id": "msg_7Hq3Zd9Kp2Vx6Wn4Tb8Lc5Ym1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "inbound",
+      "kind": "message",
+      "to": "+14155550124",
+      "from": "+14155550123",
+      "body": "Is the table still free at 8?",
+      "channel": "iMessage",
+      "service": "iMessage",
+      "status": "delivered",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": null,
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.101Z",
+      "queued_at": null,
+      "sent_at": null,
+      "delivered_at": "2026-10-08T14:22:56.000Z",
+      "read_at": "2026-10-08T14:24:05.219Z",
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "read_at": "2026-10-08T14:24:05.219Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+A report of a read for a message that iSnap has deleted sends nothing.
+
+Personal data: `data.message`.
+
+## `message.failed`
+
+Sent in three cases. Every case carries `message` and `failed_at`. For the cause, read
+`message.error_code` and `message.error_message`: they have one meaning in every case, while the
+fields beside `message` differ.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message, with `status: failed`. |
+| `failed_at` | string | No | The time of the failure. |
+
+iSnap never resends a failed message: send a new message to retry. See
+[Sending messages](/guides/sending-messages).
+
+### The device refuses the send
+
+The line's device reports that it could not send the message. `data` adds:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `error_message` | string | Absent when the device gave no text | The text the device gave. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_CDmwRnly4Zsq8zmFnDUpl3FaF",
+  "event_type": "message.failed",
+  "created_at": "2026-10-08T14:23:02.560Z",
+  "trace_id": "e8e44cf7f42b8d8c234dbe4770b5b6a2",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": null,
+      "status": "failed",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": null,
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": "2026-10-08T14:23:02.514Z",
+      "error_code": null,
+      "error_message": "Not delivered",
+      "cancelled_at": null
+    },
+    "failed_at": "2026-10-08T14:23:02.514Z",
+    "error_message": "Not delivered",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### The device reports a failure after the send
+
+The line's device reports the status `failed` for a message it had sent. `data` adds:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message_id` | string | No | The id of the message. |
+| `line_id` | string | No | The id of the message's line. |
+| `status` | string | No | Always `failed`. |
+| `error` | string | Absent when the device gave no text | The text the device gave. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_L80f9FccmNBzh4xbhy7Lq8Efs",
+  "event_type": "message.failed",
+  "created_at": "2026-10-08T14:31:44.305Z",
+  "trace_id": "724b718e040827f81301c528d34d3dae",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": "iMessage",
+      "status": "failed",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": "2026-10-08T14:23:01.870Z",
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": "2026-10-08T14:31:44.000Z",
+      "error_code": null,
+      "error_message": "Not delivered",
+      "cancelled_at": null
+    },
+    "message_id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "status": "failed",
+    "error": "Not delivered",
+    "failed_at": "2026-10-08T14:31:44.000Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+### iSnap fails a message that was still waiting
+
+iSnap fails the message itself: the line was terminated, the message waited too long, or the device
+took it and never reported an outcome. `data` adds:
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `error_code` | string | Yes | `carrier_terminated`: the line, or for a shared line the line that carried the message, was terminated while the message was waiting. `carrier_unavailable`: the message was still waiting 48 hours after iSnap accepted it, a held message included. `no_terminal_ack`: the device took the message and never reported an outcome. |
+| `error_message` | string | Yes | A text for a person. It can change: branch on `error_code`. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_xucJ5xIsf2ovdaSbmIvG5FAch",
+  "event_type": "message.failed",
+  "created_at": "2026-10-10T15:00:03.826Z",
+  "trace_id": "23e2ff9d26fa942feb26b6b9cf151c2a",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": null,
+      "status": "failed",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": null,
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": "2026-10-10T15:00:03.771Z",
+      "error_code": "carrier_unavailable",
+      "error_message": "Message could not be delivered within the maximum queue age and was failed",
+      "cancelled_at": null
+    },
+    "error_code": "carrier_unavailable",
+    "error_message": "Message could not be delivered within the maximum queue age and was failed",
+    "failed_at": "2026-10-10T15:00:03.771Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.received`
+
+Sent when an inbound message is stored. An inbound message has `status: delivered`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The inbound message. |
+| `chat_id` | string | No | The chat of the message. |
+| `received_at` | string | No | The time the device gives for the reception. |
+| `contact_name` | string | Absent when the device reports none | The display name of the sender, as the line's device knows it. |
+
+The event is not sent:
+
+- on a shared line, for a message from a contact the line has no active binding with;
+- on a line that runs trials, for the text that carries a pairing code, and for a message from a
+  sender who is not the paired prospect of a trial;
+- for a second copy of a message the device reports twice;
+- for history that a device reports from before iSnap was watching the line.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_Fh50GcqYY37ay4VjUxQ2rR6jN",
+  "event_type": "message.received",
+  "created_at": "2026-10-08T14:22:57.143Z",
+  "trace_id": "174b4a27e4e4938fa67ea87b23a18579",
+  "data": {
+    "message": {
+      "id": "msg_7Hq3Zd9Kp2Vx6Wn4Tb8Lc5Ym1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "inbound",
+      "kind": "message",
+      "to": "+14155550124",
+      "from": "+14155550123",
+      "body": "Is the table still free at 8?",
+      "channel": "iMessage",
+      "service": "iMessage",
+      "status": "delivered",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": null,
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.101Z",
+      "queued_at": null,
+      "sent_at": null,
+      "delivered_at": "2026-10-08T14:22:56.000Z",
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "contact_name": "Dana Whitfield",
+    "received_at": "2026-10-08T14:22:56.000Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message` and `contact_name`.
+
+## `message.cancelled`
+
+Sent when you cancel a queued or held message with
+[`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message). It is not sent for a message of
+a trial.
+
+`data` holds the common fields only. `message.status` is `cancelled` and `message.cancelled_at` is
+set.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_YUDwDcSPQMbAKNIqHhA2oMfvY",
+  "event_type": "message.cancelled",
+  "created_at": "2026-10-08T02:55:31.044Z",
+  "trace_id": "6a223d01526d3e14c3b6547d5f672e7e",
+  "data": {
+    "message": {
+      "id": "msg_6Lw2Qd8Vn4Kc9Tx3Hb7Zm5Ry1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Good morning. Your order ships today.",
+      "channel": "auto",
+      "service": null,
+      "status": "cancelled",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T13:00:00.000Z",
+      "schedule_reason": "quiet_hours",
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T02:41:10.118Z",
+      "queued_at": "2026-10-08T02:41:10.118Z",
+      "sent_at": null,
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": "2026-10-08T02:55:31.007Z"
+    },
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.
+
+## `message.fallback_triggered`
+
+Sent when the line's device reports that a message went out, or was attempted, over SMS or RCS
+instead of iMessage, whether that attempt succeeded or failed. It does not prove that an iMessage
+attempt was made first: the device also reports it for a message it sent directly as SMS or RCS
+because it already knew the recipient is not on iMessage. The same report also produces
+`message.sent` or `message.failed`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `message` | object | No | The message. |
+| `fallback_service` | string | No | `iMessage`, `SMS` or `RCS`. `SMS` when the device names no service. |
+| `triggered_at` | string | No | The time iSnap recorded the fallback. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_Zz7USHmcOiK9QyaF81KNRQIxf",
+  "event_type": "message.fallback_triggered",
+  "created_at": "2026-10-08T14:23:01.958Z",
+  "trace_id": "303cf1b83455b8bc4d0fde85f45a583c",
+  "data": {
+    "message": {
+      "id": "msg_4Jt9Wc2Xq7Lm5Nb8Kd3Vh6Rz1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "outbound",
+      "kind": "message",
+      "to": "+14155550123",
+      "from": "+14155550124",
+      "body": "Your table is confirmed for 8 pm.",
+      "channel": "auto",
+      "service": "SMS",
+      "status": "sent",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": { "booking_id": "bk_20931" },
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": "2026-10-08T14:22:57.392Z",
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.392Z",
+      "queued_at": "2026-10-08T14:22:57.392Z",
+      "sent_at": "2026-10-08T14:23:01.870Z",
+      "delivered_at": null,
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "fallback_service": "SMS",
+    "triggered_at": "2026-10-08T14:23:01.925Z",
+    "metadata": { "booking_id": "bk_20931" },
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+Personal data: `data.message`.

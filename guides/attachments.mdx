@@ -1,0 +1,316 @@
+---
+title: "Attachments"
+description: "Upload a file, wait until it is ready, send it with a message, and read the files that your lines receive."
+---
+
+A file travels with a message as an attachment. You create the attachment, upload the file to the URL that iSnap returns, wait until the attachment is ready, and pass its id in a send. This page describes each step and its limits, what the line's device does with a file, and the files that your lines receive. Read it before you send your first file.
+
+## Sending a file
+
+<Steps>
+  <Step title="Create the attachment">
+    [`POST /v1/attachments`](/api-reference/attachments/create-attachment) with the file's `filename`, `content_type` and `size_bytes`. The response contains the attachment `id`, an `upload_url` and the `required_headers` of the upload.
+  </Step>
+  <Step title="Upload the file">
+    Send the bytes with one HTTP `PUT` to `upload_url`, with the headers of `required_headers`, before `upload_expires_at`: 15 minutes after the create call.
+  </Step>
+  <Step title="Wait until the attachment is ready">
+    Read [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment) until `status` is `ready`. iSnap checks for the uploaded file every 30 seconds.
+  </Step>
+  <Step title="Send it">
+    Pass the `id` in the `attachments` of [`POST /v1/messages`](/api-reference/messages/send-message). Send one attachment per message.
+  </Step>
+</Steps>
+
+<CodeGroup>
+
+```bash curl
+# 1. Create the attachment, and keep its id and upload_url.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the file: reuse it to retry.
+CREATED=$(curl -sS https://api.isnap.ai/v1/attachments \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"filename":"receipt.pdf","content_type":"application/pdf","size_bytes":48213}')
+ATTACHMENT_ID=$(echo "$CREATED" | jq -r '.data.id')
+UPLOAD_URL=$(echo "$CREATED" | jq -r '.data.upload_url')
+
+# 2. Upload the file to upload_url, with the required_headers of the response.
+#    This request goes to the upload URL: do not send your API key with it.
+curl -sS -X PUT "$UPLOAD_URL" \
+  -H "content-type: application/pdf" \
+  -H "content-length: 48213" \
+  --data-binary @receipt.pdf
+
+# 3. Read the attachment, and repeat until its status is ready.
+curl -sS "https://api.isnap.ai/v1/attachments/$ATTACHMENT_ID" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+
+# 4. Send it. One key per call: generate a new one for the message.
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
+curl -sS https://api.isnap.ai/v1/messages \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{
+    "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+    "to": "+14155550123",
+    "body": "Your receipt is attached.",
+    "attachments": ["'"$ATTACHMENT_ID"'"]
+  }'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { GoneError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const bytes = new Uint8Array(await readFile('receipt.pdf'))
+
+// 1. Create the attachment. Until the file is uploaded, and before upload_expires_at, a retry with
+//    the same key returns the same attachment.
+const attachmentKey = randomUUID() // Store it with your record of the file: reuse it to retry.
+const created = await client.attachments.create(
+  { filename: 'receipt.pdf', content_type: 'application/pdf', size_bytes: bytes.byteLength },
+  { idempotencyKey: attachmentKey }
+)
+
+// 2. Upload with one PUT and the headers that iSnap returned. No API key goes to this URL.
+const upload = await fetch(created.upload_url, {
+  method: 'PUT',
+  headers: created.required_headers,
+  body: bytes
+})
+if (!upload.ok) throw new Error(`The upload was refused with HTTP ${upload.status}`)
+
+// 3. Wait until the attachment is ready: iSnap checks for the file every 30 seconds.
+let status = created.status
+try {
+  for (let poll = 0; poll < 30 && status !== 'ready' && status !== 'failed'; poll++) {
+    await new Promise(resolve => setTimeout(resolve, 10_000))
+    status = (await client.attachments.get(created.id)).status
+  }
+} catch (err) {
+  if (err instanceof GoneError && err.code === 'attachment_expired') {
+    throw new Error(`Attachment ${created.id} expired: create it again`)
+  }
+  throw err
+}
+if (status !== 'ready') {
+  // failed: create the attachment again. Still waiting: keep the id and read it again later.
+  throw new Error(`Attachment ${created.id} is ${status}`)
+}
+
+// 4. Send it, one attachment per message.
+const idempotencyKey = randomUUID() // Store it with your record of the message: reuse it to retry.
+const message = await client.messages.send(
+  {
+    line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+    to: '+14155550123',
+    body: 'Your receipt is attached.',
+    attachments: [created.id]
+  },
+  { idempotencyKey }
+)
+console.log(message.id, message.status)
+```
+
+```python Python
+import os
+import time
+import uuid
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+with open("receipt.pdf", "rb") as file:
+    data = file.read()
+
+# 1. Create the attachment. Until the file is uploaded, and before upload_expires_at, a retry with
+#    the same key returns the same attachment.
+attachment_key = str(uuid.uuid4())  # Store it with your record of the file: reuse it to retry.
+response = requests.post(
+    f"{API}/v1/attachments",
+    headers={**HEADERS, "Idempotency-Key": attachment_key},
+    json={"filename": "receipt.pdf", "content_type": "application/pdf", "size_bytes": len(data)},
+    timeout=30,
+)
+response.raise_for_status()
+created = response.json()["data"]
+
+# 2. Upload with one PUT and the headers that iSnap returned. No API key goes to this URL.
+upload = requests.put(created["upload_url"], headers=created["required_headers"], data=data, timeout=300)
+upload.raise_for_status()
+
+# 3. Wait until the attachment is ready: iSnap checks for the file every 30 seconds.
+status = created["status"]
+for _ in range(30):
+    if status in ("ready", "failed"):
+        break
+    time.sleep(10)
+    current = requests.get(f"{API}/v1/attachments/{created['id']}", headers=HEADERS, timeout=30)
+    if current.status_code == 410:
+        # attachment_expired: create the attachment again.
+        raise SystemExit(f"Attachment {created['id']} expired")
+    current.raise_for_status()
+    status = current.json()["data"]["status"]
+if status != "ready":
+    # failed: create the attachment again. Still waiting: keep the id and read it again later.
+    raise SystemExit(f"Attachment {created['id']} is {status}")
+
+# 4. Send it, one attachment per message.
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the message: reuse it to retry.
+response = requests.post(
+    f"{API}/v1/messages",
+    headers={**HEADERS, "Idempotency-Key": idempotency_key},
+    json={
+        "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+        "to": "+14155550123",
+        "body": "Your receipt is attached.",
+        "attachments": [created["id"]],
+    },
+    timeout=30,
+)
+response.raise_for_status()
+message = response.json()["data"]
+print(message["id"], message["status"])
+```
+
+</CodeGroup>
+
+The SDK also has a helper, `attachments.upload`, that runs the first three steps. Its default wait can end before iSnap sees an upload that succeeded: see [The attachments helper](/sdk/reference#the-attachments-helper).
+
+## Creating an attachment
+
+[`POST /v1/attachments`](/api-reference/attachments/create-attachment) takes:
+
+| Field | Rule |
+| --- | --- |
+| `filename` | 1 to 255 characters. The contact sees this name. |
+| `content_type` | 1 to 100 characters. iSnap accepts any value: there is no list of allowed or refused types. |
+| `size_bytes` | An integer of 1 or more, at most 5,368,709,120 bytes (5 GiB). A larger value returns `413 attachment_exceeds_storage_limit`. |
+
+The response is `201` with `id`, `upload_url`, `upload_expires_at`, `required_headers`, `status: awaiting_upload` and `warnings`. Above 100,000,000 bytes the call succeeds, and `warnings` holds `large_attachment_may_delay_delivery`.
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "att_Q4vTn7Bw9Rz3Lc6Yp1Hd8Xk2m",
+    "upload_url": "<signed upload URL>",
+    "upload_expires_at": "2026-10-08T14:37:57.392Z",
+    "required_headers": {
+      "content-type": "application/pdf",
+      "content-length": "48213"
+    },
+    "status": "awaiting_upload",
+    "warnings": []
+  },
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "request_id": "req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv"
+}
+```
+
+An attachment belongs to your account, not to a line. A [line-scoped key](/authentication#line-scoped-keys) can create attachments, and read every attachment of the account.
+
+The operation honors `Idempotency-Key`, and the key belongs to your account. While the first attachment is still `awaiting_upload` and before its deadline, a repeat with the same key returns the same `id`, with a new `upload_url` and a new 15-minute deadline. The body of the repeat is not compared with the first. In any other state, the key returns `409 idempotency_terminal_state`: create the attachment again with a new key. See [Attachments](/idempotency#attachments) in Idempotency.
+
+## Uploading the file
+
+Upload the bytes with one HTTP `PUT` to `upload_url`, with the headers listed in `required_headers` (`content-type` and `content-length`), before `upload_expires_at`. The file goes to that URL and does not pass through the iSnap API: do not send your API key with it.
+
+iSnap does not compare the uploaded bytes with the `size_bytes` and the `content_type` you declared. The attachment, and the messages that carry it, show the values you declared. An audio file is the exception: see [Audio files](#audio-files).
+
+## Statuses
+
+| `status` | Meaning |
+| --- | --- |
+| `awaiting_upload` | The attachment is created, and iSnap has not seen the file yet. |
+| `transcoding` | iSnap is converting an audio file. |
+| `ready` | The file can be sent and downloaded. |
+| `failed` | No file arrived before the upload deadline, or the audio conversion failed. |
+| `expired` | 72 hours have passed since the attachment was created. `GET /v1/attachments/{id}` then returns `410 attachment_expired`, not the attachment. |
+
+iSnap checks for the uploaded file every 30 seconds. When it finds the file, `status` changes from `awaiting_upload` to `ready`, or to `transcoding` for an audio file, and `uploaded_at` is set. When no file is there at the upload deadline, `status` becomes `failed`: create the attachment again. No event announces these changes: read the attachment with `GET /v1/attachments/{id}`.
+
+Wait for `status: ready` before you send an attachment. iSnap does not check the status when it accepts a send. An attachment that is not `ready` when the line's device takes the message is left out of the message, without an error: an upload not finished, an audio file still converting, a `failed` attachment and an `expired` one alike. The message goes out without that file. When the message has no `body`, iSnap does not define what the line's device does with it.
+
+## Audio files
+
+iSnap converts every file whose `content_type` starts with `audio/` to a mono CAF file before it is `ready`. After the conversion, the attachment reads `content_type: audio/x-caf`, `size_bytes` is the size of the converted file, and `duration_ms` is its duration in milliseconds. `duration_ms` is `null` on every other file.
+
+An audio file larger than 52,428,800 bytes (50 MiB), or one that iSnap fails to convert after 3 attempts, becomes `failed`.
+
+A send with one audio attachment and no `body` is a voice note: see [Voice notes](#voice-notes).
+
+## Downloading a file
+
+[`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment) returns `id`, `filename`, `content_type`, `size_bytes`, `status`, `download_url`, `download_expires_at`, `duration_ms`, `created_at`, `uploaded_at`, `expires_at` and `warnings`.
+
+- `download_url` is a signed URL, valid 15 minutes, until `download_expires_at`. It is set only when `status` is `ready`: otherwise it and `download_expires_at` are `null`. Call the operation again for a new URL.
+- `uploaded_at` is `null` until iSnap has seen the file.
+- An API key of your account can read the attachments that the account created, and the files received on the inbound messages of its lines. Any other id returns `404 not_found`.
+
+The message object lists its files in `attachments`, each as `{ id, content_type, filename, size_bytes, duration_ms }`, with no download URL: read each one with this operation.
+
+## Retention
+
+An attachment expires 72 hours after `POST /v1/attachments` created it, at `expires_at`, whether or not it was uploaded or sent. From then on, `GET /v1/attachments/{id}` returns `410 attachment_expired`, and iSnap deletes the file. iSnap keeps the record of the attachment, with its file name, content type and size.
+
+Create an attachment close to the send that uses it. A held message whose attachment expires before the message leaves goes out without it.
+
+## How the device sends a file
+
+This section describes iMessage lines. iSnap makes no statement on this page about what the device of an Android line does with a file.
+
+- **One file per message.** The line's device sends only the first attachment of a message. The other files are not sent, and the message is still reported `sent`. Send one attachment per message.
+- **Download.** The device downloads every file of the message before it sends it, with 3 attempts per file. A file that it cannot download within 5 minutes, or whose link expired, makes the whole message fail.
+- **Caption.** The `body` of the message can arrive as a caption in the same bubble as the file, or as a separate message after the file. Write a `body` that reads well both ways.
+- **Conversion.** The device can send the file unchanged, or convert it first, by file extension:
+
+| File | What the device does |
+| --- | --- |
+| Images: `jpg`, `jpeg`, `png`, `gif`, `heic`, `heif`, `bmp`, `tif`, `tiff`, `webp` | Re-encoded as JPEG. An animated `gif` or a transparent `png` can arrive as a still image. |
+| Videos in a `mov`, `mp4` or `m4v` file, with `H.264` or `HEVC` video and `AAC` audio or no audio, up to 1 GiB | Sent unchanged. |
+| Other videos | Converted to `H.264` and `AAC` in an `mp4` file of at most 1920x1080. |
+| Audio | Converted to mono `AAC` at 64 kbit/s, in an `m4a` file named `Audio Message.m4a`. |
+| Any other file | Sent unchanged. |
+
+A file sent as SMS or RCS can be converted, and its caption can arrive separately. A conversion has 30 seconds: when it fails, the device tries the send once more, then the message fails. The contact sees the original file name; after a conversion its extension changes, so that `photo.heic` arrives as `photo.jpg`.
+
+An [effect](/guides/sending-messages#effects) is never applied to a message that carries an attachment: the message goes out without it.
+
+### Voice notes
+
+A send with no `body` and exactly one attachment whose content type starts with `audio/` is a voice note, with `kind: voice`. The line's device sends it as a voice message when it supports voice notes: rented iMessage lines do, and a BYOD line does when `reactions_out` is `active` on [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health). Otherwise the voice note fails. To send the same audio file as an ordinary attachment, add a `body`.
+
+- When there is no Messages conversation with the contact on the device, and the device cannot open one, it sends the voice note as an ordinary audio file.
+- To a contact who is not on iMessage, it goes as an audio file over SMS or RCS when the line has that route, and fails when it does not. See [Services and fallback](/guides/sending-messages#services-and-fallback).
+- Audio that the device cannot turn into a voice message makes the voice note fail.
+- A voice note is never shown as a threaded reply, and `use_typing_indicator` has no effect on it.
+
+## Inbound attachments
+
+The files received with an inbound message are listed in its `attachments`. Read each one with [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment), which returns its `download_url` once it is `ready`. A received file cannot go in the `attachments` of `POST /v1/messages`: its id returns `404 not_found`.
+
+A received file expires 72 hours after iSnap registered it, at `expires_at`. Copy it to your own storage before then: after it, `GET /v1/attachments/{id}` returns `410 attachment_expired`.
+
+What the line's device does with a received file:
+
+- It uploads the file unchanged: a `heic` photo stays `heic`, and a voice message arrives as an `audio/x-caf` file. A file whose type the device cannot name has the content type `application/octet-stream`.
+- It accepts at most 20 files per message, of at most 5 GiB each.
+- It reports the message only after every file is uploaded. It waits up to 60 seconds per file for Apple to finish downloading it, and makes up to 3 upload attempts. The later messages of the line wait meanwhile.
+- When one file is not available within 60 seconds, or cannot be uploaded, the device does not report the message at all: the text is lost with the file, and no event is sent.
+- A sticker that a contact places on a message arrives as a received message that carries the sticker file, not as a reaction.
+
+## Errors
+
+The refusals of each operation are on its reference page: [`POST /v1/attachments`](/api-reference/attachments/create-attachment) and [`GET /v1/attachments/{id}`](/api-reference/attachments/get-attachment). An attachment id that a send cannot use is refused by [`POST /v1/messages`](/api-reference/messages/send-message). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+Files and their names can hold personal data: a photo, a document, the name of a person in a file name. Request a file only when needed, and do not copy it, its name or its URLs into logs, tickets or other tools. Treat `upload_url` and `download_url` as secrets for as long as they are valid.

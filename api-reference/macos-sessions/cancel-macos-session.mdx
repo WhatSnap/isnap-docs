@@ -1,0 +1,20 @@
+---
+title: "Cancel a hosted macOS session at its next anniversary"
+description: "Schedules the end of the rental of a hosted macOS session at its next anniversary."
+openapi: "POST /v1/macos-sessions/{id}/cancel"
+---
+
+- **Credential:** an API key of the account that rents the session. Every other account receives `404 macos_session_not_found`, never `403`. See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **`Idempotency-Key`:** not honored. A second cancel is safe: it returns the same `cancel_at`.
+- **Events:** none. `macos_session.released` is sent when iSnap releases the session: see [Events](/guides/hosted-macos-sessions#events).
+- **Effect:** sets `cancel_at` to the next occurrence of the anniversary day and time strictly after the call. The session works until then, and iSnap releases it afterward: see [Canceling and keeping a session](/guides/hosted-macos-sessions#canceling-and-keeping-a-session).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `mcs_` followed by 25 letters or digits. |
+| 404 | `macos_session_not_found` | The session is unknown, released, or rented by another account. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

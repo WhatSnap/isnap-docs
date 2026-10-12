@@ -1,0 +1,500 @@
+---
+title: "Delivery guarantees"
+description: "States what iSnap guarantees when it delivers an event: duplicates, order, retries, suspension, replays, secret rotation and retention."
+---
+
+This page states what iSnap guarantees when it delivers an event to your endpoint, and what it does
+not. Read it before you decide how your receiver deduplicates, orders and recovers events. Each rule
+is stated here once: the other pages link to it.
+
+## What is guaranteed
+
+- **At least once, while the subscription stays active.** iSnap sends a recorded event to each
+  subscription it matched until your endpoint returns `2xx` or `410`, or the attempts run out. A
+  delivery can end before its attempts run out: when the subscription is turned off or deleted, when
+  its URL is refused, when iSnap would resend it after a suspension or a stall more than 24 hours
+  after its creation, and when it waits or stalls again after iSnap resent it 3 times.
+  See [Success and failure](#success-and-failure) and [Suspension](#suspension). A delivery that ends
+  `failed` can be [replayed](#replays) while its record exists, and its event read from the
+  [events feed](/webhooks/pulling-events). An event can be delivered more than once.
+- **An event is recorded only if it matches an active subscription when it occurs.** An event that
+  matches no active subscription at that moment is never delivered and never listed.
+- **An event can be lost**: see
+  [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+- **No delay is promised.** The API does not bound the delay between a change and the first attempt.
+
+The resource operations are the source of truth. Use events to act fast, and reconcile from the
+API: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+## Duplicates
+
+Deduplicate on `event_id`. It is the same value as the `webhook-id` header, and it is the same on
+every attempt, on a replay, and for every subscription that receives the event.
+
+The same event reaches you more than once when:
+
+- your endpoint processed a request but returned its response after 10 seconds;
+- iSnap resends a delivery after a suspension ends, or after it recovers a delivery that stalled;
+- you replay a delivery;
+- two of your subscriptions have the same URL and both match the event;
+- a line that is not a BYOD line stays offline: its durable
+  [`line.offline`](/webhooks/events/line#line-offline) is delivered again with the same `event_id`.
+
+Never deduplicate on a hash of the body. The first attempt and its scheduled retries send the same
+bytes, but a replay, or a delivery that iSnap resends after a suspension or a stall, can order the
+JSON keys differently. The content is the same, and the signature covers the bytes of each request.
+
+## Order
+
+Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. For
+message events, apply
+[Building the status from events](/guides/sending-messages#building-the-status-from-events).
+
+Deliveries are sent concurrently and retried independently, so events can arrive in any order, two
+events about the same message included. The `created_at` of the envelope is the time iSnap recorded
+the event, not the time the change happened.
+
+## Success and failure
+
+An attempt succeeds when your endpoint returns a status from `200` to `299` within 10 seconds. iSnap
+does not interpret the response body, but it keeps its first 1,024 characters in the
+[delivery record](#delivery-records), readable with any API key of your account: return an empty
+body.
+
+Every other outcome is a failed attempt:
+
+- a `3xx` status: iSnap never follows a redirect;
+- a `4xx` status, `400`, `401`, `404` and `429` included;
+- a `5xx` status;
+- no response within 10 seconds;
+- a host that does not resolve, a connection error, or a TLS error.
+
+A failed attempt is retried, except after a `410`. iSnap ignores a `Retry-After` header.
+
+Four outcomes end a delivery without another attempt:
+
+| Outcome | Delivery `status` | Effect on the subscription |
+| --- | --- | --- |
+| Your endpoint returns `2xx` within 10 seconds. | `success` | `failure_count` returns to 0. |
+| Your endpoint returns `410`. | `failed` | It becomes inactive: see [A 410 response](#a-410-response). |
+| The URL is refused when the attempt is about to be sent, because it points to a non-public address. | `failed`, no request sent | It is suspended immediately: see [Suspension](#suspension). |
+| The subscription is inactive. | `failed`, no request sent | None. |
+
+## Retries
+
+A retry schedule has at most 7 attempts. Each delay is counted from the previous attempt. A delivery
+that iSnap resends after a suspension or a stall starts a new schedule, so one delivery can have more
+than 7 attempts in all.
+
+| Attempt | Delay after the previous attempt |
+| --- | --- |
+| 1 | None |
+| 2 | 30 seconds |
+| 3 | 1 minute |
+| 4 | 5 minutes |
+| 5 | 30 minutes |
+| 6 | 2 hours |
+| 7 | 12 hours |
+
+The delays add up to 14 hours 36 minutes 30 seconds, so the 7th attempt starts at least that long
+after the first.
+
+- Every attempt carries the same `webhook-id` and a new `webhook-timestamp` and signature.
+- A new `url` set with `PATCH /v1/webhooks/{id}` applies to every request not sent before the change,
+  pending retries included.
+- When the 7th attempt fails, the delivery ends `failed` and the `failure_count` of the subscription
+  rises by 1.
+- A delivery that stays `pending` with no attempt scheduled is resent by iSnap, with a full new
+  schedule, if it was created less than 24 hours earlier. Past 24 hours it ends `failed`. It can
+  also end `failed` when it stalls again after iSnap resent it 3 times. In both cases its
+  `response_body_snippet` starts with `abandoned:`, and you can replay it while its record exists.
+
+An outage of your endpoint shorter than 14 hours 36 minutes 30 seconds does not by itself suspend the
+subscription: the deliveries created during the outage keep their remaining attempts, on the
+schedule above. Read the [events feed](/webhooks/pulling-events) to catch up without waiting for
+them.
+
+## Suspension
+
+iSnap suspends a subscription in two cases:
+
+| Cause | When |
+| --- | --- |
+| `failure_count` reaches 10. | `failure_count` is the number of consecutive deliveries that used all their attempts without a `2xx`. Each of these deliveries first runs its full retry schedule. |
+| The URL is refused when an attempt is about to be sent, because it points to a non-public address. | Immediately. `failure_count` does not change. |
+
+`failure_count` counts deliveries, not attempts. One successful delivery, or one successful probe,
+resets it to 0. `last_success_at` is the time of the last `2xx`, from a delivery or a probe.
+`last_failure_at` is the time of the last delivery that used all its attempts, the last `410`, or
+the last refused URL. Both are `null` until the first such outcome. These three fields are returned
+by [`POST /v1/webhooks`](/api-reference/webhooks/create-webhook) and
+[`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) only.
+
+### While a subscription is suspended
+
+- A delivery that was already created waits: no request is sent, its `status` stays `pending`, and
+  its `next_retry_at` becomes `null`.
+- iSnap sends a [probe](/webhooks/events/webhook#webhook-test): a signed `webhook.test` request. Two
+  probes are at least 15 minutes apart. The first is sent within 15 minutes of the suspension,
+  unless the subscription was already probed in the 15 minutes before it.
+- A subscription whose URL is refused is not probed until the URL passes the check again: after you
+  change it with `PATCH /v1/webhooks/{id}`, or after its host resolves to a public address again.
+
+<Warning>
+  The events that occur while a subscription is suspended are lost for it. They are not recorded,
+  they are not delivered after it resumes, they cannot be replayed, and they are absent from the
+  events feed unless another active subscription of your account matched them. After a suspension,
+  reconcile from the resource operations.
+</Warning>
+
+### How a suspension ends
+
+A `2xx` response to a probe, received within 10 seconds, resumes the subscription: `failure_count`
+returns to 0 and `last_success_at` is set. Any other response, a redirect, a timeout or a network
+error leaves it suspended.
+
+No operation resumes a suspended subscription. `PATCH /v1/webhooks/{id}` with `active: true`, and a
+change of URL, do not end a suspension: only a successful probe does.
+
+After the subscription resumes, iSnap resends each delivery that waited, with a full new retry
+schedule that starts at attempt 1. The API does not bound the delay between the resume and the
+resend. There are two exceptions:
+
+- a delivery created more than 24 hours before the time iSnap would resend it ends `failed`, with
+  `response_body_snippet` set to `abandoned: older than 24h`;
+- a delivery that iSnap already resent 3 times can end `failed` instead, with
+  `response_body_snippet` set to `abandoned: rescued 3 times`.
+
+You can replay such a delivery while its record exists. The events that occurred during the
+suspension are not sent.
+
+### How to detect a suspension
+
+No field says that a subscription is suspended, and no event announces it. A suspended subscription
+still reads `active: true`. Use these signs:
+
+| Sign | Where you see it |
+| --- | --- |
+| Your endpoint receives a `webhook.test` request, with the header `X-iSnap-Probe: 1`. | In your receiver. A probe is sent only to a suspended subscription. |
+| `failure_count` is 10 or more. | [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks). A suspension for a refused URL does not move this counter. |
+| Deliveries stay `pending` with `next_retry_at: null`. | [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) with `status=pending`. |
+
+To avoid a suspension, monitor the failures of your endpoint, and check that the host of your URL
+keeps resolving to a public address.
+
+## A 410 response
+
+A `410` response to a delivery ends that delivery `failed` and sets the subscription to
+`active: false` immediately. It does not change `failure_count`.
+
+An inactive subscription is not probed. Turn it on again with
+[`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook) and `active: true`. The events
+that occurred while it was inactive are lost for it.
+
+A `410` response to a probe has no special effect: the subscription stays suspended.
+
+## Turning off and changing a subscription
+
+[`PATCH /v1/webhooks/{id}`](/api-reference/webhooks/update-webhook) accepts any subset of `url`,
+`events`, `line_ids`, `description` and `active`. A body with none of them returns
+`400 validation_failed`.
+
+| Field | Effect |
+| --- | --- |
+| `active: false` | Stops new deliveries. A delivery that was already created ends `failed` at its next attempt, without a request, with `response_body_snippet` set to `not sent: subscription inactive`. It does not count in `failure_count`. Replay it after you set `active: true`: a replay sent while the subscription is inactive ends `failed` the same way. |
+| `active: true` | Resumes the subscription for the events that occur afterward. Nothing that occurred in between is sent. It does not end a [suspension](#suspension). |
+| `url` | The new URL passes the same checks as on create, and applies to every request not sent before the change, pending retries included. |
+| `events` | Replaces the whole event filter. The new filter applies to the events recorded afterward: the deliveries that already exist are still sent. |
+| `line_ids` | An array replaces the line filter. `null` removes it. |
+| `description` | A text of 255 characters at most, or `null`. |
+
+## Replays
+
+[`POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay`](/api-reference/webhooks/replay-webhook-delivery)
+creates a new delivery of the event of a finished delivery. A replay targets a delivery of a
+subscription, not an event id.
+
+| Rule | Detail |
+| --- | --- |
+| Which deliveries | Only a delivery whose `status` is `success` or `failed`. A `pending` delivery returns `422 delivery_not_terminal`. |
+| Result | The call returns `202` with `delivery_id`, `replay_of` and `status: "pending"`. The new delivery has a new id, the same `event_id` and the same content. |
+| How it is sent | To the URL the subscription has now, signed with the secret it has now, on the retry schedule above, starting at attempt 1. If it uses all its attempts, `failure_count` rises by 1. |
+| How long | While the record of the delivery exists: at least 72 hours after its creation, and only while its subscription exists. After that the call returns `404 not_found`. |
+| Subscription state | A replay is accepted whatever the state of the subscription. For an inactive subscription the new delivery ends `failed` without a request. For a suspended subscription it waits, like any other delivery: see [How a suspension ends](#how-a-suspension-ends). |
+| Limits | The API sets no limit on the number of replays of one delivery. A replay can itself be replayed. |
+| `503 replay_enqueue_failed` | iSnap could not queue the replay. The new delivery exists with status `failed`: call again. |
+
+A replay records a new delivery of the event at the time of the replay. The events feed lists an
+event at the time of its earliest delivery inside your window: while the first delivery is inside the
+window, a replay does not move the event; otherwise the event is listed at the time of the replay,
+with its original `created_at`. Deduplicate on `event_id`.
+
+The sample replays every event of the last 24 hours whose latest delivery failed. The list returns
+the newest record first, so the first record seen for an `event_id` is its latest delivery.
+
+<CodeGroup>
+
+```bash curl
+# List the failed deliveries of the last 24 hours.
+SINCE=$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+curl -sS -G "https://api.isnap.ai/v1/webhooks/wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6/deliveries" \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  --data-urlencode "status=failed" \
+  --data-urlencode "since=$SINCE" \
+  --data-urlencode "limit=100"
+
+# Replay one of them.
+curl -sS -X POST \
+  "https://api.isnap.ai/v1/webhooks/wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6/deliveries/whd_8Vc3Tq6Lx9Hn2Kb5Wm7Zd4Ry1/replay" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const webhookId = 'wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6'
+const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+// Newest first: the first record seen for an event is its latest delivery.
+const latest = new Map<string, { id: string; status: string }>()
+for await (const delivery of client.webhooks.deliveries(webhookId, { since, limit: 100 })) {
+  if (delivery.event_id && !latest.has(delivery.event_id)) latest.set(delivery.event_id, delivery)
+}
+
+for (const delivery of latest.values()) {
+  if (delivery.status !== 'failed') continue
+  try {
+    const replay = await client.webhooks.replay(webhookId, delivery.id)
+    console.log(`replayed ${delivery.id} as ${replay.delivery_id}`)
+  } catch (err) {
+    // The record was deleted at the end of its retention: nothing to replay.
+    if (err instanceof APIError && err.code === 'not_found') continue
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+import time
+from datetime import datetime, timedelta, timezone
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+WEBHOOK_ID = "wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6"
+
+
+def get(path, params):
+    """A read. Retries a 429 after Retry-After seconds, and a 500 or a 503 up to 2 times."""
+    failures = 0
+    while True:
+        response = requests.get(f"{API}{path}", headers=HEADERS, params=params, timeout=30)
+        if response.status_code == 429:
+            time.sleep(int(response.headers.get("Retry-After", "60")))
+            continue
+        if response.status_code in (500, 503) and failures < 2:
+            failures += 1
+            time.sleep(2**failures)
+            continue
+        response.raise_for_status()
+        return response.json()["data"]
+
+
+since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+params = {"since": since, "limit": 100}
+
+# Newest first: the first record seen for an event is its latest delivery.
+latest = {}
+while True:
+    page = get(f"/v1/webhooks/{WEBHOOK_ID}/deliveries", params)
+    for delivery in page["items"]:
+        latest.setdefault(delivery["event_id"], delivery)
+    if not page["has_more"]:
+        break
+    params["cursor"] = page["next_cursor"]
+
+for delivery in latest.values():
+    if delivery["status"] != "failed":
+        continue
+    url = f"{API}/v1/webhooks/{WEBHOOK_ID}/deliveries/{delivery['id']}/replay"
+    for attempt in range(3):
+        response = requests.post(url, headers=HEADERS, timeout=30)
+        # 503 replay_enqueue_failed: the replay was not queued. Call again, up to 2 times.
+        if response.status_code != 503 or attempt == 2:
+            break
+        time.sleep(2 ** (attempt + 1))
+    if response.status_code == 404:
+        continue  # The record was deleted at the end of its retention: nothing to replay.
+    response.raise_for_status()
+    print("replayed", delivery["id"], "as", response.json()["data"]["delivery_id"])
+```
+
+</CodeGroup>
+
+A replay does not honor `Idempotency-Key`: a call sent twice creates two deliveries of the same
+event. Your deduplication on `event_id` absorbs them.
+
+## Secret rotation
+
+[`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/rotate-webhook-secret) replaces the
+signing secret and returns `200` with `id`, `secret` and `old_secret_expires_at`.
+
+- **The rotation takes effect immediately.** Every request sent after it is signed with the new
+  secret only: first attempts, retries of deliveries created before the rotation, replays and probes.
+- **There is no overlap.** After a rotation iSnap never signs with the previous secret, and it never
+  sends two signatures.
+- **`old_secret_expires_at` is informational.** It is the time of the rotation plus 5 minutes, and
+  it has no effect on what iSnap sends.
+- **The new secret is returned once.** No other operation returns it.
+
+Rotate in this order, so that no delivery is refused for long:
+
+<Steps>
+  <Step title="Make your receiver accept a list of secrets">
+    Verify each request against every secret of the list, and accept it when one matches. With the
+    SDK, pass an array as the third argument of `verifyWebhook`.
+  </Step>
+  <Step title="Rotate, and store the new secret">
+    Call the operation once. Do not retry it blindly: it does not honor `Idempotency-Key`, and a
+    second call replaces the secret again. If you lose the response, rotate again.
+  </Step>
+  <Step title="Add the new secret to the list immediately">
+    Between the rotation and this step, your receiver cannot verify the requests iSnap sends. Return
+    a status outside `2xx` for a signature you cannot verify: iSnap retries the delivery on the
+    [schedule](#retries).
+  </Step>
+  <Step title="Remove the previous secret after old_secret_expires_at">
+    Keeping the previous secret until then covers a request that iSnap signed just before the
+    rotation and that is still in transit.
+  </Step>
+</Steps>
+
+The response contains the signing secret: run the command where its output is not logged, and store
+the secret in your secret manager.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST \
+  "https://api.isnap.ai/v1/webhooks/wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6/rotate-secret" \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// maxRetries: 0, because a retry after a lost response would rotate the secret a second time.
+const rotation = await client.webhooks.rotateSecret('wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6', { maxRetries: 0 })
+console.log(`previous secret can be removed after ${rotation.old_secret_expires_at}`)
+// Store rotation.secret in your secret manager now: no other call returns it.
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+response = requests.post(
+    f"{API}/v1/webhooks/wh_3Kp8Rn9Fh2Lm5Qx7Vw1Yz4Bc6/rotate-secret",
+    headers=HEADERS,
+    timeout=30,
+)
+response.raise_for_status()
+rotation = response.json()["data"]
+print("previous secret can be removed after", rotation["old_secret_expires_at"])
+# Store rotation["secret"] in your secret manager now: no other call returns it.
+```
+
+</CodeGroup>
+
+## Delivery records
+
+[`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) lists the
+delivery records of a subscription. A record describes one delivery: one event for one subscription.
+It is updated at each attempt, so it shows the latest attempt, not a history of attempts.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `id` | string | No | The id of the delivery (`whd_`). |
+| `webhook_id` | string | No | The id of the subscription (`wh_`). |
+| `event_id` | string | No | The `event_id` of the event. |
+| `event_type` | string | No | The event type. |
+| `attempt_number` | integer | No | 0 before the first attempt, then the number of the latest attempt, from 1 to 7. It restarts at 1 when iSnap resends the delivery after a suspension or a stall. |
+| `status` | string | No | `pending`, `success` or `failed`: see the table below. |
+| `request_headers` | object | Yes | The headers of the latest attempt, with `webhook-signature` replaced by `[redacted]`. `null` before the first attempt. Its `X-iSnap-Webhook-Id` is an opaque identifier of the subscription, not its `wh_` id: do not rely on it. |
+| `request_body_snippet` | string | Yes | The first 1,024 characters of the body of the latest attempt, recorded even when no request was sent because the URL was refused or its host did not resolve. `null` before the first attempt. |
+| `response_status` | integer | Yes | The HTTP status of the latest attempt. `null` when no HTTP response was received: a network error, a timeout, a redirect, a refused URL, or no request sent. |
+| `response_body_snippet` | string | Yes | The first 1,024 characters of the response of your endpoint. In four cases where no request was sent, a note written by iSnap: see below. `null` when there is nothing to show, which includes a delivery whose URL was refused or whose host did not resolve. |
+| `delivered_at` | string | Yes | The time the delivery succeeded. `null` otherwise. |
+| `next_retry_at` | string | Yes | The time of the next attempt while a retry is scheduled. `null` before the first attempt, once the delivery has ended, and while it waits for a suspension to end. |
+| `replay_of` | string | Yes | The id of the delivery this one replays. `null` for an original delivery, and once the record of the original is deleted. |
+| `created_at` | string | No | The time the delivery was created. |
+
+| `status` | Meaning |
+| --- | --- |
+| `pending` | Not sent, waiting for a retry, or waiting for a suspension to end. |
+| `success` | A `2xx` response was received. |
+| `failed` | The delivery ended without a `2xx` response. |
+
+In four cases where no request was sent, `response_body_snippet` contains a note written by iSnap,
+not a response of your endpoint:
+
+| Note | Meaning |
+| --- | --- |
+| `not sent: subscription inactive` | The subscription was inactive when the attempt was due. |
+| `abandoned: older than 24h` | iSnap found the delivery waiting or stalled more than 24 hours after its creation. |
+| `abandoned: rescued 3 times` | iSnap resent the delivery 3 times after a suspension or a stall, and stopped. |
+| A note that starts with `replay_enqueue_failed:` | The replay could not be queued: replay the delivery again. |
+
+A delivery whose URL was refused, or whose host did not resolve, has no note: its
+`response_body_snippet` is `null`.
+
+The list takes these parameters:
+
+| Parameter | Value |
+| --- | --- |
+| `limit` | 1 to 100. Default 20. |
+| `cursor` | The `next_cursor` of the previous page. |
+| `status` | `pending`, `success` or `failed`. |
+| `event` | An exact event type, of 100 characters at most. A wildcard is not interpreted. |
+| `since`, `until` | Inclusive bounds on `created_at`. A timestamp in ISO 8601, in UTC, ending with `Z`, such as `2026-10-08T12:00:00Z`. An offset such as `+02:00`, a missing `Z` or a date without a time returns `400 validation_failed`. |
+
+Records are returned newest first. `has_more` says whether another page exists: `next_cursor` is
+then a string, and `null` otherwise. A malformed cursor returns `400 invalid_cursor`. The cursor
+does not carry the filters: send the same filters on every page. See
+[Cursors](/pagination#cursors).
+
+A probe creates no delivery record.
+
+`request_body_snippet` can contain personal data: the beginning of an event, with message text and
+handles. Do not copy delivery records into logs, tickets or other tools.
+
+## Retention
+
+| What | How long |
+| --- | --- |
+| A delivery record | Deleted at least 72 hours after its creation, whatever its status. The API does not bound the delay. A record is deleted earlier when you delete its subscription: see [Deleting a subscription](#deleting-a-subscription). |
+| Replaying a delivery | While its record exists. |
+| An event in the [events feed](/webhooks/pulling-events) | 72 hours after its last delivery, a replay included. |
+
+During these periods, anyone who has an API key of your account, a line-scoped key included, can read
+the full content of each event through the events feed, and the first 1,024 characters of each
+request body and of each response of your endpoint through the delivery list.
+
+## Deleting a subscription
+
+[`DELETE /v1/webhooks/{id}`](/api-reference/webhooks/delete-webhook) returns `204` with no body.
+
+<Warning>
+  Deleting a subscription is permanent. Its secret and its delivery records are deleted with it,
+  the requests not sent are dropped, and the events that only this subscription received leave the
+  events feed. To stop deliveries and keep the records, set `active: false` instead.
+</Warning>

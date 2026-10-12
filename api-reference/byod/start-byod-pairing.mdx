@@ -1,0 +1,23 @@
+---
+title: "Issue a BYOD activation code"
+description: "Issues a single-use activation code, valid for 5 minutes, and the links to the installers of the bridge app."
+openapi: "POST /v1/byod/pair"
+---
+
+- **Credential:** an API key.
+- **Account:** a direct account needs a free BYOD slot. A wholesale partner needs none. See [BYOD slots](/guides/byod#byod-slots).
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Test keys:** a code issued with an `isnap_test_` account key creates a real line: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. A repeated call issues another activation code. See [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+- **Events:** none. `line.connected` is sent when the user completes the pairing in the bridge app: see [Pairing a device](/guides/byod#pairing-a-device).
+- **Secret:** `activation_code` is a credential: see [The activation code is a credential](/guides/byod#the-activation-code-is-a-credential). The response carries `Cache-Control: no-store`, whatever its status.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | A field other than `metadata`, or a `metadata` over 20 keys or 8,192 bytes. |
+| 402 | `payment_required` | A direct account with no BYOD slot: see [BYOD slots](/guides/byod#byod-slots). |
+| 404 | `no_slot_available` | A direct account whose slots are all used by BYOD lines. Terminate a BYOD line to free its slot. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

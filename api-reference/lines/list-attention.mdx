@@ -1,0 +1,18 @@
+---
+title: "List the lines that need attention"
+description: "Lists the lines of your account that have a fault at the time of the call, with the reasons of each BYOD line."
+openapi: "GET /v1/attention"
+---
+
+- **Credential:** an API key.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets only the entries of the lines in its list.
+- **Events:** none.
+- **Personal data:** `phone_number`, the full number of each listed line. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **What is listed:** one entry per line that has a fault. A BYOD line is listed as soon as the fault is seen, with its `reasons`. Any other line is listed once the fault has lasted 15 minutes, with `reasons: []` and `detail_withheld: true`: write to [support@isnap.ai](mailto:support@isnap.ai) with the `line_id` to report it. The meaning of each reason is in [Attention](/guides/managing-lines#attention).
+- **What is not listed:** a `suspended` line is not listed for its suspension. Read each rented or BYOD line whose id you keep with [`GET /v1/lines/{id}`](/api-reference/lines/get-line) to see its `status`.
+- **Pagination:** none. The API does not bound the number of entries.
+- **SDK:** the SDK has no method for this operation. Call it with `client.request('GET', '/v1/attention')`.
+
+## Errors
+
+This operation has no error of its own. The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

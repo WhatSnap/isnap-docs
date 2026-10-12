@@ -1,0 +1,24 @@
+---
+title: "Set the anniversary of a line"
+description: "Records when your account took a line, which sets the day a scheduled cancellation ends it."
+openapi: "POST /v1/lines/{id}/anniversary"
+---
+
+- **Credential:** an API key. See [Anniversary and billing anchor](/guides/managing-lines#anniversary-and-billing-anchor).
+- **Account:** wholesale partners only: a line whose owner is not a wholesale partner returns `409 line_not_wholesale_metered`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **`Idempotency-Key`:** not honored. The call overwrites any earlier value, so the same request sent twice leaves the line in the same state.
+- **Events:** none.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `anniversary_in_the_future` | `anniversary_at` is after the time of the call. |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 403 | `pool_line_not_cancellable` | The line has `billing_tier: shared_pool`: a test line or a dedicated pool line. |
+| 404 | `not_found` | No line has this id, or the line is not yours. |
+| 409 | `line_not_wholesale_metered` | The owner of the line is not a wholesale partner. |
+| 409 | `line_cancellation_pending` | The line has a `cancel_at`. Withdraw it with [`POST /v1/lines/{id}/uncancel`](/api-reference/lines/uncancel-line) first. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

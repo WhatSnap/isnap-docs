@@ -1,0 +1,22 @@
+---
+title: "List messages"
+description: "Lists the inbound and outbound messages that iSnap keeps, newest first, with filters and a cursor."
+openapi: "GET /v1/messages"
+---
+
+- **Credential:** an API key, or a [trial key](/authentication#trial-keys), which lists only the messages of its trial.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets only the messages of the lines of its list. A `line_id` outside the list returns an empty page.
+- **Events:** none.
+- **Personal data:** the items carry handles, message text, attachment file names and `metadata`. Request them only when needed, do not copy them into logs, tickets or other tools, and refer to a contact by an id of your own. See [Personal data](/guides/receiving-messages#personal-data).
+- **Pagination:** a cursor, valid only with the `sort`, `order` and filters it was issued for. A cursor that cannot be read restarts the list from the first page, with `200`. See [Cursors](/pagination#cursors).
+- **Retention:** a message is listed until iSnap deletes it, at least 72 hours after it recorded it. `since` and `until` bound that recording time: see [Timestamps in queries](/pagination#timestamps-in-queries).
+- **Reaction entries:** an item with `kind: reaction` does not say which message it reacts to. See [Listing messages](/guides/receiving-messages#listing-messages).
+- **Rate limit:** this operation and `POST /v1/messages` share the message-operations limit, 60 requests per rolling 60 seconds per network address, in addition to the request-rate limit: see [Rate limits](/errors-and-rate-limits#rate-limits).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | A malformed `line_id`, `status`, `direction`, `kind`, `sort`, `order`, `since`, `until` or `limit`. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

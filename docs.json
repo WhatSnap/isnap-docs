@@ -17,151 +17,69 @@
             "group": "Get started",
             "pages": [
               "introduction",
-              "quickstart"
+              "quickstart",
+              "concepts",
+              "authentication",
+              "ai-agents"
             ]
           },
           {
-            "group": "Guides",
+            "group": "Using the API",
+            "pages": [
+              "pagination",
+              "idempotency",
+              "errors-and-rate-limits"
+            ]
+          },
+          {
+            "group": "Messaging",
             "pages": [
               "guides/sending-messages",
-              "guides/webhooks",
-              "guides/byod-pairing",
-              "guides/trial-onboarding",
-              "guides/apple-flag-events",
-              "guides/best-practices"
-            ]
-          },
-          {
-            "group": "Concepts",
-            "pages": [
-              "concepts/byod-vs-rental",
-              "concepts/channels",
-              "concepts/line-lifecycle",
-              "concepts/trials",
-              "concepts/quotas-and-warming",
-              "concepts/billing",
-              "concepts/deprecation-lifecycle"
-            ]
-          },
-          {
-            "group": "Versioning",
-            "pages": [
-              "versioning"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "API Reference",
-        "groups": [
-          {
-            "group": "API Reference",
-            "pages": [
-              "api-reference/introduction"
-            ]
-          },
-          {
-            "group": "Messages",
-            "pages": [
-              "api-reference/messages/post-messages",
-              "api-reference/messages/get-messages",
-              "api-reference/messages/get-messages-id",
-              "api-reference/messages/post-messages-id-reactions",
-              "api-reference/messages/delete-messages-id-reactions",
-              "api-reference/messages/delete-messages-id"
+              "guides/receiving-messages",
+              "guides/attachments",
+              "guides/conversations",
+              "guides/lookup",
+              "guides/sending-limits"
             ]
           },
           {
             "group": "Lines",
             "pages": [
-              "api-reference/lines/get-lines",
-              "api-reference/lines/get-lines-my",
-              "api-reference/lines/get-lines-id",
-              "api-reference/lines/patch-lines-id",
-              "api-reference/lines/post-lines-assign",
-              "api-reference/lines/post-lines-id-reserve",
-              "api-reference/lines/post-lines-id-activate",
-              "api-reference/lines/post-lines-id-release",
-              "api-reference/lines/post-lines-id-transfer-ownership",
-              "api-reference/lines/get-lines-id-config",
-              "api-reference/lines/patch-lines-id-config",
-              "api-reference/lines/get-lines-id-quota",
-              "api-reference/lines/get-lines-id-queue",
-              "api-reference/lines/get-lines-id-health"
+              "guides/getting-a-line",
+              "guides/pre-orders",
+              "guides/byod",
+              "guides/hosted-macos-sessions",
+              "guides/managing-lines",
+              "guides/trials"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "tab": "Webhooks",
+        "groups": [
           {
             "group": "Webhooks",
             "pages": [
-              "api-reference/webhooks/get-webhooks-events",
-              "api-reference/webhooks/post-webhooks",
-              "api-reference/webhooks/get-webhooks",
-              "api-reference/webhooks/get-webhooks-id",
-              "api-reference/webhooks/patch-webhooks-id",
-              "api-reference/webhooks/delete-webhooks-id",
-              "api-reference/webhooks/post-webhooks-id-rotate-secret",
-              "api-reference/webhooks/get-webhooks-id-deliveries",
-              "api-reference/webhooks/post-webhooks-id-deliveries-delivery_id-replay"
+              "webhooks/overview",
+              "webhooks/event-catalog",
+              "webhooks/verifying-signatures",
+              "webhooks/delivery",
+              "webhooks/pulling-events"
             ]
           },
           {
-            "group": "Lookup",
+            "group": "Events",
             "pages": [
-              "api-reference/lookup/post-lookup"
-            ]
-          },
-          {
-            "group": "Trial",
-            "pages": [
-              "api-reference/trial/post-trial-init",
-              "api-reference/trial/get-trial-status",
-              "api-reference/trial/get-trial-activity"
-            ]
-          },
-          {
-            "group": "BYOD",
-            "pages": [
-              "api-reference/byod/post-byod-pair"
-            ]
-          },
-          {
-            "group": "Attachments",
-            "pages": [
-              "api-reference/attachments/post-attachments",
-              "api-reference/attachments/get-attachments-id"
-            ]
-          },
-          {
-            "group": "Chats",
-            "pages": [
-              "api-reference/chats/post-chats-chat_id-typing",
-              "api-reference/chats/delete-chats-chat_id-typing",
-              "api-reference/chats/post-chats-chat_id-read",
-              "api-reference/chats/post-chats-chat_id-share-contact-card"
-            ]
-          },
-          {
-            "group": "API Keys",
-            "pages": [
-              "api-reference/api-keys/post-api-keys",
-              "api-reference/api-keys/get-api-keys",
-              "api-reference/api-keys/delete-api-keys-id"
-            ]
-          },
-          {
-            "group": "Pre-orders",
-            "pages": [
-              "api-reference/pre-orders/post-pre-orders",
-              "api-reference/pre-orders/get-pre-orders",
-              "api-reference/pre-orders/get-pre-orders-id",
-              "api-reference/pre-orders/post-pre-orders-id-cancel"
-            ]
-          },
-          {
-            "group": "Meta",
-            "pages": [
-              "api-reference/meta/get-health",
-              "api-reference/meta/get-version"
+              "webhooks/events/message",
+              "webhooks/events/reaction",
+              "webhooks/events/typing-indicator",
+              "webhooks/events/line",
+              "webhooks/events/trial",
+              "webhooks/events/pre-order",
+              "webhooks/events/macos-session",
+              "webhooks/events/binding",
+              "webhooks/events/webhook"
             ]
           }
         ]
@@ -170,52 +88,175 @@
         "tab": "SDK",
         "groups": [
           {
-            "group": "SDK",
+            "group": "TypeScript SDK",
             "pages": [
-              "sdk/install",
-              "sdk/auth",
+              "sdk/overview",
+              "sdk/configuration",
               "sdk/errors",
               "sdk/pagination",
-              "sdk/idempotency",
-              "sdk/webhooks-verification",
-              {
-                "group": "Examples",
-                "pages": [
-                  "sdk/examples/send-message",
-                  "sdk/examples/lookup-handle",
-                  "sdk/examples/handle-webhooks"
-                ]
-              }
+              "sdk/webhooks",
+              "sdk/reference"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "sdk/examples/send-message",
+              "sdk/examples/handle-webhooks",
+              "sdk/examples/upload-attachment",
+              "sdk/examples/list-messages"
             ]
           }
         ]
       },
       {
-        "tab": "Changelog",
+        "tab": "API reference",
         "groups": [
           {
-            "group": "Changelog",
+            "group": "API reference",
             "pages": [
+              "api-reference/introduction",
               "changelog"
+            ]
+          },
+          {
+            "group": "Messages",
+            "pages": [
+              "api-reference/messages/send-message",
+              "api-reference/messages/list-messages",
+              "api-reference/messages/get-message",
+              "api-reference/messages/cancel-message",
+              "api-reference/messages/add-reaction",
+              "api-reference/messages/remove-reaction"
+            ]
+          },
+          {
+            "group": "Chats",
+            "pages": [
+              "api-reference/chats/list-chats",
+              "api-reference/chats/get-chat",
+              "api-reference/chats/mark-chat-read",
+              "api-reference/chats/start-typing",
+              "api-reference/chats/stop-typing",
+              "api-reference/chats/share-contact-card"
+            ]
+          },
+          {
+            "group": "Attachments",
+            "pages": [
+              "api-reference/attachments/create-attachment",
+              "api-reference/attachments/get-attachment"
+            ]
+          },
+          {
+            "group": "Recipient lookup",
+            "pages": [
+              "api-reference/lookup/look-up-recipient"
+            ]
+          },
+          {
+            "group": "Lines",
+            "pages": [
+              "api-reference/lines/list-available-lines",
+              "api-reference/lines/get-line",
+              "api-reference/lines/list-my-lines",
+              "api-reference/lines/update-line",
+              "api-reference/lines/reserve-line",
+              "api-reference/lines/activate-line",
+              "api-reference/lines/release-line",
+              "api-reference/lines/assign-line",
+              "api-reference/lines/create-shared-line"
+            ]
+          },
+          {
+            "group": "Line lifecycle",
+            "pages": [
+              "api-reference/lines/terminate-line",
+              "api-reference/lines/cancel-line",
+              "api-reference/lines/uncancel-line",
+              "api-reference/lines/set-line-anniversary",
+              "api-reference/lines/change-line-variant",
+              "api-reference/lines/cancel-variant-change",
+              "api-reference/lines/convert-to-test-line",
+              "api-reference/lines/convert-from-test-line",
+              "api-reference/lines/transfer-line"
+            ]
+          },
+          {
+            "group": "Line configuration and state",
+            "pages": [
+              "api-reference/lines/get-line-config",
+              "api-reference/lines/update-line-config",
+              "api-reference/lines/get-line-sending-limits",
+              "api-reference/lines/get-line-queue",
+              "api-reference/lines/get-line-health",
+              "api-reference/lines/list-attention"
+            ]
+          },
+          {
+            "group": "Webhook subscriptions",
+            "pages": [
+              "api-reference/webhooks/create-webhook",
+              "api-reference/webhooks/list-webhooks",
+              "api-reference/webhooks/get-webhook",
+              "api-reference/webhooks/update-webhook",
+              "api-reference/webhooks/delete-webhook",
+              "api-reference/webhooks/rotate-webhook-secret",
+              "api-reference/webhooks/list-webhook-deliveries",
+              "api-reference/webhooks/replay-webhook-delivery",
+              "api-reference/webhooks/list-webhook-events"
+            ]
+          },
+          {
+            "group": "Trials",
+            "pages": [
+              "api-reference/trials/start-trial",
+              "api-reference/trials/get-trial-status",
+              "api-reference/trials/get-trial-activity",
+              "api-reference/trials/get-trial",
+              "api-reference/trials/update-trial",
+              "api-reference/trials/revoke-trial"
+            ]
+          },
+          {
+            "group": "BYOD",
+            "pages": [
+              "api-reference/byod/start-byod-pairing",
+              "api-reference/byod/get-app-downloads"
+            ]
+          },
+          {
+            "group": "Pre-orders",
+            "pages": [
+              "api-reference/pre-orders/create-pre-order",
+              "api-reference/pre-orders/list-pre-orders",
+              "api-reference/pre-orders/get-pre-order",
+              "api-reference/pre-orders/update-pre-order",
+              "api-reference/pre-orders/confirm-pre-order",
+              "api-reference/pre-orders/cancel-pre-order",
+              "api-reference/pre-orders/list-area-codes"
+            ]
+          },
+          {
+            "group": "Hosted macOS sessions",
+            "pages": [
+              "api-reference/macos-sessions/rent-macos-session",
+              "api-reference/macos-sessions/get-macos-session",
+              "api-reference/macos-sessions/update-macos-session",
+              "api-reference/macos-sessions/cancel-macos-session",
+              "api-reference/macos-sessions/uncancel-macos-session"
+            ]
+          },
+          {
+            "group": "Service",
+            "pages": [
+              "api-reference/service/get-health",
+              "api-reference/service/get-version"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "GitHub",
-          "href": "https://github.com/WhatSnap",
-          "icon": "github"
-        },
-        {
-          "anchor": "Status",
-          "href": "https://status.isnap.ai",
-          "icon": "signal-stream"
-        }
-      ]
-    }
+    ]
   },
   "logo": {
     "light": "/images/logo-light.svg",
@@ -225,7 +266,10 @@
   "api": {
     "openapi": [
       "api-reference/openapi.json"
-    ]
+    ],
+    "playground": {
+      "display": "simple"
+    }
   },
   "appearance": {
     "default": "light",
@@ -253,13 +297,6 @@
   "search": {
     "prompt": "Search the iSnap docs..."
   },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/isnap_ai",
-      "github": "https://github.com/WhatSnap",
-      "linkedin": "https://www.linkedin.com/company/isnap"
-    }
-  },
   "fonts": {
     "heading": {
       "family": "Inter"
@@ -267,5 +304,276 @@
     "body": {
       "family": "Inter"
     }
-  }
+  },
+  "description": "Developer documentation for the iSnap API: send and receive iMessage, RCS and SMS from real devices, manage lines, and receive events by webhook.",
+  "redirects": [
+    {
+      "source": "/api-reference/api-keys/delete-api-keys-id",
+      "destination": "/authentication#api-keys"
+    },
+    {
+      "source": "/api-reference/api-keys/get-api-keys",
+      "destination": "/authentication#api-keys"
+    },
+    {
+      "source": "/api-reference/api-keys/post-api-keys",
+      "destination": "/authentication#api-keys"
+    },
+    {
+      "source": "/api-reference/attachments/get-attachments-id",
+      "destination": "/api-reference/attachments/get-attachment"
+    },
+    {
+      "source": "/api-reference/attachments/post-attachments",
+      "destination": "/api-reference/attachments/create-attachment"
+    },
+    {
+      "source": "/api-reference/byod/post-byod-pair",
+      "destination": "/api-reference/byod/start-byod-pairing"
+    },
+    {
+      "source": "/api-reference/chats/delete-chats-chat_id-typing",
+      "destination": "/api-reference/chats/stop-typing"
+    },
+    {
+      "source": "/api-reference/chats/post-chats-chat_id-read",
+      "destination": "/api-reference/chats/mark-chat-read"
+    },
+    {
+      "source": "/api-reference/chats/post-chats-chat_id-share-contact-card",
+      "destination": "/api-reference/chats/share-contact-card"
+    },
+    {
+      "source": "/api-reference/chats/post-chats-chat_id-typing",
+      "destination": "/api-reference/chats/start-typing"
+    },
+    {
+      "source": "/api-reference/lines/get-lines",
+      "destination": "/api-reference/lines/list-available-lines"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-id",
+      "destination": "/api-reference/lines/get-line"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-id-config",
+      "destination": "/api-reference/lines/get-line-config"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-id-health",
+      "destination": "/api-reference/lines/get-line-health"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-id-queue",
+      "destination": "/api-reference/lines/get-line-queue"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-id-quota",
+      "destination": "/api-reference/lines/get-line-sending-limits"
+    },
+    {
+      "source": "/api-reference/lines/get-lines-my",
+      "destination": "/api-reference/lines/list-my-lines"
+    },
+    {
+      "source": "/api-reference/lines/patch-lines-id",
+      "destination": "/api-reference/lines/update-line"
+    },
+    {
+      "source": "/api-reference/lines/patch-lines-id-config",
+      "destination": "/api-reference/lines/update-line-config"
+    },
+    {
+      "source": "/api-reference/lines/post-lines-assign",
+      "destination": "/api-reference/lines/assign-line"
+    },
+    {
+      "source": "/api-reference/lines/post-lines-id-activate",
+      "destination": "/api-reference/lines/activate-line"
+    },
+    {
+      "source": "/api-reference/lines/post-lines-id-release",
+      "destination": "/api-reference/lines/release-line"
+    },
+    {
+      "source": "/api-reference/lines/post-lines-id-reserve",
+      "destination": "/api-reference/lines/reserve-line"
+    },
+    {
+      "source": "/api-reference/lines/post-lines-id-transfer-ownership",
+      "destination": "/api-reference/lines/transfer-line"
+    },
+    {
+      "source": "/api-reference/lookup/post-lookup",
+      "destination": "/api-reference/lookup/look-up-recipient"
+    },
+    {
+      "source": "/api-reference/messages/delete-messages-id",
+      "destination": "/api-reference/messages/cancel-message"
+    },
+    {
+      "source": "/api-reference/messages/delete-messages-id-reactions",
+      "destination": "/api-reference/messages/remove-reaction"
+    },
+    {
+      "source": "/api-reference/messages/get-messages",
+      "destination": "/api-reference/messages/list-messages"
+    },
+    {
+      "source": "/api-reference/messages/get-messages-id",
+      "destination": "/api-reference/messages/get-message"
+    },
+    {
+      "source": "/api-reference/messages/post-messages",
+      "destination": "/api-reference/messages/send-message"
+    },
+    {
+      "source": "/api-reference/messages/post-messages-id-reactions",
+      "destination": "/api-reference/messages/add-reaction"
+    },
+    {
+      "source": "/api-reference/meta/get-health",
+      "destination": "/api-reference/service/get-health"
+    },
+    {
+      "source": "/api-reference/meta/get-version",
+      "destination": "/api-reference/service/get-version"
+    },
+    {
+      "source": "/api-reference/pre-orders/get-pre-orders",
+      "destination": "/api-reference/pre-orders/list-pre-orders"
+    },
+    {
+      "source": "/api-reference/pre-orders/get-pre-orders-id",
+      "destination": "/api-reference/pre-orders/get-pre-order"
+    },
+    {
+      "source": "/api-reference/pre-orders/post-pre-orders",
+      "destination": "/api-reference/pre-orders/create-pre-order"
+    },
+    {
+      "source": "/api-reference/pre-orders/post-pre-orders-id-cancel",
+      "destination": "/api-reference/pre-orders/cancel-pre-order"
+    },
+    {
+      "source": "/api-reference/trial/get-trial-activity",
+      "destination": "/api-reference/trials/get-trial-activity"
+    },
+    {
+      "source": "/api-reference/trial/get-trial-status",
+      "destination": "/api-reference/trials/get-trial-status"
+    },
+    {
+      "source": "/api-reference/trial/post-trial-init",
+      "destination": "/api-reference/trials/start-trial"
+    },
+    {
+      "source": "/api-reference/webhooks/delete-webhooks-id",
+      "destination": "/api-reference/webhooks/delete-webhook"
+    },
+    {
+      "source": "/api-reference/webhooks/get-webhooks",
+      "destination": "/api-reference/webhooks/list-webhooks"
+    },
+    {
+      "source": "/api-reference/webhooks/get-webhooks-events",
+      "destination": "/api-reference/webhooks/list-webhook-events"
+    },
+    {
+      "source": "/api-reference/webhooks/get-webhooks-id",
+      "destination": "/api-reference/webhooks/get-webhook"
+    },
+    {
+      "source": "/api-reference/webhooks/get-webhooks-id-deliveries",
+      "destination": "/api-reference/webhooks/list-webhook-deliveries"
+    },
+    {
+      "source": "/api-reference/webhooks/patch-webhooks-id",
+      "destination": "/api-reference/webhooks/update-webhook"
+    },
+    {
+      "source": "/api-reference/webhooks/post-webhooks",
+      "destination": "/api-reference/webhooks/create-webhook"
+    },
+    {
+      "source": "/api-reference/webhooks/post-webhooks-id-deliveries-delivery_id-replay",
+      "destination": "/api-reference/webhooks/replay-webhook-delivery"
+    },
+    {
+      "source": "/api-reference/webhooks/post-webhooks-id-rotate-secret",
+      "destination": "/api-reference/webhooks/rotate-webhook-secret"
+    },
+    {
+      "source": "/concepts/billing",
+      "destination": "/concepts#accounts"
+    },
+    {
+      "source": "/concepts/byod-vs-rental",
+      "destination": "/concepts#line-kinds"
+    },
+    {
+      "source": "/concepts/channels",
+      "destination": "/concepts#services"
+    },
+    {
+      "source": "/concepts/deprecation-lifecycle",
+      "destination": "/api-reference/introduction#versioning-and-compatibility"
+    },
+    {
+      "source": "/concepts/line-lifecycle",
+      "destination": "/concepts#line-statuses"
+    },
+    {
+      "source": "/concepts/quotas-and-warming",
+      "destination": "/guides/sending-limits"
+    },
+    {
+      "source": "/concepts/trials",
+      "destination": "/guides/trials"
+    },
+    {
+      "source": "/guides/apple-flag-events",
+      "destination": "/webhooks/events/line#line-apple_id_flagged"
+    },
+    {
+      "source": "/guides/best-practices",
+      "destination": "/guides/sending-limits"
+    },
+    {
+      "source": "/guides/byod-pairing",
+      "destination": "/guides/byod"
+    },
+    {
+      "source": "/guides/trial-onboarding",
+      "destination": "/guides/trials"
+    },
+    {
+      "source": "/guides/webhooks",
+      "destination": "/webhooks/overview"
+    },
+    {
+      "source": "/sdk/auth",
+      "destination": "/sdk/configuration"
+    },
+    {
+      "source": "/sdk/examples/lookup-handle",
+      "destination": "/guides/lookup"
+    },
+    {
+      "source": "/sdk/idempotency",
+      "destination": "/sdk/errors#idempotency-keys"
+    },
+    {
+      "source": "/sdk/install",
+      "destination": "/sdk/overview"
+    },
+    {
+      "source": "/sdk/webhooks-verification",
+      "destination": "/sdk/webhooks"
+    },
+    {
+      "source": "/versioning",
+      "destination": "/api-reference/introduction#versioning-and-compatibility"
+    }
+  ]
 }

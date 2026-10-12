@@ -1,0 +1,20 @@
+---
+title: "Get the health of a BYOD line"
+description: "Returns what the device of a BYOD line last reported."
+openapi: "GET /v1/lines/{id}/health"
+---
+
+- **Credential:** an API key of the owner of the line. The operation serves BYOD lines only. See [Health](/guides/managing-lines#health) for the meaning of each field and of each `null`.
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Events:** none. For the events about the connection of a line, see [Connectivity events](/guides/managing-lines#connectivity-events).
+- **Other lines:** for a rented, shared or test line, read [`GET /v1/attention`](/api-reference/lines/list-attention).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 403 | `rental_health_not_exposed` | The line is not a BYOD line. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

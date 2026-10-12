@@ -1,0 +1,25 @@
+---
+title: "Update the metadata or billing anchor of a line"
+description: "Merges metadata into a line you own, and sets or clears its billing anchor."
+openapi: "PATCH /v1/lines/{id}"
+---
+
+- **Credential:** an API key. The operation works on any line you own, in any status and of any kind. See [Metadata](/guides/managing-lines#metadata) and [Anniversary and billing anchor](/guides/managing-lines#anniversary-and-billing-anchor).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied here. The key can change the `metadata` and the billing anchor of any line of its account.
+- **`Idempotency-Key`:** not honored. The operation merges, so the same request sent twice leaves the line in the same state.
+- **Events:** none. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+- **Two fields, two changes:** when the body carries both fields, `billing_anchor_at` is applied first and `metadata` second. If the `metadata` is refused, the change of the billing anchor is already stored.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `no_fields_to_patch` | The body has neither `metadata` nor `billing_anchor_at`. |
+| 400 | `validation_failed` | The `metadata` of the request holds more than 20 keys or more than 8,192 bytes, or `billing_anchor_at` is not an ISO 8601 timestamp with a `Z` suffix. |
+| 400 | `reserved_metadata_key` | `metadata` names `migration_ref` or `proof_line`, even with `null`. |
+| 400 | `metadata_too_large` | The merged `metadata` holds more than 20 keys or more than 8,192 bytes. |
+| 400 | `billing_anchor_too_far` | `billing_anchor_at` is more than 31 days after the call. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 409 | `billing_anchor_change_conflict` | The line changed owner during the call. Nothing was written. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,299 @@
+---
+title: "Event catalog"
+description: "Describes the envelope every event shares, lists the 37 event types by family, and lists the changes that produce no event."
+---
+
+Every event iSnap sends has the same envelope and one of 37 event types. This page describes the
+envelope, lists the types with the moment each one is sent, explains the two `metadata` fields every
+event carries, and lists the changes that no event announces. Read the last section before you build
+a copy of iSnap data from events alone.
+
+## Envelope
+
+An event is a JSON object with six fields. The same object is the body of a delivery and an item of
+the [events feed](/webhooks/pulling-events).
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_Fh50GcqYY37ay4VjUxQ2rR6jN",
+  "event_type": "message.received",
+  "created_at": "2026-10-08T14:22:57.143Z",
+  "trace_id": "174b4a27e4e4938fa67ea87b23a18579",
+  "data": {
+    "message": {
+      "id": "msg_7Hq3Zd9Kp2Vx6Wn4Tb8Lc5Ym1",
+      "line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd",
+      "direction": "inbound",
+      "kind": "message",
+      "to": "+14155550124",
+      "from": "+14155550123",
+      "body": "Is the table still free at 8?",
+      "channel": "iMessage",
+      "service": "iMessage",
+      "status": "delivered",
+      "effect": null,
+      "reply_to_message_id": null,
+      "use_typing_indicator": true,
+      "metadata": null,
+      "attachments": [],
+      "reactions": [],
+      "scheduled_for": null,
+      "schedule_reason": null,
+      "reply_lane": false,
+      "queue_info": null,
+      "created_at": "2026-10-08T14:22:57.101Z",
+      "queued_at": null,
+      "sent_at": null,
+      "delivered_at": "2026-10-08T14:22:56.000Z",
+      "read_at": null,
+      "failed_at": null,
+      "error_code": null,
+      "error_message": null,
+      "cancelled_at": null
+    },
+    "chat_id": "chat_6Rm1Yb5Tq9Hd3Kx7Wc2Ln8Vz4",
+    "contact_name": "Dana Whitfield",
+    "received_at": "2026-10-08T14:22:56.000Z",
+    "metadata": null,
+    "line_metadata": { "crm_account_id": "acct_4821" }
+  }
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `api_version` | string | Always `v1`. It is not the version number of the API. |
+| `event_id` | string | `evt_` followed by 25 letters and digits. It identifies the event: every subscription, every attempt and every replay carries the same value. It is also the `webhook-id` header. |
+| `event_type` | string | One of the [event types](#event-types). |
+| `created_at` | string | When iSnap recorded the event, in ISO 8601 UTC with milliseconds. It is not when the change happened: that time is inside `data`. It is the same on every attempt and replay. |
+| `trace_id` | string | 32 hexadecimal characters, always present. Do not use it to match an event to a request: an event does not always carry the `trace_id` of the request that caused it. Match on the ids inside `data`, such as `data.message.id`. |
+| `data` | object | The fields of the event type, described on its [event page](#event-types). It always holds `metadata` and `line_metadata`. |
+
+Events carry personal data: message text, handles, contact names and attachment file names. Each
+event page lists the fields. Subscribe only to the event types you need. Do not copy personal data
+into logs, tickets or other tools, and refer to a contact by an id of your own.
+
+Read `event_id` and `event_type`: the envelope has no `id` and no `type` field.
+
+Ignore response fields, enum values and event types you do not know. Return `2xx` for an event type
+you do not handle. See
+[Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility).
+
+## Event types
+
+| Family | Event type | Sent when |
+| --- | --- | --- |
+| `message` | [`message.queued`](/webhooks/events/message#message-queued) | A message is accepted for immediate sending, or a held message is released for sending. |
+| `message` | [`message.scheduled`](/webhooks/events/message#message-scheduled) | A message is accepted and held, or the planned send time of a held message moves by more than 15 minutes. |
+| `message` | [`message.sent`](/webhooks/events/message#message-sent) | The line's device confirms it sent a message created through the API, or someone typed a message on the line's own device. |
+| `message` | [`message.delivered`](/webhooks/events/message#message-delivered) | The line's device reports for the first time that an outbound message was delivered. |
+| `message` | [`message.read`](/webhooks/events/message#message-read) | The recipient read a message you sent, or you marked a chat read. |
+| `message` | [`message.failed`](/webhooks/events/message#message-failed) | The line's device reports a failed send, or iSnap fails a message that was still waiting. |
+| `message` | [`message.received`](/webhooks/events/message#message-received) | An inbound message is stored. |
+| `message` | [`message.cancelled`](/webhooks/events/message#message-cancelled) | You cancel a queued or held message. |
+| `message` | [`message.fallback_triggered`](/webhooks/events/message#message-fallback_triggered) | The line's device reports that a message went out, or was attempted, over SMS or RCS instead of iMessage. |
+| `reaction` | [`reaction.added`](/webhooks/events/reaction#reaction-added) | The line's device confirms a reaction you added through the API. |
+| `reaction` | [`reaction.received`](/webhooks/events/reaction#reaction-received) | A contact adds a reaction to a message of the line. |
+| `reaction` | [`reaction.removed`](/webhooks/events/reaction#reaction-removed) | A reaction is removed, by the contact or by you. |
+| `typing_indicator` | [`typing_indicator.started`](/webhooks/events/typing-indicator#typing_indicator-started) | A contact starts typing in a chat with the line, on a line whose device detects typing. iMessage lines never send it. |
+| `typing_indicator` | [`typing_indicator.stopped`](/webhooks/events/typing-indicator#typing_indicator-stopped) | A contact stops typing in a chat with the line, on a line whose device detects typing. iMessage lines never send it. |
+| `line` | [`line.connected`](/webhooks/events/line#line-connected) | A BYOD device finishes pairing, a line that was announced offline or degraded recovers, or iSnap hands over a line whose device is connected. |
+| `line` | [`line.disconnected`](/webhooks/events/line#line-disconnected) | The line's device signs out, you terminate the line, a scheduled cancellation is carried out, the BYOD slots of the account no longer cover a BYOD line, or the hosted macOS session that the line runs on is released while a device session of the line runs on it. |
+| `line` | [`line.offline`](/webhooks/events/line#line-offline) | A BYOD line's device has not reported for 5 minutes, or the outage of another line reaches 15 minutes. |
+| `line` | [`line.degraded`](/webhooks/events/line#line-degraded) | A BYOD line can still send but no longer receives. |
+| `line` | [`line.apple_id_flagged`](/webhooks/events/line#line-apple_id_flagged) | The line's device reports that Apple disabled or restricted the line's Apple ID. |
+| `line` | [`line.quota_warning`](/webhooks/events/line#line-quota_warning) | A send brings one of the line's five sending limits to 80%. |
+| `line` | [`line.quota_exceeded`](/webhooks/events/line#line-quota_exceeded) | A send brings one of the line's five sending limits to 100%. |
+| `line` | [`line.capability_changed`](/webhooks/events/line#line-capability_changed) | One of four capabilities of a BYOD line moves between `active` and `degraded`. |
+| `line` | [`line.terminated`](/webhooks/events/line#line-terminated) | You terminate a line, a scheduled cancellation is carried out, or iSnap terminates a line. |
+| `line` | [`line.variant_changed`](/webhooks/events/line#line-variant_changed) | A rented line moves between inbound-only and two-way. |
+| `line` | [`line.variant_scheduled`](/webhooks/events/line#line-variant_scheduled) | A variant change is scheduled for a billing anchor of the line. |
+| `line` | [`line.variant_unscheduled`](/webhooks/events/line#line-variant_unscheduled) | You withdraw a scheduled variant change. |
+| `trial` | [`trial.linked`](/webhooks/events/trial#trial-linked) | A prospect pairs with a trial by sending its pairing code. |
+| `trial` | [`trial.dormant`](/webhooks/events/trial#trial-dormant) | The number of messages sent to the prospect without a reply reaches the trial's limit. |
+| `trial` | [`trial.reactivated`](/webhooks/events/trial#trial-reactivated) | A dormant trial becomes active again. |
+| `trial` | [`trial.bind_conflict`](/webhooks/events/trial#trial-bind_conflict) | A prospect sends a valid pairing code, but their handle is already paired with this pool line, or with as many pool lines of the pool as its limit allows. |
+| `trial` | [`trial.revoked`](/webhooks/events/trial#trial-revoked) | You revoke a trial that is `active`, `dormant`, or still inside its pairing window. |
+| `pre_order` | [`pre_order.fulfilled`](/webhooks/events/pre-order#pre_order-fulfilled) | The line of a pre-order is handed over. |
+| `pre_order` | [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | You cancel a draft pre-order. |
+| `macos_session` | [`macos_session.rented`](/webhooks/events/macos-session#macos_session-rented) | iSnap assigns a hosted macOS session to your account outside your own rent call. |
+| `macos_session` | [`macos_session.released`](/webhooks/events/macos-session#macos_session-released) | The rental of a hosted macOS session ends. |
+| `binding` | [`binding.released`](/webhooks/events/binding#binding-released) | A binding between a shared line and one contact ends. |
+| `webhook` | [`webhook.test`](/webhooks/events/webhook#webhook-test) | iSnap probes a suspended subscription. Never sent through an event filter. |
+
+Each "Sent when" cell is a summary. The event page states the exact cases, and the cases in which
+the event is not sent.
+
+### Line events by line kind
+
+Not every line kind gets every `line.*` event.
+
+| Events | Sent for |
+| --- | --- |
+| `line.connected`, `line.offline` | BYOD lines: on every change. Rented lines and test lines: only for an outage that reaches 15 minutes and for the recovery from that outage, and `line.connected` when iSnap hands over a line whose device is connected. Shared lines: never. |
+| `line.degraded`, `line.capability_changed` | BYOD lines only. |
+| `line.apple_id_flagged` | Every line that has a device of its own. A shared line has none and never gets it. |
+| `line.disconnected`, `line.terminated` | Every line kind. On a shared line, `line.disconnected` carries `device_session_id: null`. |
+| `line.quota_warning`, `line.quota_exceeded` | Every line kind. Never for a trial. |
+| `line.variant_changed`, `line.variant_scheduled`, `line.variant_unscheduled` | Rented lines only. |
+
+A shared line has no device of its own. Besides the rows above, it never gets `message.sent` with
+`origin: "device"` or a `typing_indicator.*` event, and its inbound `message.received` is sent only
+for a contact the line has an active binding with.
+
+## `metadata` and `line_metadata`
+
+Every event carries both fields in `data`, whatever its type. They hold the `metadata` you attached
+to resources, so that you can route an event without a second call.
+
+`data.metadata` is the `metadata` of the main resource of the event:
+
+| Family | `data.metadata` is the `metadata` of |
+| --- | --- |
+| `message.*` | The message. A message of a trial carries its own `metadata`, not the `metadata` of the trial. |
+| `reaction.*` | The message reacted to. |
+| `line.*` | The line. |
+| `trial.*` | The trial. |
+| `pre_order.*` | The pre-order. |
+| `macos_session.*` | The hosted macOS session. `macos_session.rented` always carries `null`: a rental starts without `metadata`. |
+| `typing_indicator.*`, `binding.*`, `webhook.*` | Nothing: always `null`. |
+
+It is `null` when that resource has no `metadata`, and when the resource is not yours. On a line
+that another account owned before you, an event about a message of that account carries
+`data.metadata: null`. A message event still carries the `metadata` of that message in
+`data.message.metadata`: see [Lines that change owner](/webhooks/overview#lines-that-change-owner).
+
+`data.line_metadata` is the `metadata` of the line the event is tied to, when that line belongs to
+your account. It is `null` otherwise: the event is tied to no line, the line has no `metadata`, or
+the event belongs to a trial that runs on a line you do not own. The `macos_session.*` events are
+the exception: they carry no line id and a line filter never matches them, and their `line_metadata`
+is the `metadata` of the line the session runs, or ran until the release, when that line is yours.
+On `line.*` events it equals `data.metadata`.
+
+Both fields are read once, when the event is recorded. Retries and replays carry the same values,
+even if the `metadata` changed since.
+
+Never put personal data or secrets in line `metadata`: it is readable by anyone who holds the line
+id, and it stays on a line that returns to the marketplace. See
+[Managing lines](/guides/managing-lines).
+
+## What events do not announce
+
+The events announce the changes this catalog lists, and no other. Two rules apply before any list:
+
+- **An event is recorded only if it matches an active subscription when it occurs.** While a
+  subscription is suspended or inactive, the events it would have matched are not recorded for it:
+  they are not delivered later, cannot be replayed, and are absent from the events feed unless another
+  active subscription of your account matched them.
+- **An event can be lost.** A change can stand without its event, which is then neither delivered
+  nor listed in the events feed. Reconcile from the resource operations.
+
+Events also do not announce the following.
+
+**Webhook subscriptions**
+
+- A subscription that is suspended, resumed or turned inactive, including after a `410` response.
+- A signing secret that is rotated.
+- A subscription that is created, changed or deleted.
+
+**Lines: ownership and status**
+
+- A line that is reserved, activated, assigned or released, a reservation that expires, and a shared
+  line that is created.
+- A line transferred to another account, for the earlier owner and for the next one. The device
+  sessions a transfer ends produce no `line.disconnected`.
+- A line that leaves your account: the delivery statuses, read receipts and reactions that its
+  device reports afterward about the messages you sent on it go to the account that owns the line at
+  that time, or to no account when the line has no owner. Each message event carries the message it
+  concerns, with its text, its handles, its attachment file names and its `metadata`; a reaction
+  event carries the id of that message and the handle of the contact. You do not receive them. A
+  mark-read by the next owner also marks read the inbound messages you had not marked read, and
+  sends their content to that owner in `message.read`. Never put secrets in message `metadata`, and
+  refer to a contact there by an id of your own. See
+  [Lines that change owner](/webhooks/overview#lines-that-change-owner).
+- A line that iSnap suspends, and the end of that suspension. The device sessions a suspension ends
+  produce no `line.disconnected`.
+- A rented line that returns to the marketplace because its per-line subscription ended: no
+  `line.terminated` and no other event.
+- A BYOD line ended because the BYOD slots of the account no longer cover it: `line.disconnected` is
+  sent, `line.terminated` is not.
+- A line that iSnap terminates: `line.terminated` is sent, `line.disconnected` is not.
+- A cancellation that is scheduled or withdrawn (`POST /v1/lines/{id}/cancel`,
+  `POST /v1/lines/{id}/uncancel`). The events come when the cancellation is carried out.
+- An anniversary that is set, and a conversion to or from a test line.
+- A scheduled variant change that is dropped, when the line is released, transferred or turned into
+  a test line, or at the billing anchor when the line is suspended or already has that variant: no
+  `line.variant_unscheduled`.
+
+**Lines: settings, health and number**
+
+- A change of a line's configuration (`PATCH /v1/lines/{id}/config`) or `metadata`
+  (`PATCH /v1/lines/{id}`).
+- A device session that is replaced by a new pairing on the same line, or revoked by iSnap.
+  `line.disconnected` covers only the cases its section lists.
+- For a rented, shared or test line: an outage shorter than 15 minutes and its end, a line that
+  stops receiving or recovers, and a capability change.
+- For a BYOD line: a capability that moves to or from `disabled`, and a change of a capability other
+  than `imessage`, `sms_fallback`, `send_text` and `send_attachment`.
+- An Apple ID flag that is cleared. A device report that repeats an existing flag sends nothing
+  either.
+- A sending-limit counter that falls back below a threshold or resets.
+- A phone number that changes or is corrected, and the number of a BYOD line when its device first
+  reports it.
+
+**Messages, reactions and typing**
+
+- A delivery status, a read receipt or a reaction that concerns a message that iSnap has deleted at
+  the end of its retention.
+- A status the message already has, a second copy of an inbound message, and history that a device
+  reports from before iSnap was watching the line.
+- A message typed on the device of a shared line or of a line that runs trials: no `message.sent`.
+- An inbound message that iSnap does not record: on a shared line, a message from a contact the line
+  has no active binding with; on a line that runs trials, a message from a sender who is not paired.
+- A message deleted at the end of its retention. An edited or unsent message is not reported at all.
+- A canceled message of a trial: no `message.cancelled`.
+- A typing indicator you start or stop.
+- A reaction that the line's device fails to place, and a reaction or a removal that never reaches a
+  device.
+
+**Trials**
+
+- A trial that is created or updated, and a pairing window that expires.
+- A text that matches no pairing code, and the confirmation and limit notices iSnap sends to the
+  prospect.
+
+**Pre-orders**
+
+- A pre-order that is created or confirmed.
+- An order that iSnap cancels behind a confirmed pre-order.
+- An estimated fulfillment time that passes.
+
+**Hosted macOS sessions**
+
+- Your own rent, update, cancel and uncancel calls.
+
+**Other resources**
+
+- A binding that is created: the first `message.queued` or `message.scheduled` to a new contact is
+  the signal.
+- Chats, attachments (including an attachment that becomes `ready`, `failed` or `expired`), recipient
+  lookups and their results, API keys, billing and invoices: no event family exists for them.
+
+### How to reconcile
+
+Treat events as a signal to act fast, and the resource operations as the source of truth. Read the
+state again on a schedule, and after any period in which your endpoint was down or your subscription
+was suspended or inactive.
+
+| To know | Read |
+| --- | --- |
+| The messages iSnap keeps, and their statuses | [`GET /v1/messages`](/api-reference/messages/list-messages), or [`GET /v1/messages/{id}`](/api-reference/messages/get-message) for one message |
+| Your lines and their status | [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) lists your lines that are `active` or `reserved`. [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns one rented or BYOD line in any status. |
+| The lines that have a fault now | [`GET /v1/attention`](/api-reference/lines/list-attention) |
+| The health of a BYOD line, its Apple ID flag included | [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health) |
+| A trial | [`GET /v1/trial/{trial_id}`](/api-reference/trials/get-trial) |
+| A pre-order | [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) |
+| A hosted macOS session | [`GET /v1/macos-sessions/{id}`](/api-reference/macos-sessions/get-macos-session) |
+| Your subscriptions and their failures | [`GET /v1/webhooks`](/api-reference/webhooks/list-webhooks) and [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) |
+| The events of the last 72 hours that matched a subscription of your account | [`GET /v1/webhooks/events`](/api-reference/webhooks/list-webhook-events): see [Events feed](/webhooks/pulling-events) |

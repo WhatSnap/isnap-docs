@@ -1,0 +1,24 @@
+---
+title: "Look up a recipient"
+description: "Tells whether a phone number or an email address can receive iMessage."
+openapi: "POST /v1/lookup"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Recipient lookup](/guides/lookup).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied: such a key can name any line of the account in `from_line_id`.
+- **Test keys:** a lookup with an `isnap_test_` account key counts against the same lookup limits: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored.
+- **Events:** none, also when a check finishes.
+- **Personal data:** the request and the response carry the handle, and the response says whether it can receive iMessage. A definite answer is kept 24 hours and returned to every caller of iSnap. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Response:** `200` with `imessage` `true`, `false` or `null`, or `202` with `pending: true` when a check was started and has given no definite answer: resend the same request after `retry_after` seconds. A call that starts a check waits up to 3 seconds for the device's answer before it returns `202`. See [The three answers](/guides/lookup#the-three-answers).
+- **Limits:** 400 calls per account per UTC day, and, with `from_line_id`, 30 per line per UTC hour and 100 per line per UTC day. Every call that passes validation counts: an answer from the 24-hour store, a `202` and a repeat of a pending check count against every limit that applies to the call. A call refused with `429 lookup_rate_limit_exceeded` counts against the limit that refused it and the limits checked before it, in this order: the account limit, the hourly limit of the line, the daily limit of the line. A call refused with `400` or `404` counts against no limit. See [Limits](/guides/lookup#limits).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `handle` is shorter than 3 or longer than 255 characters, or is not a valid phone number or email address. `from_line_id` is malformed. |
+| 404 | `not_found` | `from_line_id` is not a line of your account. |
+| 429 | `lookup_rate_limit_exceeded` | A lookup limit is reached. `Retry-After` gives the seconds until the next UTC hour or the next UTC day. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,405 @@
+---
+title: "Chat features"
+description: "Add and remove reactions, show the typing indicator, send read receipts and contact cards, and receive the reactions of your contacts."
+---
+
+Besides messages, a line can put a reaction on a message, show the typing indicator to a contact, mark a chat as read and send a contact card. This page describes each of these operations, the conditions they need, what reaches the contact and the events they send. Read it when you build a chat view on top of iSnap.
+
+These features run on the line's device. This page describes iMessage lines. Rented iMessage lines provide all of them. On a BYOD line, each one depends on a capability of your own device: see [Device features](/guides/sending-messages#device-features). On an Android line, the typing and read operations return `422`, and a reaction on a message sent as SMS or RCS returns `422`.
+
+## Reactions
+
+A reaction is an iMessage tapback. [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction) puts the line's reaction on a message of the line, received or sent. The body has one field, `type`: `love`, `like`, `dislike`, `laugh`, `emphasize` or `question`.
+
+The response is `202` with `{ id, parent_message_id, type, direction, status, created_at }`. `direction` is `outbound`, and `status` takes the values of a message status.
+
+- The line has at most one reaction on a message. A request with another `type` replaces it.
+- A request with the `type` already in place returns the existing reaction, even when its `status` is `failed`, and sends nothing. To try a failed reaction again, remove it, then add it again.
+- A reaction counts against no [sending limit](/guides/sending-limits), and is not held by quiet hours, spacing or the order of messages to the recipient. Only the [request-rate limit](/errors-and-rate-limits#rate-limits) applies.
+
+The message must meet these conditions:
+
+| Condition | Refusal |
+| --- | --- |
+| The message exists and belongs to your account. With a line-scoped key, it is on a line of the key's list. | `404 not_found` |
+| The line is `active` | `403 line_suspended`, `400 line_not_active` |
+| The message was sent or received over iMessage | `422 sms_reactions_not_supported` when its `service` is `SMS` or `RCS` |
+| The message has at most one attachment | `422 multi_attachment_reaction` |
+| The line's device confirmed the message. For a message you sent, wait for [`message.sent`](/webhooks/events/message#message-sent). | `422 parent_not_yet_acked` |
+| The message was not typed on the line's device | `422 parent_not_yet_acked`, always |
+| The contact's handle is 20 characters or fewer, as every phone number is | `422 reaction_recipient_unsupported` |
+
+### What reaches the contact
+
+iSnap gives the reaction to the line's device like a message. The device needs `reactions_out` `active`, which rented iMessage lines provide, and a Messages conversation with the contact on the device. It never sends a reaction as text.
+
+| Outcome | What you see |
+| --- | --- |
+| The device places the reaction | [`reaction.added`](/webhooks/events/reaction#reaction-added) is sent. |
+| The device reports a failure | No event is sent. The reaction's `status` becomes `failed`, and the reaction stays in `reactions`. |
+| The line has no paired device | The reaction stays `queued` until iSnap deletes it, at least 72 hours after it recorded it. No event is sent. |
+
+`reaction.added` means that Apple's messaging service accepted the reaction. iSnap does not check that the contact received it.
+
+The `reactions` field of the message shows what you asked for, not what the device did. The line's reaction appears in it as soon as the API accepts the call, before the device confirms it, and stays there even if the device never places it. After a remove, it disappears immediately. Use `reaction.added` and `reaction.removed` to know what the device did.
+
+### Removing a reaction
+
+[`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction) removes the line's reaction from a message. It returns `200` with `{ parent_message_id, removed, type }`. `removed` is `false` and `type` is `null` when the line had no reaction on the message.
+
+The conditions of [Reactions](#reactions) apply. [`reaction.removed`](/webhooks/events/reaction#you-remove-a-reaction) is sent when the device confirms the removal. When the line has no paired device, the call still returns `removed: true`, but nothing reaches the contact and no event is sent. When `reaction_remove_out` is not `active`, the device can fail the removal: the call has already returned `removed: true`, the reaction is gone from `reactions`, nothing reaches the contact, and no event is sent.
+
+### Retrying a reaction
+
+Both operations honor `Idempotency-Key`, in the key space of the line that [`POST /v1/messages`](/api-reference/messages/send-message) uses: never reuse the key of a message for a reaction, or the key of a reaction for a message. A repeated `POST` with the same key, the same message and the same `type` returns the entry of the first call as it is now, and does not add the reaction again: after a later `DELETE`, the repeat returns that entry although the reaction is removed. Read the `reactions` field of the message to know what is in place. When the first call added the reaction, the repeat returns `409 idempotency_conflict` once a later call has changed its type. When the first call changed the type of an existing reaction, or found that type in place, iSnap does not record its key: a repeat after a later change of type changes the reaction again. A repeated `DELETE` with the same key returns the response of the first call. See [Messages, reactions and contact cards](/idempotency#messages-reactions-and-contact-cards).
+
+<CodeGroup>
+
+```bash curl
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the reaction: reuse it to retry.
+
+curl -sS https://api.isnap.ai/v1/messages/msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz/reactions \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{"type": "love"}'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { ISnapClient, UnprocessableEntityError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const idempotencyKey = randomUUID() // Store it with your record of the reaction: reuse it to retry.
+
+try {
+  const reaction = await client.messages.addReaction(
+    'msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz',
+    { type: 'love' },
+    { idempotencyKey }
+  )
+  // Requested, not placed yet: reaction.added confirms it.
+  console.log(reaction.id, reaction.type, reaction.status)
+} catch (err) {
+  if (err instanceof UnprocessableEntityError && err.code === 'parent_not_yet_acked') {
+    console.error('Wait for message.sent on this message, then try again.')
+  } else if (err instanceof UnprocessableEntityError) {
+    // sms_reactions_not_supported, multi_attachment_reaction or reaction_recipient_unsupported.
+    console.error(`This message cannot take a reaction: ${err.code}`)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+import uuid
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the reaction: reuse it to retry.
+response = requests.post(
+    f"{API}/v1/messages/msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz/reactions",
+    headers={**HEADERS, "Idempotency-Key": idempotency_key},
+    json={"type": "love"},
+    timeout=30,
+)
+
+if response.status_code == 422:
+    code = response.json()["error"]["code"]
+    if code == "parent_not_yet_acked":
+        print("Wait for message.sent on this message, then try again.")
+    else:
+        # sms_reactions_not_supported, multi_attachment_reaction or reaction_recipient_unsupported.
+        print("This message cannot take a reaction:", code)
+else:
+    response.raise_for_status()
+    reaction = response.json()["data"]
+    # Requested, not placed yet: reaction.added confirms it.
+    print(reaction["id"], reaction["type"], reaction["status"])
+```
+
+</CodeGroup>
+
+## Reactions from the contact
+
+When a contact adds a reaction to a message of the line, iSnap records it as an entry with `kind: reaction`, `direction: inbound` and `status: delivered`, sends [`reaction.received`](/webhooks/events/reaction#reaction-received), and adds it to the `reactions` field of the target message. When the contact removes it, iSnap sends [`reaction.removed`](/webhooks/events/reaction#the-contact-removes-a-reaction).
+
+Each item of `reactions` is `{ reaction_type, reaction_emoji, from_handle, direction, created_at }`, with at most one reaction per author. A contact's reaction can be one of the six types above, or `custom`: an emoji, given in `reaction_emoji`. `reactions` is `[]` on a message that has none, and on reaction entries themselves. The items of `reactions` carry no id, and the add-reaction response names the type `type` where events name it `reaction_type`.
+
+A contact's reaction is reported only when it targets a message that the line sent through iSnap, or a received message that iSnap recorded. These are not reported:
+
+- a reaction to a message typed on the line's device, or to a message older than the pairing of the device;
+- a reaction to a message that iSnap has deleted: iSnap no longer keeps the message, and no event is sent. See [Retention](/guides/receiving-messages#retention).
+
+A sticker that a contact places on a message is not a reaction: it arrives as a received message that carries the sticker file.
+
+An entry with `kind: reaction` in [`GET /v1/messages`](/api-reference/messages/list-messages) does not say which message it reacts to, nor which reaction it is. Read the `reactions` field of the messages, or the reaction events.
+
+## Typing indicators
+
+[`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/start-typing), with the body `{}` or no body, asks the line's device to show the typing indicator to the contact of the chat. It returns `202` with `chat_id`, `started_at` and `expires_at`, 15 seconds after `started_at`. Call it again to keep the indicator. [`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/stop-typing) asks the device to clear it before then, and returns `200` with `chat_id` and `stopped_at`.
+
+| Condition | Refusal |
+| --- | --- |
+| The chat exists, and its line is yours | `404 not_found` |
+| The chat's line is an iMessage line. The test is on the line, not on the service of the chat. | `422 sms_typing_not_supported` |
+| The chat's contact is a phone number in E.164 | `422 unsupported_handle` |
+
+Both calls succeed even when nothing reaches the contact:
+
+- The device shows the indicator when `typing_out` is `active` and there is a Messages conversation with the contact on the device. It clears it on its own 15 seconds after the last start, unless a stop arrives first. Otherwise it shows nothing.
+- On a line with no paired device, and on every shared line, the request is dropped.
+- A request that the device has not taken can be discarded once it is more than 5 minutes old, and is then never shown. The API does not bound the time of that discard: until then, a device that reconnects can still act on the request.
+- iSnap sends no event about the typing indicators of your line.
+
+### Typing before a message
+
+`use_typing_indicator` on [`POST /v1/messages`](/api-reference/messages/send-message) asks the device to show the typing indicator before that message. When the send does not state it, the line's `default_use_typing_indicator` applies: `true` unless you changed it with [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config). On a line that is not an iMessage line, the value is always `false`. The response of the send contains the value in force.
+
+- The device shows the indicator only before a message, not before a voice note or a reaction, and only when `typing_out` is `active` and there is a Messages conversation with the contact on the device. It never shows it before a first message to a new contact. When it does not show it, the message is sent without it, and no error is reported.
+- The indicator lasts the length of the `body` read at 225 characters per minute: at least 0.8 second, and at most 6 seconds, reached at 23 characters.
+- The device shows the indicator, waits for that duration, clears it, then sends. Showing and clearing it take time of their own, so the message leaves later than it would without the option. When there is no Messages conversation with the contact on the device, it shows nothing and the message still leaves later.
+
+Send `use_typing_indicator: false` for a message that must leave without delay, or set the line's default to `false`.
+
+### When the contact types
+
+No iMessage line reports that a contact is typing. The [typing indicator events](/webhooks/events/typing-indicator), `typing_indicator.started` and `typing_indicator.stopped`, are not sent for those lines.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST https://api.isnap.ai/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/typing \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+curl -sS -X DELETE https://api.isnap.ai/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/typing \
+  -H "Authorization: Bearer $ISNAP_API_KEY"
+```
+
+```typescript TypeScript
+import { ISnapClient, UnprocessableEntityError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const chatId = 'chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn'
+
+try {
+  const typing = await client.chats.typingStart(chatId, {})
+  console.log(`Shown until ${typing.expires_at}, if the device can show it`)
+  // ... write the answer, then clear the indicator if the answer is not sent.
+  await client.chats.typingStop(chatId)
+} catch (err) {
+  if (err instanceof UnprocessableEntityError) {
+    // sms_typing_not_supported or unsupported_handle: this chat cannot show it.
+    console.error(err.code)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+chat_id = "chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn"
+
+response = requests.post(f"{API}/v1/chats/{chat_id}/typing", headers=HEADERS, json={}, timeout=30)
+if response.status_code == 422:
+    # sms_typing_not_supported or unsupported_handle: this chat cannot show it.
+    print(response.json()["error"]["code"])
+else:
+    response.raise_for_status()
+    print("Shown until", response.json()["data"]["expires_at"], "if the device can show it")
+    # ... write the answer, then clear the indicator if the answer is not sent.
+    requests.delete(f"{API}/v1/chats/{chat_id}/typing", headers=HEADERS, timeout=30).raise_for_status()
+```
+
+</CodeGroup>
+
+## Read receipts
+
+[`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read), with the body `{}` or no body, marks the chat as read:
+
+- iSnap sets `read_at` to the current time on every inbound message of the chat that had none.
+- It asks the line's device to send read receipts.
+- It returns `200` with `chat_id`, `read_at` and `marked_count`, the number of messages it marked: `0` when nothing was unread.
+- It sends one [`message.read`](/webhooks/events/message#your-own-mark-read-call) event per message it marked, with `chat_id` and `read_at`.
+
+The `status` of the marked messages stays `delivered`: `status: read` is used only for an outbound message that the contact read. `message.read` therefore has two meanings: your contact read your message, or you marked their message read. Tell them apart with `data.message.direction`. Marking a chat read does not lower its `unread_count`: see [Chats](/guides/receiving-messages#chats).
+
+On a line that another account owned before you, by a transfer or by a return to the marketplace, a chat can contain inbound messages that this account received. The call marks them too when they were not marked read, and you receive each of them in `message.read`, with its text. Ignore the events about messages from before you got the line, and do not store their content: see [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted).
+
+The conditions are those of the typing indicator, with `422 sms_read_receipt_not_supported` on a line that is not an iMessage line, and `422 unsupported_handle` for a contact who is not a phone number in E.164.
+
+What reaches the contact:
+
+- The device marks the whole Messages conversation as read when `mark_read_out` is `active` and there is a Messages conversation with the contact on the device. It marks the Messages conversation, not one message.
+- Otherwise nothing reaches the contact, and `read_at` is set all the same.
+- On a line with no paired device, and on every shared line, the request is dropped. A request that the device has not taken is discarded as described for [typing indicators](#typing-indicators).
+- The line's device sends read receipts only on this request: reading a message through the API does not send one. On a BYOD Mac, opening the Messages conversation on the Mac can send read receipts too.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST https://api.isnap.ai/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/read \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const result = await client.chats.markRead('chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn', {})
+console.log(`${result.marked_count} messages marked read at ${result.read_at}`)
+```
+
+```python Python
+import os
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+response = requests.post(
+    f"{API}/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/read", headers=HEADERS, json={}, timeout=30
+)
+response.raise_for_status()
+result = response.json()["data"]
+print(result["marked_count"], "messages marked read at", result["read_at"])
+```
+
+</CodeGroup>
+
+The typing and read operations do not apply the list of a [line-scoped key](/authentication#line-scoped-keys): such a key acts on any chat of the account.
+
+## Contact cards
+
+[`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) sends a contact card to the contact of a chat.
+
+| Field | Rule |
+| --- | --- |
+| `first_name` | Required. 1 to 255 characters. |
+| `last_name` | Up to 255 characters. |
+| `phone_numbers` | Up to 10 phone numbers in E.164. |
+| `emails` | Up to 10 email addresses. |
+| `organization` | Up to 255 characters. |
+| `note` | Up to 2,000 characters. |
+| `avatar_url` | The URL of a photo. See the rules below. |
+
+The request needs at least one of `phone_numbers`, `emails` or a non-empty `organization`: `400 validation_failed` otherwise.
+
+iSnap builds a vCard 3.0 file from the fields and sends it to the chat's contact as a normal message with one attachment, from the chat's line. The line's device sends the file unchanged. Everything that applies to [`POST /v1/messages`](/api-reference/messages/send-message) applies to this message: the [sending limits](/guides/sending-limits), the holds, the events and the errors. One difference: on an iMessage line the card always asks for the typing indicator, whatever the line's `default_use_typing_indicator`. The chat's contact must be a phone number: `400 bad_request` otherwise.
+
+`avatar_url` must be an HTTPS URL, or the call returns `400 validation_failed`. iSnap fetches it once without following a redirect: the host must resolve to a public address, the response must have a `2xx` status and a `Content-Type` of `image/png` or `image/jpeg`, the image must be at most 2,097,152 bytes (2 MiB), and the download must finish within 5 seconds. Otherwise the call returns `502 avatar_fetch_failed`, and nothing is sent.
+
+The response is `202` with `message_id`, `chat_id`, `attachment_id` and `status`. `status` always reads `queued`, even when iSnap holds the message: read the message with [`GET /v1/messages/{id}`](/api-reference/messages/get-message) to know its status. The response carries no `X-iSnap-Quota-` header.
+
+Do not retry this call with the same key. The API never replays this operation. Once a call has created the card's message, a repeat with the same `Idempotency-Key` returns `409 idempotency_conflict`. When no message was created, the repeat sends the card. Without an `Idempotency-Key`, every repeat sends the card: send a key with every call. A key that a reaction already used on the chat's line is not refused: the call returns `202` with the id of the reaction entry in `message_id`, and sends nothing. Use a new key for every call. When you did not receive the response, look for the message with `GET /v1/messages` before you resend the card. See [Messages, reactions and contact cards](/idempotency#messages-reactions-and-contact-cards) for the scope and the lifetime of the key. A [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` when the chat's line is outside its list.
+
+<CodeGroup>
+
+```bash curl
+IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the card.
+
+# Send this request once. A repeat with the same key returns 409 idempotency_conflict once the
+# first request created the card's message, and sends the card when no message was created.
+curl -sS https://api.isnap.ai/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/share-contact-card \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+  -d '{
+    "first_name": "Front desk",
+    "organization": "Example Dental",
+    "phone_numbers": ["+14155550124"]
+  }'
+```
+
+```typescript TypeScript
+import { randomUUID } from 'node:crypto'
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+const idempotencyKey = randomUUID() // Store it with your record of the card.
+
+// maxRetries: 0, because an automatic retry returns 409 instead of the result once the first
+// attempt created the card's message.
+const card = await client.chats.shareContactCard(
+  'chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn',
+  { first_name: 'Front desk', organization: 'Example Dental', phone_numbers: ['+14155550124'] },
+  { idempotencyKey, maxRetries: 0 }
+)
+// status always reads queued: read the message to know whether iSnap holds it.
+const message = await client.messages.get(card.message_id)
+console.log(card.message_id, message.status)
+```
+
+```python Python
+import os
+import uuid
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+idempotency_key = str(uuid.uuid4())  # Store it with your record of the card.
+
+# Send this request once. A repeat with the same key returns 409 idempotency_conflict once the
+# first request created the card's message, and sends the card when no message was created.
+response = requests.post(
+    f"{API}/v1/chats/chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn/share-contact-card",
+    headers={**HEADERS, "Idempotency-Key": idempotency_key},
+    json={"first_name": "Front desk", "organization": "Example Dental", "phone_numbers": ["+14155550124"]},
+    timeout=30,
+)
+response.raise_for_status()
+card = response.json()["data"]
+
+# status always reads queued: read the message to know whether iSnap holds it.
+message = requests.get(f"{API}/v1/messages/{card['message_id']}", headers=HEADERS, timeout=30)
+message.raise_for_status()
+print(card["message_id"], message.json()["data"]["status"])
+```
+
+</CodeGroup>
+
+## Events
+
+| Event | Sent when |
+| --- | --- |
+| [`reaction.added`](/webhooks/events/reaction#reaction-added) | The line's device confirms a reaction that you added. |
+| [`reaction.received`](/webhooks/events/reaction#reaction-received) | A contact adds a reaction to a message of the line. |
+| [`reaction.removed`](/webhooks/events/reaction#reaction-removed) | A contact removes a reaction, or the device confirms the removal of yours. |
+| [`message.read`](/webhooks/events/message#message-read) | You mark a chat read: one event per message marked. Also when a contact reads your message. |
+| The events of a send | A contact card is a message: see [Events](/guides/sending-messages#events) in Sending messages. |
+
+No event is sent for a typing indicator that you start or stop, for a reaction that the device fails to place, or for a reaction or a removal that never reaches a device. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and read the messages with [`GET /v1/messages/{id}`](/api-reference/messages/get-message). Deduplicate on `event_id`. Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival.
+
+## Errors
+
+The refusals of each operation are on its reference page: [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction), [`DELETE /v1/messages/{id}/reactions`](/api-reference/messages/remove-reaction), [`POST /v1/chats/{chat_id}/typing`](/api-reference/chats/start-typing), [`DELETE /v1/chats/{chat_id}/typing`](/api-reference/chats/stop-typing), [`POST /v1/chats/{chat_id}/read`](/api-reference/chats/mark-chat-read) and [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+- A reaction carries the handle of its author: `from_handle` for a contact, `actor_handle` for your line.
+- A chat carries the contact's handle in `contact_handle`.
+- A contact card carries a person's name, phone numbers, email addresses, organization, note and photo, and its file name holds the name. iSnap stores it as an attachment, and sends it to the contact.
+
+Request this data only when needed. Do not copy it into logs, tickets or other tools. Refer to a contact by an id of your own.

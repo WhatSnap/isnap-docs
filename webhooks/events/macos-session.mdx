@@ -1,0 +1,93 @@
+---
+title: "Hosted macOS session events"
+description: "Gives the data of macos_session.rented and macos_session.released, with an example of each."
+---
+
+The `macos_session.*` events announce that iSnap assigned a hosted macOS session to your account, or
+that the rental of a session ended. This page says when each of the two event types is sent and when
+it is not, lists the fields of `data`, and shows a full event. See
+[Hosted macOS sessions](/guides/hosted-macos-sessions) for the resource.
+
+## Common fields
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `macos_session_id` | string | No | The id of the hosted macOS session (`mcs_`). |
+| `metadata` | object | Yes | The `metadata` of the hosted macOS session. |
+| `line_metadata` | object | Yes | The `metadata` of the line the session runs, or ran until the release, when that line belongs to your account. `null` otherwise. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
+
+Both events carry no line id: a subscription with a line filter never receives them, even when the
+session runs one of the listed lines.
+
+Your own rent, update, cancel and uncancel calls send no event. These events carry no personal data.
+
+## `macos_session.rented`
+
+Sent when iSnap assigns a hosted macOS session to your account outside your own rent call. It is
+sent once per assignment. [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session)
+itself sends no event: its response is the signal.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `macos_session_id` | string | No | The id of the session. Keep it: no operation lists your sessions. |
+| `anniversary_at` | string | Yes | The `anniversary_at` of the session. It can be in the past. |
+| `rented_at` | string | No | The time of the assignment. |
+| `metadata` | null | Always `null` | A rental starts without `metadata`. |
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_QoKfueu7Cs064JSzFnYXsYr2m",
+  "event_type": "macos_session.rented",
+  "created_at": "2026-10-08T15:00:00.515Z",
+  "trace_id": "c87b173389c4c77058d13c61b4f4c287",
+  "data": {
+    "macos_session_id": "mcs_7Kd2Nq8Rb4Xw1Ty6Ue9Ao3Ph5",
+    "anniversary_at": "2026-10-08T15:00:00.000Z",
+    "rented_at": "2026-10-08T15:00:00.482Z",
+    "metadata": null,
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.
+
+## `macos_session.released`
+
+Sent when the rental of a hosted macOS session ends. After the release, every call on the session
+returns `404`.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `macos_session_id` | string | No | The id of the session. |
+| `anniversary_at` | string | Yes | The `anniversary_at` of the rental that ended. |
+| `cancel_at` | string | Yes | The `cancel_at` of the rental that ended. |
+| `released_at` | string | No | The time of the release. |
+| `reason` | string | No | `cancelled`: the cancellation you scheduled was carried out. `detached_by_admin`: iSnap took the session back. |
+
+If a device session of a line runs on the session, `line.disconnected` is sent too, even when the
+device has stopped reporting, with
+`reason: scheduled_cancellation` after your own cancellation and `reason: admin_revoked` when iSnap
+took the session back.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_P05nb1wvoZmppbShLRwsJsugi",
+  "event_type": "macos_session.released",
+  "created_at": "2026-10-08T15:21:37.940Z",
+  "trace_id": "c950ef0e13a8e5380ac6ed1c78b6d401",
+  "data": {
+    "macos_session_id": "mcs_7Kd2Nq8Rb4Xw1Ty6Ue9Ao3Ph5",
+    "anniversary_at": "2026-09-08T15:00:00.000Z",
+    "cancel_at": "2026-10-08T15:00:00.000Z",
+    "released_at": "2026-10-08T15:21:37.904Z",
+    "reason": "cancelled",
+    "metadata": null,
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.

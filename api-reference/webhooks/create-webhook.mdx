@@ -1,0 +1,31 @@
+---
+title: "Create a webhook subscription"
+description: "Creates a subscription for a URL and an event filter, and returns its signing secret once."
+openapi: "POST /v1/webhooks"
+---
+
+- **Credential:** an account API key. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not
+  applied here: the key can subscribe to any line of the account, or to all lines.
+- **Test keys:** a subscription created with an `isnap_test_` account key is a real subscription of
+  the account, and it receives the events of every key: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. The same request sent twice creates two subscriptions, and each
+  event is then delivered twice to the URL. See
+  [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+- **Events:** none. No event announces a new subscription: see
+  [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+- **Secret:** the response contains the signing secret: do not log it. This operation and
+  [`POST /v1/webhooks/{id}/rotate-secret`](/api-reference/webhooks/rotate-webhook-secret) are the
+  only ones that return it.
+- **Guide:** [Subscribing](/webhooks/overview#subscribing) explains the URL rules, the event filter
+  and the line filter.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `url` is missing or is not a URL. `events` is missing, is empty, or holds a name that is not an event type. `line_ids` is `null`, or one of its entries does not have the form of a line id. `error.issues` names each field. |
+| 400 | `webhook_url_not_allowed` | The URL is refused. `error.issues[0].code` is `invalid_url`, `not_https`, `ssrf_blocked` or `dns_failed`: see [URL rules](/webhooks/overview#url-rules). |
+| 500 | `internal_error` | The URL is longer than 2,048 characters. Shorten it. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

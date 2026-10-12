@@ -1,0 +1,263 @@
+---
+title: "Core concepts"
+description: "Defines the terms the iSnap docs use: lines and their kinds, line and message statuses, accounts, services, chats, identifiers and timestamps."
+---
+
+The other pages use the terms this page defines, each with one meaning. Read it once before you integrate, and come back to it for the status tables.
+
+## Lines
+
+A **line** is what sends and receives messages. Every message belongs to one line, and a send names the line it leaves from. A line has an id, a `status`, and fields that say what kind of line it is.
+
+The **line's device** is the hardware that sends and receives for a line. iSnap hands each message to the line's device, and the device reports what happened to it. A status such as `delivered` therefore exists only when the device reports it.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `line_` followed by 25 characters. See [Identifiers](#identifiers). |
+| `phone_number` | The line's number in E.164 when it is known. It is never `null`: it is an empty string when the line has no number. A shared line has none, and a BYOD line has none until its device reports one. The number is masked on `GET /v1/lines`, and on `GET /v1/lines/{id}` for a caller who does not own the line. |
+| `capabilities` | The services the line can use, as an array of lowercase names: `imessage`, `sms`, `rcs`. |
+| `status` | See [Line statuses](#line-statuses). |
+| `billing_tier`, `byod`, `shared`, `test_line`, `inbound_only` | The five fields that say what kind of line it is. See [Line kinds](#line-kinds). |
+| `metadata` | The `metadata` object attached to the line, or `null`. A line created with `"metadata": {}` reads `{}`: treat `null` and `{}` the same. A line you reserve from the marketplace keeps the keys that an earlier owner set: remove them with [`PATCH /v1/lines/{id}`](/api-reference/lines/update-line). |
+
+The **marketplace** is the set of lines that `GET /v1/lines` lists: lines you can take now. `GET /v1/lines/my` lists your own lines whose status is `active` or `reserved`.
+
+<Warning>
+  Line `metadata` is readable by anyone who holds the line id, and it stays on a line that returns to the marketplace. Never put personal data or secrets in line `metadata`.
+</Warning>
+
+## Line kinds
+
+Five fields of the line object tell the kinds of line apart.
+
+| Kind | `billing_tier` | `byod` | `shared` | `test_line` | `inbound_only` | What it is |
+| --- | --- | --- | --- | --- | --- | --- |
+| Two-way rented line | `rental_iphone` or `rental_android` | `false` | `false` | `false` | `false` | A line on hardware that iSnap operates. |
+| Inbound-only rented line | `rental_iphone` or `rental_android` | `false` | `false` | `false` | `true` | The same hardware. The line can message a contact only after that contact wrote to it. |
+| BYOD line | `byod_imessage` or `byod_android` | `true` | `false` | `false` | `false` | A line on your own Mac and iPhone (`byod_imessage`), or on your own Android phone (`byod_android`). The line appears when the device completes pairing: see [BYOD lines](/guides/byod). |
+| Shared line | `shared_imessage` | `false` | `true` | `false` | `false` | A line with no hardware and no number of its own. Each contact is served by one number of iSnap's own iMessage lines, tied to the contact by a binding: see [Shared lines](/guides/getting-a-line#shared-lines). |
+| Test line | `shared_pool` | `false` | `false` | `true` | `false` | A line set aside for the trials of its owner: a two-way rented line that a wholesale partner converted, which keeps its number, or a line that iSnap created for the account. Its owner can still send from it. See [Managing lines](/guides/managing-lines). |
+| Dedicated pool line | `shared_pool` | `false` | `false` | `false` | `false` | A line from iSnap's own pool that iSnap set aside for your account. [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns `404 not_found` for it, `terminate` returns `403 pool_line_not_terminable` and `cancel` returns `403 pool_line_not_cancellable`: to end it, write to [support@isnap.ai](mailto:support@isnap.ai). |
+
+`capabilities` follows the kind, except on a pool line that iSnap created for your account:
+
+| `billing_tier` | `capabilities` |
+| --- | --- |
+| `rental_iphone`, `byod_imessage` | `["imessage","sms"]` |
+| `rental_android`, `byod_android` | `["sms","rcs"]` |
+| `shared_imessage` | `["imessage"]` |
+| `shared_pool`, on a test line that you converted from a rented line | The `capabilities` it had as a rented line. |
+| `shared_pool`, on a test line that iSnap created for your account | Does not tell the services, and can be `["sms"]`. Such a test line is an iMessage line. |
+| `shared_pool`, on a dedicated pool line | Does not tell the services, and can be `["sms"]`. A dedicated pool line is an iMessage line. |
+
+An **Android line** is a line whose `billing_tier` is `rental_android` or `byod_android`, or a test line whose `capabilities` include `rcs`. Every other line is an **iMessage line**: its device is a Mac, and a shared line sends from the numbers of iSnap's own iMessage lines. The two have different default [sending limits](/guides/sending-limits#the-five-limits).
+
+These API values contain `pool`. `billing_tier: shared_pool` marks a test line or a dedicated pool line, and `ownership: pool` in [`GET /v1/attention`](/api-reference/lines/list-attention) marks the same lines. `pool_line_id` and `pool_line_number` name the pool line of a trial: see [Trials](/guides/trials). The code `pool_line_not_terminable` refuses to terminate a dedicated pool line, and `pool_line_not_cancellable` refuses to cancel a test line or a dedicated pool line. The code `line_pool_exhausted` means that no number of a shared line, or no pool line, is free.
+
+## Line statuses
+
+`status` takes one of six values.
+
+| `status` | Meaning | Sends |
+| --- | --- | --- |
+| `provisioning` | The line is being assembled for one of your pre-orders. | No |
+| `available` | The line belongs to no account and can be reserved or assigned. | No |
+| `reserved` | The line is reserved for one account until `expires_at`. It is not billed. | No |
+| `active` | The line belongs to its owner. This is the only status in which a line sends. | Yes |
+| `suspended` | The line still belongs to its owner, but a send returns `403 line_suspended`. | No |
+| `cancelled` | The line is ended. This status is final. | No |
+
+A send from a line that is neither `active` nor `suspended` returns `400 line_not_active`.
+
+What moves a line from one status to another:
+
+| Change | Cause |
+| --- | --- |
+| `available` to `reserved` | You call [`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line). |
+| `reserved` to `available` | You call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line), or the reservation expires, 15 minutes after the reserve. |
+| `reserved` to `active` | A wholesale partner calls [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line). A direct account cannot activate a line through the API: see [Accounts](#accounts). |
+| `available` to `active` | A wholesale partner calls [`POST /v1/lines/assign`](/api-reference/lines/assign-line). |
+| Created as `active` | A wholesale partner calls [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line), or a BYOD device completes pairing. |
+| `provisioning` to `active` | The line of a pre-order is handed over. |
+| `active` or `provisioning` to `suspended` | A payment of the line's per-line subscription fails, or iSnap suspends the line. |
+| `suspended` to its previous status | iSnap lifts the suspension. |
+| `active` or `suspended` to `cancelled` | You call [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line), or the date set by [`POST /v1/lines/{id}/cancel`](/api-reference/lines/cancel-line) arrives. |
+| `active` or `suspended` to `available` | The per-line subscription of a rented line ends. The line leaves the account: it is not `cancelled`. |
+| `active` to `cancelled` | A BYOD line is no longer covered by the BYOD slots of the account. |
+
+Three things to know about these statuses:
+
+- Only iSnap lifts a suspension. Write to [support@isnap.ai](mailto:support@isnap.ai) to ask for it. A suspended line of a wholesale partner still counts on the monthly invoice.
+- `GET /v1/lines/my` lists only `active` and `reserved` lines: a line that becomes `suspended` or `cancelled` leaves the list. Read a rented or BYOD line in any status with `GET /v1/lines/{id}`. A `cancelled` line keeps its owner. No read operation returns a shared line, a test line or a dedicated pool line that is `suspended` or `cancelled`: `GET /v1/lines/my` lists it only while it is `active` or `reserved`, and `GET /v1/lines/{id}` returns `404 not_found` for it in every status. `GET /v1/attention` does not list a line for being `suspended`: keep the ids of your lines, and read each with `GET /v1/lines/{id}`.
+- No event announces a reservation, its expiry, a release, an activation by `activate` or `assign`, the creation of a shared line, a suspension, the end of a suspension, or the return of a rented line to the marketplace. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and read the status from the API.
+
+[Getting a line](/guides/getting-a-line) and [Managing lines](/guides/managing-lines) describe each operation.
+
+## Accounts
+
+Two kinds of account call the API.
+
+- A **wholesale partner** is an account that iSnap bills on one monthly invoice. iSnap grants this status: write to [support@isnap.ai](mailto:support@isnap.ai) to ask for it.
+- A **direct account** is any account that is not a wholesale partner. It pays for an active rented line through a **per-line subscription**, whose id is the line's `stripe_subscription_id`. That field is `null` on a rented line that the account received by transfer while the line was not `active`. A direct account cannot pay through the API. It cannot activate a reserved line, assign a line, create a shared line, buy BYOD slots or rent a hosted macOS session through the API: to buy a line, BYOD slots or hosted macOS sessions, write to [support@isnap.ai](mailto:support@isnap.ai). It can order a line with a pre-order: the confirmation creates the line, and the first month is paid by writing to support@isnap.ai. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
+
+No field of any response says which kind your account is. The refusal codes below are the sign that an operation is for wholesale partners only.
+
+| Task | Any account | Wholesale partners only |
+| --- | --- | --- |
+| Getting a line | Browse the marketplace, reserve a line and release it, order a line with a pre-order. A direct account pays by writing to [support@isnap.ai](mailto:support@isnap.ai). | Activate a reserved line, assign a line, create a shared line. |
+| Managing a line | Read your lines, set their metadata, configure them, read the health of a BYOD line, list the lines that need attention, terminate a line, transfer a line, switch a rented line that has no per-line subscription between inbound-only and two-way. | Cancel a line at its anniversary, set the anniversary, convert a line to a test line and back. |
+| Hosted macOS sessions | None. A direct account rents a session by writing to [support@isnap.ai](mailto:support@isnap.ai). | Rent a session through the API, and manage it. |
+
+What a direct account receives on those operations:
+
+| Operation | Refusal |
+| --- | --- |
+| `POST /v1/lines/{id}/activate`, `POST /v1/lines/assign`, `POST /v1/lines/{id}/convert-to-test`, `POST /v1/lines/{id}/convert-from-test` | `402 checkout_required` |
+| `POST /v1/lines/shared` | `402 payment_required` |
+| `POST /v1/lines/{id}/cancel`, `POST /v1/lines/{id}/anniversary` | `409 line_not_wholesale_metered` |
+| `POST /v1/macos-sessions/rent` | `403 not_a_wholesale_partner` |
+| `POST /v1/lines/{id}/variant` on a line with a per-line subscription | `409 variant_bound_to_stripe_price` |
+
+The [operations table](/api-reference/introduction#operations) marks every operation that is for wholesale partners only.
+
+## Messages
+
+A **message** is one text, one or more attachments, or both, exchanged between one line and one contact. The **contact** is the person on the other side. The **recipient** is the `to` of a send. A **handle** is what identifies a contact: a phone number in E.164, or an email address. A send takes a phone number only. An inbound message can come from an email address.
+
+The message object has one shape everywhere: in the response of a send, of a read and of a cancel, in each item of `GET /v1/messages`, and in the `message` field of message events.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `msg_` followed by 25 characters. |
+| `direction` | `outbound`: the line sent it. `inbound`: the line received it. |
+| `kind` | `message`, `voice` for a voice note, or `reaction` for a reaction stored as its own entry. |
+| `to`, `from` | On an outbound message, `to` is the recipient in E.164 and `from` is the line's number. On an inbound message, `from` is the sender and `to` is the line's number. On a shared line, the line's side is the number that serves that contact. `from` is an empty string when the line has no number. On a message typed on the line's device, `to` is the contact's handle as the device stores it. |
+| `body` | The text. `null` when the message has no text. |
+| `status` | See [Message statuses](#message-statuses). |
+| `service`, `channel` | See [Services](#services). |
+| `scheduled_for`, `schedule_reason` | On a **held message**, a message with `status: scheduled`: the planned departure time, and why iSnap holds it. On an outbound message that is not held, `scheduled_for` equals `queued_at` and `schedule_reason` is `null`. See [Held messages](/guides/sending-limits#held-messages). |
+| `created_at` | When iSnap recorded the message. |
+| `queued_at` | When iSnap accepted an outbound message, a held message included. `null` on an inbound message and on a message typed on the line's device. |
+| `sent_at`, `delivered_at`, `read_at`, `failed_at`, `cancelled_at` | When each step happened. Each is `null` until it happens. |
+| `error_code`, `error_message` | `null` unless the message failed. See [Sending messages](/guides/sending-messages). |
+| `metadata` | The `metadata` object you sent with the message, or `null`. |
+
+iSnap deletes every message at least 72 hours after it recorded it, whatever its status: see [Retention](/guides/receiving-messages#retention).
+
+A message carries personal data: the handles in `to` and `from`, the text in `body`, attachment file names, and whatever you put in `metadata`. Request it only when needed. Do not copy it into logs, tickets or other tools. Refer to a contact by an id of your own.
+
+## Message statuses
+
+`status` takes one of seven values.
+
+| `status` | Meaning | Set by | Final |
+| --- | --- | --- | --- |
+| `queued` | iSnap accepted the message. It is waiting for the line's device, or the line's device has taken it and has not reported the outcome. | iSnap, at the send or when it releases a held message. | No |
+| `scheduled` | iSnap holds the message until `scheduled_for`: because of a sending limit, the spacing between messages, quiet hours or an earlier message to the same recipient, or, on a shared line, because the number that serves the contact cannot send now. `schedule_reason` names the cause: a message held behind an earlier message to the same recipient takes that message's reason, and `pending_retry` means that iSnap retries the release. A message still held 48 hours after iSnap accepted it becomes `failed`, even when its `scheduled_for` is later. | iSnap, when it accepts the message or holds it again. | No |
+| `sent` | The line's device reported that it sent the message. `sent_at` is set. | The line's device. | No |
+| `delivered` | The line's device reported a delivery receipt. Every inbound message also has this status. | The line's device. | No |
+| `read` | The line's device reported that the recipient read the message. Only an outbound message takes this status. | The line's device. | No |
+| `failed` | The message failed, or iSnap stopped waiting for its outcome (`error_code: no_terminal_ack`), in which case it can have reached the recipient. `failed_at` is set. | The line's device, or iSnap. | Yes: treat it as final, see below |
+| `cancelled` | You canceled the message with `DELETE /v1/messages/{id}` before the line's device took it. | You. | Yes |
+
+An outbound message moves from `scheduled` to `queued`, then to `sent`, `delivered` and `read`. Around that path:
+
+- A `queued` or `scheduled` message can become `cancelled`.
+- A message in any status except `cancelled` can become `failed`, even after `delivered` or `read`.
+- `cancelled` never changes. Treat `failed` as final too: after a failure that the line's device reported, a late send confirmation can set `status` back to `sent`, while `failed_at` stays set. A message that has a `failed_at` failed.
+- Nothing is guaranteed to follow `sent`, `delivered` or `read`. iSnap learns "delivered" and "read" only from the line's device and never assumes them: with no report, a message stays `sent` until iSnap deletes it.
+- An inbound message is `delivered` from the start. There is no status for "received".
+
+The order is not strict. A delivery receipt can arrive before the device confirms the send: the confirmation then sets `status` back to `sent` while `delivered_at` stays set. A message can become `read` while `delivered_at` is still `null`. Use the timestamps, not only `status`: a message with a `delivered_at` was delivered. To build the status from events, apply [Building the status from events](/guides/sending-messages#building-the-status-from-events).
+
+A message becomes `failed` in four cases: the device reported a failure, the device took the message and never reported an outcome, the message was still waiting 48 hours after iSnap accepted it (a held message included), or the line was terminated while the message was waiting. iSnap never resends a `failed` message. [Sending messages](/guides/sending-messages) describes each case and what to do.
+
+## Services
+
+The **service** is what the line's device used to carry a message: `iMessage`, `SMS` or `RCS`. The `service` field of a message reports it.
+
+- The device chooses the service when it sends. The API cannot choose it.
+- `service` is `null` until the device confirms the send. It stays `null` when the send fails, and when the device does not report the service.
+- `channel` is a request field of `POST /v1/messages` that only takes `auto`, its default.
+- In a response, `channel` is `auto` on a message sent through the API. On an inbound message, and on a message typed on the line's device, it equals `service`. On a reaction it is `iMessage`.
+
+The services a line can use are in its `capabilities`: see [Line kinds](#line-kinds).
+
+## Chats
+
+A **chat** is the exchange between one line and one contact. iSnap creates it at the first message in either direction and uses the same chat for both directions. Its id is `chat_` followed by 25 characters.
+
+- The message object has no chat id. [`GET /v1/chats`](/api-reference/chats/list-chats) gives the chat ids, and so does the `chat_id` field of `message.received`, of `message.sent` with `origin: "device"`, of the `message.read` that follows your own mark-read call, and of the typing indicator events.
+- A message that the line receives in a group is recorded in one chat for that group. That chat shows a single `contact_handle`, the first sender seen, and nothing marks it as a group. iSnap does not send to groups.
+- A chat is never deleted. It stays listed after its messages are deleted.
+- A chat belongs to its line, not to your account. When a line leaves your account, by a transfer or by a return to the marketplace, its chats stay with the line, with their `contact_handle`, and the next owner lists them. When the next owner marks such a chat read, it receives in `message.read` each of your inbound messages of the chat that iSnap still keeps and that you had not marked read, with its text, the sender's handle and the names of its files. The events about your earlier messages of the line go to the next owner too. Before you transfer a line or let it return to the marketplace, export what you need from its chats. After you take a line, ignore the chats and the events about messages older than the time the line became yours. Note that time when you get the line: no event announces a transfer. See [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted), and [Lines that change owner](/webhooks/overview#lines-that-change-owner) for the rule and for that time.
+
+A chat carries the contact's handle in `contact_handle`: it is personal data.
+
+## Identifiers
+
+An id is a prefix, an underscore and 25 characters from `0-9A-Za-z`, except the kinds of id that the end of the table lists. Ids are case-sensitive.
+
+| Identifier | Form | Example | Where it appears |
+| --- | --- | --- | --- |
+| Line | `line_` and 25 characters | `line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd` | `id` of a line, `line_id`, `from_line_id`, `pool_line_id` |
+| Message | `msg_` and 25 characters | `msg_3Lc6Yp1Hd8Xk2mQ4vTn7Bw9Rz` | `id` of a message, `message_id`, `reply_to_message_id`, `parent_message_id` |
+| Chat | `chat_` and 25 characters | `chat_7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vTn` | `id` of a chat, `chat_id` |
+| Attachment | `att_` and 25 characters | `att_Q4vTn7Bw9Rz3Lc6Yp1Hd8Xk2m` | `id` of an attachment, the `attachments` of a send, `attachment_id` |
+| Webhook subscription | `wh_` and 25 characters | `wh_Yp1Hd8Xk2mQ4vTn7Bw9Rz3Lc6` | `id` of a subscription, `webhook_id` of a delivery record (the `data.webhook_id` of a probe is another value) |
+| Delivery | `whd_` and 25 characters | `whd_k2mQ4vTn7Bw9Rz3Lc6Yp1Hd8X` | `id` of a delivery, `delivery_id`, `replay_of` |
+| Event | `evt_` and 25 characters | `evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D` | `event_id` of an event |
+| Trial | `trl_` and 25 characters | `trl_n7Bw9Rz3Lc6Yp1Hd8Xk2mQ4vT` | `trial_id` |
+| Hosted macOS session | `mcs_` and 25 characters | `mcs_Rz3Lc6Yp1Hd8Xk2mQ4vTn7Bw9` | `id` of a session, `macos_session_id` |
+| Device session | `dvs_` and 25 characters | `dvs_5Tn8Kc3Wq6Zb9Lx2Hm7Vd4Ry1` | `device_session_id` of `line.connected`, `line.disconnected` and `line.degraded` |
+| Lookup check | `lkp_` and 25 characters | `lkp_c6Yp1Hd8Xk2mQ4vTn7Bw9Rz3L` | `probe_id` of a pending lookup |
+| Request | `req_` and 25 characters | `req_4Tn7Bw9Rz3Lc6Yp1Hd8Xk2mQv` | `request_id` of every response, `X-Request-Id` |
+| Trace | 32 lowercase hexadecimal characters | `0af7651916cd43dd8448eb211c80319c` | `trace_id` of every response and every event, `X-Trace-Id` |
+| Pre-order | A UUID | `6f1c2a9e-4b7d-4c1a-9e55-0d2b8f3a7c41` | `id` of a pre-order, `pre_order_id` |
+| Account | A UUID | `0b9d4e52-7c3a-4f18-8a6e-5d1c2b3a4f60` | `to_user_id` of a line transfer |
+
+A line, message, chat, webhook subscription, delivery, pre-order or hosted macOS session id of another form in a path returns `400 validation_failed`. With a line-scoped key, an operation under `/v1/lines/{id}/` checks the list first: an id that starts with `line_` and is not in the list returns `403 forbidden`, before the `400`. Send only ids that start with `line_`: an id of another form returns `403 forbidden`, or `500 internal_error` when it is not a UUID.
+
+## Timestamps
+
+A timestamp in a response is ISO 8601 in UTC, with milliseconds and a `Z` suffix: `2026-10-08T14:22:57.392Z`.
+
+A timestamp in a request is ISO 8601 with a `Z` suffix. `since` and `until` on `GET /v1/messages` and `GET /v1/chats` also accept an explicit offset such as `+02:00`. [Pagination](/pagination#timestamps-in-queries) gives the rule of each list.
+
+Two values are Unix times in seconds, not ISO 8601: the `X-RateLimit-Reset` header of a response, and the `webhook-timestamp` header of a webhook delivery.
+
+## Other terms
+
+Each of these terms has one meaning on every page. Its guide defines its states and rules.
+
+| Term | Meaning | Guide |
+| --- | --- | --- |
+| Operation | One method and path of the API, such as `POST /v1/messages`. | [API reference](/api-reference/introduction#operations) |
+| Dashboard | `https://platform.isnap.ai`, where you create and revoke API keys. | [Authentication](/authentication#api-keys) |
+| Per-line subscription | How a direct account pays for one rented line. Its id is the line's `stripe_subscription_id`. | [Accounts](#accounts) |
+| API key, trial key, line-scoped key | The three kinds of key. | [Authentication](/authentication) |
+| Metadata | The `metadata` object you attach to a resource: your own keys and values, which iSnap stores and returns unchanged. | [Managing lines](/guides/managing-lines) |
+| Sending limit | One of the five counters that bound what a line sends, each on a rolling window. | [The five limits](/guides/sending-limits#the-five-limits) |
+| Held message | A message with `status: scheduled`. | [Held messages](/guides/sending-limits#held-messages) |
+| Quiet hours | The hours of the recipient's local time in which iSnap holds the messages of a line. | [Quiet hours](/guides/sending-limits#quiet-hours) |
+| Reply lane | The rule that lets a reply to a contact who wrote to the line in the last 24 hours (by default) leave despite quiet hours and four of the five sending limits. `reply_lane` on a message says whether it qualified. | [Reply lane](/guides/sending-limits#reply-lane) |
+| Reaction | A mark that a person puts on a message, such as `love` or `like`: an iMessage tapback. | [Chat features](/guides/conversations) |
+| Messages conversation | What the Messages app on the line's device shows for one contact. It is not a chat: some features need it on the device. | [Chat features](/guides/conversations) |
+| Webhook subscription | The resource under `/v1/webhooks`: a URL of yours and the events it receives. "Your endpoint" is that URL. | [Webhooks overview](/webhooks/overview) |
+| Event | One fact that iSnap reports, with an `event_id` and an `event_type`. | [Event catalog](/webhooks/event-catalog) |
+| Delivery, attempt | A delivery is one event for one subscription. An attempt is one HTTP request of a delivery. | [Delivery guarantees](/webhooks/delivery) |
+| Events feed | `GET /v1/webhooks/events`: the events of the last 72 hours that matched a webhook subscription of your account while it was active and not suspended. An account without such a subscription has an empty feed. | [Events feed](/webhooks/pulling-events) |
+| Probe | The `webhook.test` request that iSnap sends to a suspended subscription. | [Suspension](/webhooks/delivery#suspension) |
+| Signing secret | The secret of a subscription, with which you verify each delivery. | [Verifying signatures](/webhooks/verifying-signatures) |
+| Trial, pairing code, pool line | A trial lets a prospect exchange messages with a line from their own phone. The pairing code is the `token` of a trial. The pool line is the line a trial runs on (`pool_line_id`, `pool_line_number`): a line of iSnap's trial pool, or a test line of your account. | [Trials](/guides/trials) |
+| Live trial | A trial that is `pairing_pending` inside its pairing window, `active` or `dormant`. | [Limits on live trials](/guides/trials#limits-on-live-trials) |
+| BYOD | Bring your own device: a line that runs on your own Mac and iPhone, or on your own Android phone. | [BYOD lines](/guides/byod) |
+| BYOD slot | What a direct account needs for each BYOD line: each BYOD line that is not `cancelled` uses one slot. A wholesale partner needs none. | [BYOD slots](/guides/byod#byod-slots) |
+| Bridge app, activation code | The bridge app is the iSnap app installed on a BYOD device. The activation code is the `activation_code` that pairs the device. | [BYOD lines](/guides/byod) |
+| Device session | The pairing of one device with a line, identified by `device_session_id`. [`line.disconnected`](/webhooks/events/line#line-disconnected) carries the id of a session that ended, or `null` when the line had none: its section lists the cases in which it is sent. `line.connected` and `line.degraded` carry the id of the session that serves the line. | [Connectivity events](/guides/managing-lines#connectivity-events) |
+| Pre-order | A request to iSnap to build one rented line for you. | [Pre-orders](/guides/pre-orders) |
+| Hand-over | The moment the line of a pre-order becomes `active` on your account. | [Pre-orders](/guides/pre-orders) |
+| Hosted macOS session | The resource under `/v1/macos-sessions`. It is not a line: it has no number and sends nothing. | [Hosted macOS sessions](/guides/hosted-macos-sessions) |
+| Binding | On a shared line, the tie between one contact and the number that serves them. The first message to the contact creates it, and `binding.released` announces its end. | [Shared lines](/guides/getting-a-line#shared-lines) |
+| Billing anchor, anniversary | `billing_anchor_at` and `anniversary_at` of a line. | [Managing lines](/guides/managing-lines) |
+| Variant | Whether a rented line is two-way or inbound-only: its `inbound_only`. | [Variant changes](/guides/managing-lines#variant-changes) |

@@ -1,0 +1,21 @@
+---
+title: "Uncancel a line"
+description: "Withdraws the scheduled end of a line."
+openapi: "POST /v1/lines/{id}/uncancel"
+---
+
+- **Credential:** an API key of the owner of the line. See [Cancel at the anniversary](/guides/managing-lines#cancel-at-the-anniversary).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **`Idempotency-Key`:** not honored. On a line with no `cancel_at`, the operation returns `200` and changes nothing, so a retry is safe.
+- **Events:** none. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+| 409 | `line_already_terminated` | The line is `cancelled`. |
+| 409 | `line_changed_concurrently` | The owner or the status of the line changed during the call. Nothing was written. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

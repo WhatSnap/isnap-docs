@@ -1,0 +1,32 @@
+---
+title: "Assign a line"
+description: "Makes one available line of a kind yours and activates it, in one call."
+openapi: "POST /v1/lines/assign"
+---
+
+- **Credential:** an API key with no list of lines. See [Assignment](/guides/getting-a-line#assignment).
+- **Account:** wholesale partners only: any other account receives `402 checkout_required`.
+- **Line-scoped keys:** every [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden`.
+- **Test keys:** an assignment sent with an `isnap_test_` account key takes a real line, billed like any other: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored, and remembered for 24 hours. Without it, every retry takes one more billable line. See [Retries](/guides/getting-a-line#retries) and [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).
+- **Events:** none. See [Events](/guides/getting-a-line#events).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | The `Idempotency-Key` is longer than 255 characters, or the body is invalid. |
+| 400 | `reserved_metadata_key` | `metadata` names `migration_ref` or `proof_line`. |
+| 400 | `inbound_only_not_rental` | `inbound_only` is `true` with a BYOD kind. |
+| 400 | `test_line_not_rental` | `as_test_line` is `true` with a BYOD kind. |
+| 400 | `test_line_not_inbound_only` | `as_test_line` and `inbound_only` are both `true`. |
+| 402 | `checkout_required` | Your account is not a wholesale partner. This is checked after the body passes validation, before the other rules of this operation on the body, and before any line is looked at. |
+| 403 | `forbidden` | The request uses a line-scoped key. |
+| 409 | `no_matching_line` | No available line matches, or the line that was picked failed its last checks. |
+| 409 | `line_on_rented_macos_session`, `line_takes_no_macos_session` | The hosted macOS session of the line that was picked does not fit. |
+| 409 | `idempotency_key_collision` | The same `Idempotency-Key` was sent with another body. |
+| 503 | `idempotency_in_flight` | A request with the same `Idempotency-Key` is still running. Retry with the same key. |
+
+With `as_test_line: true`, the call can also return an error of [`convert-to-test`](/api-reference/lines/convert-to-test-line) after the line was assigned. The line then stays yours as a rented line: see [Assignment](/guides/getting-a-line#assignment).
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

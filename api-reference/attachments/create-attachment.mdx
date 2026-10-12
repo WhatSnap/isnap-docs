@@ -1,0 +1,22 @@
+---
+title: "Create an attachment"
+description: "Registers a file and returns a signed URL to upload it, valid 15 minutes."
+openapi: "POST /v1/attachments"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Sending a file](/guides/attachments#sending-a-file).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied: an attachment belongs to the account.
+- **`Idempotency-Key`:** honored. The key belongs to the account. While the attachment is `awaiting_upload` and before its deadline, a repeat returns the same `id` with a new `upload_url`. See [Creating an attachment](/guides/attachments#creating-an-attachment).
+- **Events:** none, also when the attachment becomes `ready`, `failed` or `expired`.
+- **Personal data:** `filename` is shown to the contact and can hold personal data, and `upload_url` is a credential until `upload_expires_at`. Do not copy them into logs, tickets or other tools.
+- **Next steps:** upload the file with one `PUT` to `upload_url`, with `required_headers`, before `upload_expires_at`. Then wait for `status: ready` before you send the attachment.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `filename` is empty or longer than 255 characters, `content_type` is empty or longer than 100, or `size_bytes` is not an integer of at least 1. |
+| 409 | `idempotency_terminal_state` | The `Idempotency-Key` was used for an attachment that is no longer `awaiting_upload`, or whose upload deadline passed. Create the attachment again with a new key. |
+| 413 | `attachment_exceeds_storage_limit` | `size_bytes` is over 5,368,709,120 bytes (5 GiB). In the SDK, it arrives as an `UnprocessableEntityError`. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

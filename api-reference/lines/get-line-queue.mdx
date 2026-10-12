@@ -1,0 +1,24 @@
+---
+title: "List the queue of a line"
+description: "Lists a line's outbound messages that are held, waiting for its device, or sent without a delivery receipt, with a summary of its counters."
+openapi: "GET /v1/lines/{id}/queue"
+---
+
+- **Credential:** an API key of the owner of the line. See [Reading the limits and the queue](/guides/sending-limits#reading-the-limits-and-the-queue).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list, even when the line does not exist.
+- **Events:** none.
+- **Personal data:** each item carries the recipient's number in `to` and the text in `body`. Request them only when needed, do not copy them into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **Item `status`:** `scheduled` for a held message. `queued` for a message that waits for the line's device, or that the device has and has not confirmed. `delivered_to_device` for a message whose `status` is `sent`: the device confirmed the send, and no delivery receipt has arrived. A `delivered_to_device` item stays listed until a receipt arrives or iSnap deletes the message, at least 72 hours after it recorded it.
+- **Order:** by `scheduled_for`, earliest first. `queue_position` starts at 1 and counts the items of the earlier pages. Without a `status` filter, it counts the `delivered_to_device` items too.
+- **Pagination:** a cursor, not tied to the `status` filter. `limit` is 1 to 100, 50 by default. An item can come back on a later page when iSnap holds its message again with a later `scheduled_for`: deduplicate on `id`. See [Cursors](/pagination#cursors).
+- **Items:** a queue item is not a message object: its `body` is `""` where the message has `null`. Reaction entries are listed too.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `limit` is outside 1 to 100, or `status` is not `scheduled`, `queued` or `delivered_to_device`. A cursor that cannot be read is not an error: the list restarts from the first page. |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or the line is not yours. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

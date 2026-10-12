@@ -1,0 +1,20 @@
+---
+title: "Get the configuration of a line"
+description: "Returns the send configuration in force on a line, the keys that are overridden, and the default and bounds of eight of its limits."
+openapi: "GET /v1/lines/{id}/config"
+---
+
+- **Credential:** an API key of the owner of the line. The operation works on any line you own. See [Configuration](/guides/managing-lines#configuration).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **Events:** none.
+- **Defaults:** read them from `knobs` and from `config`. They depend on the line, and iSnap can change them. What each setting does is in [Sending limits](/guides/sending-limits).
+- **Bounds:** of the eight limits in `knobs`, only the five message limits of a BYOD line accept a value above `default`, up to `knobs.<key>.max`. For the three reply limits, and for the five message limits of a line that is not a BYOD line, [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) returns `403 cannot_increase_limit` for a value above `default` and up to `max`. For each key, a value outside `min` to `max` is refused before that check, on every line: with `422 limit_out_of_bounds` or `400 validation_failed`. The two spacing settings can only be raised: a value below `default` returns `403 cannot_decrease_delay`.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | No line has this id, or you do not own the line. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

@@ -1,0 +1,21 @@
+---
+title: "Uncancel a hosted macOS session"
+description: "Withdraws the scheduled end of the rental of a hosted macOS session."
+openapi: "POST /v1/macos-sessions/{id}/uncancel"
+---
+
+- **Credential:** an API key of the account that rents the session. Every other account receives `404 macos_session_not_found`, never `403`. See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **`Idempotency-Key`:** not honored. A second uncancel is safe: it changes nothing.
+- **Events:** none.
+- **Effect:** clears `cancel_at` and keeps `anniversary_at`: the anniversary does not move. On a session that is not canceled, nothing changes. See [Canceling and keeping a session](/guides/hosted-macos-sessions#canceling-and-keeping-a-session).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `mcs_` followed by 25 letters or digits. |
+| 404 | `macos_session_not_found` | The session is unknown, released, or rented by another account. |
+| 409 | `macos_session_cancellation_already_due` | `cancel_at` has passed and the release has not run. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

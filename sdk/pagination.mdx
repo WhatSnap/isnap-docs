@@ -1,81 +1,158 @@
 ---
-title: "Pagination"
-description: "AsyncIterable list methods, filtering, abort signals."
+title: "SDK pagination"
+sidebarTitle: "Pagination"
+description: "Explains the four list iterators of the SDK, their page sizes, how an iteration ends, stops or fails, how to page by hand with a cursor, and which list methods return one page or the whole set."
 ---
 
-The SDK exposes paginated list methods as `AsyncIterable`s. You can
-`for await` over the entire result set without thinking about cursors.
+Four methods of the SDK return an iterator that walks a cursor list page by page. This page says how an iteration fetches, ends, stops and fails, how to page by hand when you need the cursor, and which list methods are not iterators. The filters, the order and the cursor rules of each list are in [Pagination](/pagination).
 
-## Basic pattern
+## The four iterators
 
-```ts
-for await (const message of isnap.messages.list({ line_id: 'line_aBc...' })) {
-  console.log(message.id, message.body)
+| Method | Operation | Yields | Default page size |
+| --- | --- | --- | --- |
+| `messages.list(filters?)` | [`GET /v1/messages`](/api-reference/messages/list-messages) | `Message` | 25 |
+| `chats.list(filters?)` | [`GET /v1/chats`](/api-reference/chats/list-chats) | `Chat` | 20 |
+| `webhooks.deliveries(id, filters?)` | [`GET /v1/webhooks/{id}/deliveries`](/api-reference/webhooks/list-webhook-deliveries) | `WebhookDelivery` | 20 |
+| `webhooks.events(filters)` | [`GET /v1/webhooks/events`](/api-reference/webhooks/list-webhook-events) | `WebhookEventItem` | 100 |
+
+Each method returns an `AsyncIterable`. A `for await` loop receives the items one by one, and the SDK fetches the next page when the current one is consumed. No request is made before the loop starts.
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Creating the iterator makes no request.
+const failed = client.messages.list({
+  line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd',
+  direction: 'outbound',
+  status: 'failed',
+  limit: 100
+})
+
+for await (const message of failed) {
+  console.log(message.id, message.failed_at, message.error_code)
+}
+
+// The events feed requires `since`.
+const since = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+for await (const event of client.webhooks.events({ since, event: 'message.received' })) {
+  console.log(event.event_id, event.created_at)
 }
 ```
 
-The iterator pulls subsequent pages automatically and stops when the
-server reports there are no more.
+Four rules apply to the iterators:
 
-## Filtering
+- The filters go in the filters argument. The `query` option of a call is ignored on these four methods.
+- The filters argument does not accept `cursor`.
+- `webhooks.events` requires `since`.
+- `messages.list` yields the newest message first unless `sort` or `order` says otherwise.
 
-Pass filters as the first argument; they apply to every page:
-
-```ts
-for await (const m of isnap.messages.list({
-  line_id: 'line_aBc...',
-  status: 'delivered',
-  since: '2026-05-01T00:00:00Z'
-})) {
-  // ...
-}
-```
-
-Filters bind to the iteration. Don't change them mid-loop — start a
-fresh iterator if you need a different filter set.
-
-## Stop early
-
-Standard `break` works:
-
-```ts
-let count = 0
-for await (const m of isnap.messages.list({ line_id })) {
-  if (++count >= 100) break
-  process(m)
-}
-```
-
-Once you break out, the iterator stops fetching subsequent pages.
-
-## Abort signals
-
-For long iterations that need to be cancellable, pass an `AbortSignal`:
-
-```ts
-const controller = new AbortController()
-setTimeout(() => controller.abort(), 30_000)   // 30s ceiling
-
-try {
-  for await (const m of isnap.messages.list({ line_id }, { signal: controller.signal })) {
-    process(m)
-  }
-} catch (err) {
-  if (err instanceof APIConnectionError) {
-    console.warn('Iteration aborted')
-  }
-}
-```
-
-The SDK throws `APIConnectionError` with the abort reason as `cause`.
-Abort happens between page fetches — the current page is fully
-consumed before the abort kicks in.
+Messages, chats and events carry handles and message text. Request them only when needed. Do not copy them into logs, tickets or other tools, and refer to a contact by an id of your own.
 
 ## Page size
 
-You don't pick a page size — the SDK and the server negotiate one
-that's appropriate for the resource. The iterator hides it.
+The page size is the `limit` filter, from 1 to 100. The SDK sends it with every page request and sets no default: the defaults of the API apply.
 
-## Related
+The requests are made in sequence. Each page is one request. It counts against the request-rate limit, and a page of `messages.list` also counts against the message-operations limit: 60 requests per rolling 60 seconds for `GET` and `POST /v1/messages` together. See [Rate limits](/errors-and-rate-limits#rate-limits). There is no total count.
 
-- [SDK → Errors](/sdk/errors) — `APIConnectionError` on abort.
+## End of an iteration
+
+The iteration ends when the API reports `has_more: false` or returns no `next_cursor`.
+
+## Stop an iteration
+
+`break` stops the iteration: no further page is fetched.
+
+A `signal` passed in the options also stops it. When the signal is aborted while your loop handles the items of a page, the loop still receives the rest of that page, then rejects with `APIConnectionError` (`Pagination aborted`) instead of requesting the next page. On the last page, it ends normally. When the signal is aborted before the response headers of a page arrive, that request is canceled, and the loop rejects with its `APIConnectionError`: see the [messages of `APIConnectionError`](/sdk/errors#fields-of-an-error).
+
+## Errors in a loop
+
+An error on a page request is thrown from the loop, after the [automatic retries](/sdk/errors#automatic-retries) of that request. The items already received stay processed. The SDK does not resume the iteration.
+
+```typescript
+import { APIConnectionError, APIError, ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+const controller = new AbortController()
+
+let seen = 0
+try {
+  for await (const chat of client.chats.list({ limit: 50 }, { signal: controller.signal })) {
+    seen += 1
+    console.log(chat.id, chat.last_message_at)
+    if (seen === 200) break // No further page is fetched.
+  }
+} catch (err) {
+  if (err instanceof APIError) {
+    console.error(`Stopped after ${seen} chats:`, err.status, err.code, err.requestId)
+  } else if (err instanceof APIConnectionError) {
+    console.error(`Stopped after ${seen} chats:`, err.message)
+  } else {
+    throw err
+  }
+}
+```
+
+## Page by hand
+
+The iterators expose neither the cursor nor the page boundaries, and they do not accept a `cursor`. An interrupted iteration cannot be resumed through them.
+
+To keep the cursor, call the list operation with `client.request`. It resolves with one page, `{ items, has_more, next_cursor }`:
+
+```typescript
+import { ISnapClient, type Message } from '@isnap/sdk'
+
+type MessagePage = { items: Message[]; has_more: boolean; next_cursor: string | null }
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+// Send the same filters with every page.
+const filters = { line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd', direction: 'inbound', limit: 100 }
+
+// To resume a walk, start from the cursor you stored.
+let cursor: string | null = null
+do {
+  const page: MessagePage = await client.request<MessagePage>('GET', '/v1/messages', undefined, {
+    query: { ...filters, cursor }
+  })
+  for (const message of page.items) {
+    console.log(message.id, message.status)
+  }
+  cursor = page.has_more ? page.next_cursor : null
+  // Store `cursor` here.
+} while (cursor)
+```
+
+A cursor does not expire. What a cursor is valid for differs between the lists: see [Cursors](/pagination#cursors).
+
+## Lists that are not iterators
+
+These methods resolve with one page, or with the whole set:
+
+| Method | Resolves with | Next page |
+| --- | --- | --- |
+| `preOrders.list(query?)` | One page: `{ items, has_more, next_cursor }`. | Pass `next_cursor` back as `cursor`. |
+| `lines.queue(id, query?)` | One page: `{ line_id, summary, items, has_more, next_cursor }`. | Pass `next_cursor` back as `cursor`. |
+| `lines.list(query?)` | One page: `{ lines, total, page, limit }`. | Select a page with `page` and `limit`. |
+| `lines.listMine()` | The whole set: `{ lines }`. | None. |
+| `webhooks.list()` | The whole set: `{ webhooks }`. | None. |
+| `areaCodes.list(query?)` | The whole set. | None. |
+
+```typescript
+import { ISnapClient } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+let cursor: string | undefined
+do {
+  const page = await client.preOrders.list({ status: 'draft', limit: 100, cursor })
+  for (const preOrder of page.items) {
+    console.log(preOrder.id, preOrder.status)
+  }
+  cursor = page.has_more && page.next_cursor ? page.next_cursor : undefined
+} while (cursor)
+
+const firstPage = await client.lines.list({ area_code: '415', page: 1, limit: 20 })
+console.log(`${firstPage.lines.length} of ${firstPage.total} lines`)
+```

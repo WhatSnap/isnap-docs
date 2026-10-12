@@ -1,0 +1,20 @@
+---
+title: "Release a reserved line"
+description: "Gives back a line you reserved, which becomes available again."
+openapi: "POST /v1/lines/{id}/release"
+---
+
+- **Credential:** an API key. The line must be reserved by your account. See [Reservations](/guides/getting-a-line#reservations).
+- **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
+- **`Idempotency-Key`:** not honored. A second call returns `404 not_found`, because the line is no longer reserved by you.
+- **Events:** none. See [Events](/guides/getting-a-line#events).
+- **Billing:** none. This operation does not end an `active` line: see [Ending a line](/guides/managing-lines#ending-a-line).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
+| 404 | `not_found` | The line is not reserved by your account: no line has this id, the line is not yours, or it is in another status, `active` included. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

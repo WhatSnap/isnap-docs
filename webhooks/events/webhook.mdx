@@ -1,0 +1,56 @@
+---
+title: "Webhook events"
+description: "Gives the data of webhook.test, the probe iSnap sends to a suspended subscription, with its headers and an example."
+---
+
+The `webhook.*` family has one event type, `webhook.test`. It is the probe iSnap sends to a
+suspended subscription to find out whether your endpoint responds again. You need this page to
+recognize a probe and to know what to return. See [Suspension](/webhooks/delivery#suspension) for
+the whole mechanism.
+
+## `webhook.test`
+
+Sent only to a suspended subscription, as a probe, whatever the event filter of the subscription. No
+operation requests a test event, and subscribing to `webhook.test` or to `webhook.*` has no effect.
+
+A probe is a signed request like a delivery, with these differences:
+
+| Header | Value on a probe |
+| --- | --- |
+| `X-iSnap-Event` | `webhook.test` |
+| `X-iSnap-Probe` | `1` |
+| `X-iSnap-Delivery-Id` | A `whd_` id that names no delivery record. |
+| `X-iSnap-Attempt` | Not sent. |
+
+It carries the three signature headers of every request: verify it like a delivery.
+
+| Field | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `webhook_id` | string | No | An opaque identifier of the subscription, not its `wh_` id: do not rely on it. |
+| `probe` | boolean | No | Always `true`. |
+| `metadata` | null | Always `null` | A probe concerns no resource. |
+| `line_metadata` | null | Always `null` | A probe concerns no line. |
+
+Return `2xx`: there is nothing to process. A `2xx` response received within 10 seconds resumes the
+subscription. Any other response leaves it suspended, and a `410` response to a probe has no special
+effect.
+
+A probe creates no delivery record and never appears in the events feed.
+
+```json
+{
+  "api_version": "v1",
+  "event_id": "evt_2Yc8RkP4mWq7Lx3Nv9Tb5Hs1D",
+  "event_type": "webhook.test",
+  "created_at": "2025-10-09T08:53:20.000Z",
+  "trace_id": "0af7651916cd43dd8448eb211c80319c",
+  "data": {
+    "webhook_id": "11111111-2222-3333-4444-555555555555",
+    "probe": true,
+    "metadata": null,
+    "line_metadata": null
+  }
+}
+```
+
+Personal data: none.

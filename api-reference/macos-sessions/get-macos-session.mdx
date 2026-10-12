@@ -1,0 +1,19 @@
+---
+title: "Get a hosted macOS session"
+description: "Returns one hosted macOS session that your account rents."
+openapi: "GET /v1/macos-sessions/{id}"
+---
+
+- **Credential:** an API key of the account that rents the session. Every other account receives `404 macos_session_not_found`, never `403`. See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Events:** none.
+- **Fields:** `rented` is `true` on every session that you can read: a released session returns `404`. See [The session object](/guides/hosted-macos-sessions#the-session-object).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | `id` is not `mcs_` followed by 25 letters or digits. |
+| 404 | `macos_session_not_found` | The session is unknown, released, or rented by another account. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

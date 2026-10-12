@@ -1,0 +1,227 @@
+---
+title: "SDK webhook verification"
+sidebarTitle: "Webhooks"
+description: "Shows how to verify a webhook delivery with verifyWebhook, read the event it returns, narrow it with the nine type guards, and write a handler for the Node.js http module or a fetch-style Request."
+---
+
+`verifyWebhook` checks that a request to your endpoint was signed with the signing secret of your webhook subscription, and returns the event. This page gives the two functions of the SDK, what they check, the type of the event, and two complete handlers. Read it when you write the endpoint that receives deliveries. [Webhooks overview](/webhooks/overview) describes subscriptions and what your endpoint must do, and [Verifying signatures](/webhooks/verifying-signatures) gives the algorithm and a test vector.
+
+## The two functions
+
+```typescript
+import type { VerifyWebhookOptions, WebhookEventBase } from '@isnap/sdk'
+
+declare function verifyWebhook(
+  rawBody: string,
+  headers: Record<string, string | string[] | undefined> | Headers,
+  secret: string | readonly string[],
+  options?: VerifyWebhookOptions
+): WebhookEventBase
+
+declare function parseWebhookEvent(rawBody: string): WebhookEventBase
+```
+
+`verifyWebhook` checks the signature and the timestamp of a delivery, then checks the body and returns the event. It is synchronous. It throws `WebhookSignatureError` on any failure.
+
+`parseWebhookEvent` applies the same checks to the body and verifies no signature. Use it on a body that `verifyWebhook` accepted before, for example one you stored. Do not use it on an incoming request.
+
+Both functions are named exports of `@isnap/sdk`. They need no client and no API key.
+
+## Arguments of `verifyWebhook`
+
+| Argument | Rule |
+| --- | --- |
+| `rawBody` | The request body exactly as received, as a string. A body that was parsed and serialized again fails verification. Convert a `Buffer` with `.toString('utf8')`. |
+| `headers` | A `Headers` object or a plain object: the `headers` of a Node.js request and of a fetch `Request` both work. The SDK reads `webhook-id`, `webhook-timestamp` and `webhook-signature`. Header names are case-insensitive. When a value is an array, its first element is used. |
+| `secret` | The signing secret exactly as the API returned it: `whsec_` followed by 64 hexadecimal characters. It can be an array of secrets: the delivery is accepted when any entry matches. An empty array is rejected. |
+| `options.tolerance` | The accepted distance between `webhook-timestamp` and the clock of your server, in seconds. The default is 300. It must be a finite number, 0 or more. |
+
+<Warning>
+Stop at startup when the signing secret is not set. Never pass an empty string as `secret`, and never give the secret a default value.
+</Warning>
+
+### Tolerance
+
+`webhook-timestamp` must be within 300 seconds of the clock of your server, earlier or later. `options.tolerance` changes that window. A `tolerance` of `0` does not turn the check off: it requires the same second.
+
+iSnap renews `webhook-timestamp` on every attempt, so the tolerance never rejects a legitimate retry or replay when the clock of your server is synchronized.
+
+### Several secrets
+
+Each attempt is signed with the current secret of the subscription, and with that one only. After `webhooks.rotateSecret`, every delivery is signed with the new secret, retries included. Passing `[newSecret, oldSecret]` matters only for the requests signed before the rotation and still in transit. [Secret rotation](/webhooks/delivery#secret-rotation) describes the rotation.
+
+## Failures
+
+`WebhookSignatureError` carries a `message` and no `code`. Its causes are:
+
+| Message | Cause |
+| --- | --- |
+| `Missing webhook-id header`, `Missing webhook-timestamp header`, `Missing webhook-signature header` | A signature header is absent. |
+| `Malformed webhook-timestamp: <value>` | The timestamp is not a positive integer. |
+| `Webhook timestamp is outside the <n>s tolerance window (drift: <d>s)` | The timestamp is too far from the clock of your server. |
+| `tolerance must be a finite non-negative number` | `options.tolerance` is invalid. |
+| `No webhook secret(s) provided` | `secret` is an empty array. |
+| `webhook-signature carries no v1 signature` | No entry of the header starts with `v1,`. |
+| `Webhook signature did not match any provided secret` | The signature matches none of the secrets. |
+| A message about the body | The signature passed, and the body is not valid JSON, is not an object, or lacks a non-empty string `api_version`, `event_id`, `event_type` or `created_at`, or an object `data`. |
+
+Treat every failure the same way: do not process the body, and respond `400`. Any status outside `2xx` is a failed attempt. iSnap retries the delivery on its [retry schedule](/webhooks/delivery#retries), except after a `410`: a `410` is not retried, and it makes the subscription inactive. Never respond `410`.
+
+## The event
+
+Both functions return a `WebhookEventBase`:
+
+| Field | Type | Content |
+| --- | --- | --- |
+| `api_version` | `string` | The string `v1`. |
+| `event_id` | `string` | The id of the event. Every attempt and every replay of the event carries the same value. |
+| `event_type` | `string` | The event type, for example `message.received`. |
+| `created_at` | `string` | The time iSnap recorded the event. |
+| `trace_id` | `string`, declared optional | Always present in an event. |
+| `data` | An untyped object | The content of the event. It always has `metadata` and `line_metadata`. |
+
+The return type is not the `WebhookEvent` union, and a `switch` on `event.event_type` does not narrow `data`. Narrow the event with a type guard. [Envelope](/webhooks/event-catalog#envelope) describes these fields.
+
+## Type guards
+
+There are nine guards, one per event family. Each matches on the prefix of `event_type`, so a new event type of a known family matches without an SDK upgrade.
+
+| Guard | Prefix | Type of `data` after the guard |
+| --- | --- | --- |
+| `isMessageEvent` | `message.` | `data.message` is a `Message`. |
+| `isReactionEvent` | `reaction.` | Typed fields, with `from_handle` when `direction` is `inbound` and `actor_handle` when it is `outbound`. |
+| `isLineEvent` | `line.` | Untyped: `Record<string, unknown>`. |
+| `isTypingIndicatorEvent` | `typing_indicator.` | Untyped. |
+| `isTrialEvent` | `trial.` | Untyped. |
+| `isPreOrderEvent` | `pre_order.` | Untyped. |
+| `isBindingEvent` | `binding.` | Untyped. |
+| `isMacosSessionEvent` | `macos_session.` | Untyped. |
+| `isAdminEvent` | `webhook.` | Untyped. |
+
+Only two families have a typed `data`. For the seven others, read each value of `data` as `unknown` and check it. In a `message.*` event, the keys of `data` other than `message`, such as `chat_id`, are in the payload and not in the type: read them through a cast. The fields of every event are on the pages of the [event catalog](/webhooks/event-catalog#event-types).
+
+```typescript
+import {
+  isLineEvent,
+  isMessageEvent,
+  isReactionEvent,
+  type WebhookEventBase
+} from '@isnap/sdk'
+
+export function summarize(event: WebhookEventBase): string {
+  if (isMessageEvent(event)) {
+    const { message } = event.data
+    // Not in the type: read it as unknown, then check it.
+    const chatId = (event.data as Record<string, unknown>).chat_id
+    const chat = typeof chatId === 'string' ? ` in ${chatId}` : ''
+    return `${event.event_type}: ${message.id} is ${message.status}${chat}`
+  }
+  if (isReactionEvent(event)) {
+    // direction selects the variant: from_handle when inbound, actor_handle when outbound.
+    const author = event.data.direction === 'inbound' ? 'the contact' : 'the line'
+    return `${event.event_type}: ${event.data.reaction_type} by ${author} on ${event.data.parent_message_id}`
+  }
+  if (isLineEvent(event)) {
+    const lineId = event.data.line_id
+    return `${event.event_type}: ${typeof lineId === 'string' ? lineId : 'see data.line'}`
+  }
+  return `${event.event_type}: not handled`
+}
+```
+
+The aliases `MessageEventType`, `ReactionEventType`, `LineEventType`, `TypingIndicatorEventType`, `TrialEventType`, `PreOrderEventType`, `BindingEventType`, `MacosSessionEventType` and `AdminEventType` list the 37 event types that version 2.2.1 of the SDK knows. The API can add event types: see [Unknown event types](#unknown-event-types).
+
+## Unknown event types
+
+An event type the SDK does not know is accepted and returned. No guard matches it, and nothing throws. Ignore response fields, enum values and event types you do not know.
+
+## Duplicates and order
+
+`verifyWebhook` does not deduplicate. A retry or a replay carries the same `event_id`. Deduplicate on `event_id`. See [Duplicates](/webhooks/delivery#duplicates).
+
+Delivery order is not guaranteed. Order events by the timestamps inside `data`, not by arrival. See [Order](/webhooks/delivery#order).
+
+Events do not announce every change: see [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and reconcile from the resource operations.
+
+## A handler for the Node.js http module
+
+The handler reads the raw body, verifies it, and skips an `event_id` it has already processed. It records an `event_id` only after the work on the event succeeded. The set of processed ids lives in memory: [Example: handling webhooks](/sdk/examples/handle-webhooks) says what to replace it with.
+
+```typescript
+import { createServer } from 'node:http'
+import { WebhookSignatureError, verifyWebhook } from '@isnap/sdk'
+
+const secret = process.env.ISNAP_WEBHOOK_SECRET
+if (!secret) throw new Error('Set ISNAP_WEBHOOK_SECRET')
+
+const seen = new Set<string>()
+
+createServer((req, res) => {
+  const chunks: Buffer[] = []
+  req.on('data', (chunk: Buffer) => chunks.push(chunk))
+  req.on('end', () => {
+    // The body as received: never an object that was parsed and serialized again.
+    const rawBody = Buffer.concat(chunks).toString('utf8')
+    try {
+      const event = verifyWebhook(rawBody, req.headers, secret)
+      if (!seen.has(event.event_id)) {
+        console.log(event.event_type, event.event_id)
+        // Record the event_id only after the work succeeded.
+        seen.add(event.event_id)
+      }
+      res.writeHead(204).end()
+    } catch (err) {
+      res.writeHead(err instanceof WebhookSignatureError ? 400 : 500).end()
+    }
+  })
+}).listen(3000)
+```
+
+## A handler for a fetch-style `Request`
+
+Use this form where a runtime or a framework passes a `Request` and expects a `Response`. The [requirements](/sdk/overview#requirements) of the SDK apply there too: `verifyWebhook` needs `node:crypto` and a global `Buffer`.
+
+```typescript
+import { WebhookSignatureError, verifyWebhook, type WebhookEventBase } from '@isnap/sdk'
+
+const secret = process.env.ISNAP_WEBHOOK_SECRET
+if (!secret) throw new Error('Set ISNAP_WEBHOOK_SECRET')
+
+const seen = new Set<string>()
+
+export const handleWebhook = async (request: Request): Promise<Response> => {
+  // Read the body as text. request.json() loses the bytes that were signed.
+  const rawBody = await request.text()
+
+  let event: WebhookEventBase
+  try {
+    event = verifyWebhook(rawBody, request.headers, secret)
+  } catch (err) {
+    if (err instanceof WebhookSignatureError) return new Response(null, { status: 400 })
+    throw err
+  }
+
+  if (!seen.has(event.event_id)) {
+    console.log(event.event_type, event.event_id)
+    // Record the event_id only after the work succeeded.
+    seen.add(event.event_id)
+  }
+  return new Response(null, { status: 204 })
+}
+```
+
+## Personal data
+
+A verified event can carry handles, message text, names and a secret:
+
+| Events | Fields |
+| --- | --- |
+| `message.*` | `data.message`, and `contact_name` in `message.received`. |
+| `reaction.*` | `from_handle` and `actor_handle`. |
+| `typing_indicator.*` | `from_handle`. |
+| `binding.released` | `contact_handle`. |
+| `line.*` events that carry a `line` object | `line.phone_number`, the number of your line. |
+| `pre_order.fulfilled` | `phone_number`, the number of your line. |
+| `trial.linked`, `trial.bind_conflict`, `trial.revoked` | `paired_handle`. `trial.linked` also carries `token`, the pairing code of the trial: treat it as a secret. |
+
+The [page of each event family](/webhooks/event-catalog#event-types) lists the personal data of each event. Subscribe to these events only when needed. Do not copy their content into logs, tickets or other tools, and refer to a contact by an id of your own. The two handlers above log the event type and the event id only.

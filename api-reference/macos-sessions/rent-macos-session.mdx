@@ -1,0 +1,25 @@
+---
+title: "Rent a hosted macOS session"
+description: "Rents one hosted macOS session from iSnap's stock for a wholesale partner."
+openapi: "POST /v1/macos-sessions/rent"
+---
+
+- **Credential:** an API key.
+- **Account:** wholesale partners only: any other account receives `403 not_a_wholesale_partner`. A direct account rents a session by writing to [support@isnap.ai](mailto:support@isnap.ai). See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **Test keys:** a rent sent with an `isnap_test_` account key rents a billable session: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** honored, and remembered for 24 hours. Send it with every rent. Without a key, every call rents one more billable session. See [Renting a session](/guides/hosted-macos-sessions#renting-a-session) and [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).
+- **Events:** none. `macos_session.rented` is sent only when iSnap attaches a session to your account on its own: see [Events](/guides/hosted-macos-sessions#events).
+- **No list:** no operation lists sessions. Store the `id` of the response.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `validation_failed` | An `Idempotency-Key` longer than 255 characters, a field other than `metadata`, or a `metadata` over 20 keys or 8,192 bytes. |
+| 403 | `not_a_wholesale_partner` | The account is not a wholesale partner. |
+| 409 | `no_macos_session_in_stock` | No session is free. Nothing is rented and nothing is recorded: see [When no session is in stock](/guides/hosted-macos-sessions#when-no-session-is-in-stock). |
+| 409 | `idempotency_key_collision` | The key was already used with another body or on another operation. |
+| 503 | `idempotency_in_flight` | The first request with this key is still running. Retry with the same key. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

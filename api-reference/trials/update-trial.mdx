@@ -1,0 +1,22 @@
+---
+title: "Update the metadata of a trial"
+description: "Merges metadata into a trial that your account owns."
+openapi: "PATCH /v1/trial/{trial_id}"
+---
+
+- **Credential:** an API key of the account that owns the trial. A trial key returns `401 unauthorized`.
+- **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
+- **`Idempotency-Key`:** not honored. See [Operations that honor the key](/idempotency#operations-that-honor-the-key).
+- **Events:** none. The call works in every status, `revoked` included.
+- **Personal data:** `paired_handle`, the prospect's phone number or the email address of their Apple ID. Request it only when needed, do not copy it into logs, tickets or other tools, and refer to a prospect by an id of your own.
+- **Body:** required. It has one field, `metadata`, and is sent with `Content-Type: application/json`. The merge rules are in [Metadata](/guides/trials#metadata).
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 400 | `metadata_too_large` | The merged `metadata` is over 20 keys or 8,192 bytes. A request that only deletes keys is never refused for the size of the result. |
+| 400 | `validation_failed` | An unknown field, or a `metadata` in the request that is itself over 20 keys or 8,192 bytes. |
+| 404 | `trial_not_found` | The id is unknown, or the trial belongs to another account. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

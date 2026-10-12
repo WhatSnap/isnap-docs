@@ -1,0 +1,145 @@
+---
+title: "Recipient lookup"
+description: "Ask whether a phone number or an email address can receive iMessage, read the three kinds of answer, and stay within the lookup limits."
+---
+
+[`POST /v1/lookup`](/api-reference/lookup/look-up-recipient) tells whether a handle, a phone number or an email address, can receive iMessage. This page describes the request, the three kinds of answer, how long an answer is kept, which device runs the check, and the limits. A lookup is never required before a send: read this page when your product shows, or decides something on, whether a contact uses iMessage.
+
+## The request
+
+| Field | Rule |
+| --- | --- |
+| `handle` | Required. A phone number or an email address, 3 to 255 characters. A phone number without a country code is read as a US number. A handle that contains `@` is checked as an email address. |
+| `from_line_id` | Optional. A line of your account whose device runs the check. A line that is not yours returns `404 not_found`. See [Which device checks](#which-device-checks). |
+
+The response contains `handle` in its normalized form: E.164 for a phone number, lower case for an email address. A handle that is neither a valid phone number nor a valid email address returns `400 validation_failed`.
+
+## The three answers
+
+| Response | `imessage` | Meaning | What to do |
+| --- | --- | --- | --- |
+| `200` | `true` | The handle is registered with iMessage. | Use the answer. |
+| `200` | `false` | Apple answered that the handle is not registered with iMessage. | Use the answer. |
+| `200` | `null`, and no `pending` | Unknown. No check was started. | Treat the answer as unknown. |
+| `202` | `null`, with `pending: true`, `probe_id` and `retry_after` | A check was started and has given no definite answer: it is still running, or it ended without one. | Resend the same request after `retry_after` seconds: 4 by default. |
+
+A call that starts a check waits up to 3 seconds for the device's answer before it returns `202`. `probe_id` is the id of the check, `lkp_` followed by 25 characters. No event announces the result of a check: repeat the request to get it. Each repeat counts against the [limits](#limits).
+
+The SDK resolves `lookup.check()` the same way on a `200` and on a `202`: branch on `pending`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS https://api.isnap.ai/v1/lookup \
+  -H "Authorization: Bearer $ISNAP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"handle": "+14155550123", "from_line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd"}'
+```
+
+```typescript TypeScript
+import { ISnapClient, QuotaExceededError } from '@isnap/sdk'
+
+const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
+
+async function canReceiveImessage(handle: string): Promise<boolean | null> {
+  // Every call counts against the lookup limits, repeats included: repeat at most 3 times.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await client.lookup.check({ handle, from_line_id: 'line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd' })
+    if (!result.pending) return result.imessage
+    await new Promise(resolve => setTimeout(resolve, (result.retry_after ?? 4) * 1000))
+  }
+  return null // No definite answer after 3 calls: treat it as unknown.
+}
+
+try {
+  console.log(await canReceiveImessage('+14155550123'))
+} catch (err) {
+  if (err instanceof QuotaExceededError && err.code === 'lookup_rate_limit_exceeded') {
+    console.error(`Lookup limit reached: retry after ${err.retryAfter} seconds`)
+  } else {
+    throw err
+  }
+}
+```
+
+```python Python
+import os
+import time
+
+import requests
+
+API = "https://api.isnap.ai"
+HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
+
+
+def can_receive_imessage(handle):
+    """Return True, False, or None when the answer is unknown."""
+    # Every call counts against the lookup limits, repeats included: repeat at most 3 times.
+    for _ in range(3):
+        response = requests.post(
+            f"{API}/v1/lookup",
+            headers=HEADERS,
+            json={"handle": handle, "from_line_id": "line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd"},
+            timeout=30,
+        )
+        if response.status_code == 429:
+            error = response.json()["error"]
+            raise SystemExit(f"{error['code']}: retry after {error['retry_after']} seconds")
+        response.raise_for_status()
+        result = response.json()["data"]
+        if response.status_code == 200:
+            return result["imessage"]
+        time.sleep(result.get("retry_after") or 4)
+    return None  # No definite answer after 3 calls: treat it as unknown.
+
+
+print(can_receive_imessage("+14155550123"))
+```
+
+</CodeGroup>
+
+## How long an answer is kept
+
+iSnap keeps a definite answer, `true` or `false`, for 24 hours, and returns it to every caller of iSnap, whatever the account. An answer can therefore be up to 24 hours old, and come from a check that another account started.
+
+An unknown result is not kept. It only prevents a new check of that handle for 60 seconds.
+
+## Which device checks
+
+A check runs on the device of one of your lines. The device asks Apple whether the handle is registered with iMessage.
+
+- With `from_line_id`, the check runs only on that line's device: when that device cannot run it, the answer is `imessage: null` unless a definite answer is already kept for the handle, even when another of your lines could run the check. Without it, the check runs on the device of any of your lines that can run checks.
+- The device must be connected, and must support lookups. Rented iMessage lines do. A BYOD line does when `lookup_probe` is `active` on [`GET /v1/lines/{id}/health`](/api-reference/lines/get-line-health): see [Device features](/guides/sending-messages#device-features).
+- When none of your lines can run a check, for example when you own only shared lines, which have no device of their own, the answer is `imessage: null`, unless a definite answer is already kept for the handle.
+
+A [line-scoped key](/authentication#line-scoped-keys) can name any line of the account in `from_line_id`.
+
+## Limits
+
+| Limit | Counts | Window |
+| --- | --- | --- |
+| 400 per account | Every lookup call of the account | A UTC calendar day |
+| 30 per line | The calls that name this line in `from_line_id` | A UTC clock hour |
+| 100 per line | The calls that name this line in `from_line_id` | A UTC calendar day |
+
+- Every call that passes validation counts: an answer from the 24-hour store, a `202` and a repeat of a pending check count against every limit that applies to the call. A call refused with `429 lookup_rate_limit_exceeded` counts against the limit that refused it and the limits checked before it, in this order: the account limit, the hourly limit of the line, the daily limit of the line. A call refused with `400` or `404` counts against no limit.
+- The two limits per line apply only to calls that give `from_line_id`.
+- The windows are calendar windows, not rolling ones: they reset at the start of each UTC hour and each UTC day.
+- An `isnap_test_` key counts against the same limits as an `isnap_live_` key.
+
+Over a limit, the call returns `429 lookup_rate_limit_exceeded`, with `Retry-After` set to the seconds until the next UTC hour or the next UTC day. In the SDK it is a `QuotaExceededError`, and the SDK does not retry it.
+
+## Lookups and sending
+
+- A lookup is never required before a send, and a send never waits for one.
+- A lookup counts against no [sending limit](/guides/sending-limits).
+- `imessage: true` for an email address does not make it a recipient: `POST /v1/messages` takes a phone number only, and returns `400 bad_request` for an email address.
+- The line's device chooses the service of each message when it sends it: see [Services and fallback](/guides/sending-messages#services-and-fallback).
+
+## Errors
+
+The refusals of the operation are on its reference page: [`POST /v1/lookup`](/api-reference/lookup/look-up-recipient). The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).
+
+## Personal data
+
+The handle you look up is personal data, and so is the answer about it. A definite answer is shared with every caller of iSnap for 24 hours. Look up a handle only when you need the answer. Do not copy handles or answers into logs, tickets or other tools. Refer to a contact by an id of your own.

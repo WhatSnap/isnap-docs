@@ -1,0 +1,23 @@
+---
+title: "Mark a chat as read"
+description: "Sets read_at on the unread inbound messages of a chat and asks the line's device to send read receipts."
+openapi: "POST /v1/chats/{chat_id}/read"
+---
+
+- **Credential:** an API key. A trial key returns `401 unauthorized`. See [Read receipts](/guides/conversations#read-receipts).
+- **Line-scoped keys:** the list of a [line-scoped key](/authentication#line-scoped-keys) is not applied: such a key acts on any chat of the account.
+- **Test keys:** a call with an `isnap_test_` account key acts on the real chat: see [Test keys](/authentication#test-keys).
+- **`Idempotency-Key`:** not honored. A repeat marks only the inbound messages received since the previous call.
+- **Events:** sends one `message.read` per message marked, with `chat_id` and `read_at`.
+- **Personal data:** each `message.read` carries the whole message: its text, the sender's handle and the names of its files. The call marks every inbound message of the chat that iSnap still keeps and that is not marked read, including the messages that an earlier owner of the line received: ignore the events about messages from before you got the line, see [A chat is never deleted](/guides/receiving-messages#a-chat-is-never-deleted). Request this data only when needed, do not copy it into logs, tickets or other tools, and refer to a contact by an id of your own.
+- **What reaches the contact:** the line's device marks the Messages conversation read when it supports read receipts. Otherwise nothing reaches the contact, and the call still succeeds. The `status` of the marked messages stays `delivered`.
+
+## Errors
+
+| Status | `error.code` | When |
+| --- | --- | --- |
+| 404 | `not_found` | The chat is unknown, or its line is not yours. |
+| 422 | `sms_read_receipt_not_supported` | The chat's line is not an iMessage line. |
+| 422 | `unsupported_handle` | The chat's contact is not a phone number in E.164. |
+
+The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

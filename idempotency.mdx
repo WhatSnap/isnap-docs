@@ -166,7 +166,7 @@ Every operation that [Operations that honor the key](#operations-that-honor-the-
 | `POST /v1/byod/pair` | Issues another activation code. |
 | `POST /v1/trial/init` | Starts another trial, or returns `409 trial_already_active`. |
 | `POST /v1/pre-orders` | Creates another draft. |
-| `POST /v1/pre-orders/{id}/confirm` | Returns `400 pre_order_not_draft`: the pre-order is already confirmed. What only the first response carried is not returned again. See [Pre-orders](/guides/pre-orders). |
+| `POST /v1/pre-orders/{id}/confirm` | For a direct account, returns the pre-order again: in `awaiting_payment` with the same `stripe_client_secret`, or in `provisioning` once the first month is paid. It starts no second billing. For a wholesale partner, returns `400 pre_order_not_draft`: the pre-order is already confirmed. See [Confirm and payment](/guides/pre-orders#confirm-and-payment). |
 
 When you did not receive the response of one of these writes, do not resend it blindly. Read the resource first: list your webhook subscriptions, your pre-orders or your lines, and resend the write only when the first one did not run.
 

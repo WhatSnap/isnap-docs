@@ -7,7 +7,8 @@ openapi: "POST /v1/lines/{id}/reserve"
 - **Credential:** an API key, on any account. The call checks no payment method. See [Reservations](/guides/getting-a-line#reservations).
 - **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
 - **Test keys:** a reservation sent with an `isnap_test_` account key reserves a real line: see [Test keys](/authentication#test-keys).
-- **`Idempotency-Key`:** not honored. A reservation cannot be extended: reserving a line that you have already reserved returns `409 conflict`.
+- **`Idempotency-Key`:** not honored. Reserving a line that you have already reserved returns `409 conflict` and does not extend the reservation.
+- **Payment:** no operation that an API key can call activates the reserved line of a direct account or pays for it. A payment started in the iSnap dashboard moves `expires_at` to 24 hours after its start: see [A line paid in the dashboard](/guides/getting-a-line#a-line-paid-in-the-dashboard).
 - **Events:** none. See [Events](/guides/getting-a-line#events).
 
 ## Errors

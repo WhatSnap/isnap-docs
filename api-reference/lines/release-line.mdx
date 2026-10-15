@@ -8,13 +8,17 @@ openapi: "POST /v1/lines/{id}/release"
 - **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
 - **`Idempotency-Key`:** not honored. A second call returns `404 not_found`, because the line is no longer reserved by you.
 - **Events:** none. See [Events](/guides/getting-a-line#events).
-- **Billing:** none. This operation does not end an `active` line: see [Ending a line](/guides/managing-lines#ending-a-line).
+- **Billing:** a payment of the line that was started in the iSnap dashboard and not submitted is canceled first, and can then no longer be made. A payment is submitted once the card payment is being processed. A payment that waits for the cardholder's authentication is not submitted. When a payment succeeded more than one hour ago without activating the line, the release ends its billing, and iSnap refunds the payment to your account; no operation of the API makes or reports that refund. No other billing changes. See [A line paid in the dashboard](/guides/getting-a-line#a-line-paid-in-the-dashboard).
+- **Not an end:** this operation does not end an `active` line: see [Ending a line](/guides/managing-lines#ending-a-line).
 
 ## Errors
 
 | Status | `error.code` | When |
 | --- | --- | --- |
 | 403 | `forbidden` | The request uses a line-scoped key, and the line is not in its list. |
-| 404 | `not_found` | The line is not reserved by your account: no line has this id, the line is not yours, or it is in another status, `active` included. |
+| 404 | `not_found` | The line is not reserved by your account: no line has this id, the line is not yours, or it is in another status, `active` and `provisioning` included. |
+| 409 | `purchase_payment_in_progress` | A payment of the line by your account has been submitted, or has succeeded within the last hour, and the line is not `active` yet. Nothing is released, and the line stays reserved for your account. Do not retry: read the line with [`GET /v1/lines/{id}`](/api-reference/lines/get-line) until it is `active` or no longer `reserved`. |
+| 409 | `purchase_in_progress` | The request waited 10 seconds for another payment or release request of your account. Nothing is released: resend the request. |
+| 500 | `internal_error` | iSnap could not check the payments of the line, or another unexpected failure. Nothing is released. |
 
 The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

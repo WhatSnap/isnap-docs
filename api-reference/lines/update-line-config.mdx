@@ -8,7 +8,7 @@ openapi: "PATCH /v1/lines/{id}/config"
 - **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
 - **`Idempotency-Key`:** not honored. The operation sets the keys you send and keeps the others, so the same request sent twice leaves the line in the same state.
 - **Events:** none. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce).
-- **Body:** `null` is not accepted for any key, and an unknown key is refused. To remove an override, send the key with its default value.
+- **Body:** `null` is not accepted for any key, and an unknown key is refused. To remove an override, send the key with its default value. For `activity_curve`, send the `default_activity_curve` of [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config): a curve that gives every hour the same weight as that curve, an hour with no entry counting as 0, removes the override. A request that does not send `activity_curve` leaves its override in place.
 
 ## Errors
 

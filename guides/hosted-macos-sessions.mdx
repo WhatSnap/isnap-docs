@@ -15,7 +15,7 @@ A hosted macOS session is a macOS user account on a Mac that iSnap hosts. It is 
 
 Wholesale partners only. [`POST /v1/macos-sessions/rent`](/api-reference/macos-sessions/rent-macos-session) returns `403 not_a_wholesale_partner` to any other account. See [Accounts](/concepts#accounts).
 
-A direct account cannot rent a session through the API: to rent one, write to [support@isnap.ai](mailto:support@isnap.ai).
+A direct account cannot rent a session through the API: it buys hosted macOS sessions in the [iSnap dashboard](https://platform.isnap.ai), by card. See [Accounts](/concepts#accounts).
 
 Only the account that rents a session, by a rent call or by an attach from iSnap, can read, update, cancel or uncancel it. Every other account receives `404 macos_session_not_found` on those four operations, never `403`.
 

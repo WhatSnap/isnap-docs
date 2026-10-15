@@ -9,7 +9,7 @@ A BYOD line runs on a device that you or your user own: a Mac paired with an iPh
 
 Whether you can issue an activation code depends on your [account](/concepts#accounts).
 
-- **Direct account.** You need a free BYOD slot. No operation that an API key can call buys one: to buy slots, write to [support@isnap.ai](mailto:support@isnap.ai). See [Accounts](/concepts#accounts). Each BYOD line of your account that is not terminated uses one slot, a `suspended` line included. A slot counts until the end of the period it is paid for, even while its payment is past due and after its cancellation is scheduled.
+- **Direct account.** You need a free BYOD slot. No operation that an API key can call buys one: buy slots in the [iSnap dashboard](https://platform.isnap.ai), by card. See [Accounts](/concepts#accounts). A slot counts once iSnap has recorded its payment, and the API does not bound the delay between a successful payment and that record. Each BYOD line of your account that is not terminated uses one slot, a `suspended` line included. A slot counts until the end of the period it is paid for, even while its payment is past due and after its cancellation is scheduled.
 - **Wholesale partner.** You need no slot. Your BYOD lines are counted on your monthly invoice, and each line gets its [anniversary](/guides/managing-lines#anniversary-and-billing-anchor) when it is paired.
 
 A direct account with no slot at all receives `402 payment_required` from [`POST /v1/byod/pair`](/api-reference/byod/start-byod-pairing). A direct account whose slots are all used receives `404 no_slot_available`.

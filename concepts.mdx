@@ -74,8 +74,8 @@ What moves a line from one status to another:
 | Change | Cause |
 | --- | --- |
 | `available` to `reserved` | You call [`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line). |
-| `reserved` to `available` | You call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line), or the reservation expires, 15 minutes after the reserve. |
-| `reserved` to `active` | A wholesale partner calls [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line). A direct account cannot activate a line through the API: see [Accounts](#accounts). |
+| `reserved` to `available` | You call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line), or the reservation ends: at `expires_at`, or earlier when a payment started in the iSnap dashboard has not succeeded 23 hours after it started. See [Reservations](/guides/getting-a-line#reservations). |
+| `reserved` to `active` | A wholesale partner calls [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line), or iSnap has recorded the first payment that a direct account made for the line in the iSnap dashboard. A direct account cannot activate a line through the API: see [Accounts](#accounts). |
 | `available` to `active` | A wholesale partner calls [`POST /v1/lines/assign`](/api-reference/lines/assign-line). |
 | Created as `active` | A wholesale partner calls [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line), or a BYOD device completes pairing. |
 | `provisioning` to `active` | The line of a pre-order is handed over. |
@@ -89,7 +89,7 @@ Three things to know about these statuses:
 
 - Only iSnap lifts a suspension. Write to [support@isnap.ai](mailto:support@isnap.ai) to ask for it. A suspended line of a wholesale partner still counts on the monthly invoice.
 - `GET /v1/lines/my` lists only `active` and `reserved` lines: a line that becomes `suspended` or `cancelled` leaves the list. Read a rented or BYOD line in any status with `GET /v1/lines/{id}`. A `cancelled` line keeps its owner. No read operation returns a shared line, a test line or a dedicated pool line that is `suspended` or `cancelled`: `GET /v1/lines/my` lists it only while it is `active` or `reserved`, and `GET /v1/lines/{id}` returns `404 not_found` for it in every status. `GET /v1/attention` does not list a line for being `suspended`: keep the ids of your lines, and read each with `GET /v1/lines/{id}`.
-- No event announces a reservation, its expiry, a release, an activation by `activate` or `assign`, the creation of a shared line, a suspension, the end of a suspension, or the return of a rented line to the marketplace. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and read the status from the API.
+- No event announces a reservation, its expiry, a release, an activation by `activate`, by `assign` or by a payment in the dashboard, the creation of a shared line, a suspension, the end of a suspension, or the return of a rented line to the marketplace. See [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce), and read the status from the API.
 
 [Getting a line](/guides/getting-a-line) and [Managing lines](/guides/managing-lines) describe each operation.
 
@@ -98,15 +98,17 @@ Three things to know about these statuses:
 Two kinds of account call the API.
 
 - A **wholesale partner** is an account that iSnap bills on one monthly invoice. iSnap grants this status: write to [support@isnap.ai](mailto:support@isnap.ai) to ask for it.
-- A **direct account** is any account that is not a wholesale partner. It pays for an active rented line through a **per-line subscription**, whose id is the line's `stripe_subscription_id`. That field is `null` on a rented line that the account received by transfer while the line was not `active`. A direct account cannot pay through the API. It cannot activate a reserved line, assign a line, create a shared line, buy BYOD slots or rent a hosted macOS session through the API: to buy a line, BYOD slots or hosted macOS sessions, write to [support@isnap.ai](mailto:support@isnap.ai). It can order a line with a pre-order: the confirmation creates the line, and the first month is paid by writing to support@isnap.ai. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
+- A **direct account** is any account that is not a wholesale partner. It pays in the [iSnap dashboard](https://platform.isnap.ai), by card: there it buys a marketplace line, pays the first month of a [pre-order](/guides/pre-orders#confirm-and-payment), buys [BYOD slots](/guides/byod#byod-slots) and [hosted macOS sessions](/guides/hosted-macos-sessions), and saves a card. No operation that an API key can call makes these payments. Through the API, a direct account cannot activate a reserved line, assign a line, create a shared line or rent a hosted macOS session. It pays for an active rented line through a **per-line subscription**, whose id is the line's `stripe_subscription_id`. That field is `null` on a rented line that the account received by transfer while the line was not `active`.
+
+Payments, invoices and payment methods are managed in the [iSnap dashboard](https://platform.isnap.ai).
 
 No field of any response says which kind your account is. The refusal codes below are the sign that an operation is for wholesale partners only.
 
 | Task | Any account | Wholesale partners only |
 | --- | --- | --- |
-| Getting a line | Browse the marketplace, reserve a line and release it, order a line with a pre-order. A direct account pays by writing to [support@isnap.ai](mailto:support@isnap.ai). | Activate a reserved line, assign a line, create a shared line. |
+| Getting a line | Browse the marketplace, reserve a line and release it, order a line with a pre-order. A direct account buys a line, and pays the first month of a pre-order, in the dashboard. | Activate a reserved line, assign a line, create a shared line. |
 | Managing a line | Read your lines, set their metadata, configure them, read the health of a BYOD line, list the lines that need attention, terminate a line, transfer a line, switch a rented line that has no per-line subscription between inbound-only and two-way. | Cancel a line at its anniversary, set the anniversary, convert a line to a test line and back. |
-| Hosted macOS sessions | None. A direct account rents a session by writing to [support@isnap.ai](mailto:support@isnap.ai). | Rent a session through the API, and manage it. |
+| Hosted macOS sessions | None through the API. A direct account buys sessions in the dashboard. | Rent a session through the API, and manage it. |
 
 What a direct account receives on those operations:
 
@@ -233,14 +235,14 @@ Each of these terms has one meaning on every page. Its guide defines its states 
 | Term | Meaning | Guide |
 | --- | --- | --- |
 | Operation | One method and path of the API, such as `POST /v1/messages`. | [API reference](/api-reference/introduction#operations) |
-| Dashboard | `https://platform.isnap.ai`, where you create and revoke API keys. | [Authentication](/authentication#api-keys) |
+| Dashboard | `https://platform.isnap.ai`, where you create and revoke API keys, and where a direct account pays. | [Authentication](/authentication#api-keys), [Accounts](#accounts) |
 | Per-line subscription | How a direct account pays for one rented line. Its id is the line's `stripe_subscription_id`. | [Accounts](#accounts) |
 | API key, trial key, line-scoped key | The three kinds of key. | [Authentication](/authentication) |
 | Metadata | The `metadata` object you attach to a resource: your own keys and values, which iSnap stores and returns unchanged. | [Managing lines](/guides/managing-lines) |
 | Sending limit | One of the five counters that bound what a line sends, each on a rolling window. | [The five limits](/guides/sending-limits#the-five-limits) |
 | Held message | A message with `status: scheduled`. | [Held messages](/guides/sending-limits#held-messages) |
-| Quiet hours | The hours of the recipient's local time in which iSnap holds the messages of a line. | [Quiet hours](/guides/sending-limits#quiet-hours) |
-| Reply lane | The rule that lets a reply to a contact who wrote to the line in the last 24 hours (by default) leave despite quiet hours and four of the five sending limits. `reply_lane` on a message says whether it qualified. | [Reply lane](/guides/sending-limits#reply-lane) |
+| Quiet hours | The hours of the recipient's local time in which iSnap holds the messages of a line, except a message in the reply lane or sent with `ignore_quiet_hours: true`. | [Quiet hours](/guides/sending-limits#quiet-hours) |
+| Reply lane | The rule that lets a reply to a contact who wrote to the line in the last 24 hours (by default), and a held message whose contact writes, leave despite quiet hours and four of the five sending limits. `reply_lane` on a message says whether it is in the lane. | [Reply lane](/guides/sending-limits#reply-lane) |
 | Reaction | A mark that a person puts on a message, such as `love` or `like`: an iMessage tapback. | [Chat features](/guides/conversations) |
 | Messages conversation | What the Messages app on the line's device shows for one contact. It is not a chat: some features need it on the device. | [Chat features](/guides/conversations) |
 | Webhook subscription | The resource under `/v1/webhooks`: a URL of yours and the events it receives. "Your endpoint" is that URL. | [Webhooks overview](/webhooks/overview) |

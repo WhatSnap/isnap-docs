@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "iSnap API",
-    "version": "2.39.0",
+    "version": "2.45.0",
     "description": "The iSnap API sends and receives iMessage, RCS and SMS on real phone lines, manages those lines, and reports events through webhooks. Every message is sent to a real recipient, with an `isnap_live_` key and with an `isnap_test_` key alike. Retry a `429` after `Retry-After` seconds. Retry a `500` or a `503` up to 2 times, with exponential backoff. Do not retry any other `4xx`: fix the request. Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt. Responses carry personal data: handles, names and message text."
   },
   "security": [
@@ -118,7 +118,7 @@
                     },
                     "min": {
                       "type": "integer",
-                      "description": "Smallest accepted value. Present only on `limit_out_of_bounds`, `mac_quantity_not_a_pack` and `byop_reduction_strands_mac_sessions`."
+                      "description": "Smallest accepted value. Present only on `limit_out_of_bounds`, `mac_quantity_not_a_pack`, `byop_reduction_strands_mac_sessions` and `byop_reduction_strands_byod_lines`."
                     },
                     "max": {
                       "type": "integer",
@@ -1280,13 +1280,38 @@
           },
           "knobs": {
             "$ref": "#/components/schemas/LineConfigKnobs"
+          },
+          "default_activity_curve": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "hour": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 23,
+                  "description": "Hour of the day, from 0 to 23, in the local time of the recipient."
+                },
+                "weight": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Weight of this hour, a non-negative integer. 0 makes it a quiet hour; a larger weight gives the hour a larger share of the held messages."
+                }
+              },
+              "required": [
+                "hour",
+                "weight"
+              ]
+            },
+            "description": "The sending hours the line has without an `activity_curve` override, as a list of hours with a weight. Never empty. It depends on whether the line is an iMessage line or an Android line, and iSnap can change it: read it here instead of storing it. Send it as `activity_curve` in `PATCH /v1/lines/{id}/config` to remove the override."
           }
         },
         "required": [
           "line_id",
           "config",
           "overridden_keys",
-          "knobs"
+          "knobs",
+          "default_activity_curve"
         ],
         "description": "The sending configuration of a line."
       },
@@ -1387,7 +1412,7 @@
                 "weight"
               ]
             },
-            "description": "The sending hours of the line, as a list of hours with a weight. An hour with weight 0, or with no entry, is a quiet hour."
+            "description": "The sending hours in force on the line, as a list of hours with a weight: the override of the line where it has one, `default_activity_curve` otherwise. Never empty. An hour with weight 0, or with no entry, is a quiet hour."
           }
         },
         "required": [
@@ -1589,7 +1614,7 @@
                 "weight"
               ]
             },
-            "description": "The sending hours of the line, as a list of hours with a weight. An hour with weight 0, or with no entry, is a quiet hour: a message accepted then is held until the next hour that has a weight. Messages held by a 24-hour sending limit are placed in the hours in proportion to their weights. It needs at least one entry, no hour twice, and a total weight above 0 (`422 invalid_activity_curve` otherwise)."
+            "description": "The sending hours of the line, as a list of hours with a weight. An hour with weight 0, or with no entry, is a quiet hour: a message accepted then is held until the next hour that has a weight. Messages held by a 24-hour sending limit are placed in the hours in proportion to their weights. It needs at least one entry, no hour twice, and a total weight above 0 (`422 invalid_activity_curve` otherwise). A curve the same as `default_activity_curve` (returned by `GET /v1/lines/{id}/config`) removes the override instead of setting one. Two curves are the same when every hour from 0 to 23 has the same weight in both, an hour with no entry counting as 0: the order of the entries does not matter, and a curve that lists only its weighted hours is the same as the 24-hour curve with 0 everywhere else."
           }
         },
         "additionalProperties": false,
@@ -1617,7 +1642,7 @@
           "billing_anchor_at": {
             "type": "string",
             "nullable": true,
-            "description": "The billing anchor you set when creating the pre-order, carried onto the line at confirmation. `null` when you set none."
+            "description": "The billing anchor you set when creating the pre-order, carried onto the line when the line is created. `null` when you set none."
           },
           "status": {
             "$ref": "#/components/schemas/PreOrderStatus"
@@ -1625,12 +1650,12 @@
           "stripe_client_secret": {
             "type": "string",
             "nullable": true,
-            "description": "Client secret for the payment form of Stripe, to collect the first month. Set only in the response of `POST /v1/pre-orders/{id}/confirm`, for an account that is not a wholesale partner. `null` in every other response."
+            "description": "Client secret for the payment form of Stripe, to collect the first month. Set only in the response of `POST /v1/pre-orders/{id}/confirm`, when that response carries the pre-order in status `awaiting_payment`: the first time and every time confirm is repeated. `null` in every other response."
           },
           "estimated_fulfillment": {
             "type": "string",
             "nullable": true,
-            "description": "Estimated time of the hand-over of the line: the time of the confirmation plus 72 hours. Set once at confirmation and never revised. `null` until the pre-order is confirmed."
+            "description": "Estimated time of the hand-over of the line: the time the build starts plus 72 hours. Set once, when the build starts, and never revised. `null` while the pre-order is `draft` or `awaiting_payment`, and on a pre-order canceled before its build started."
           },
           "device_status": {
             "$ref": "#/components/schemas/DeviceFulfillmentStatus"
@@ -1673,11 +1698,12 @@
         "type": "string",
         "enum": [
           "draft",
+          "awaiting_payment",
           "provisioning",
           "fulfilled",
           "cancelled"
         ],
-        "description": "`draft`: created, with no effect. `provisioning`: confirmed, and the line is being prepared. `fulfilled`: the line is handed over. `cancelled`: the draft was canceled. A confirmed pre-order never becomes `cancelled`."
+        "description": "`draft`: created, with no effect. `awaiting_payment`: confirmed by a direct account, and the first month is due; nothing is built until it is paid. `provisioning`: the build has started, and the line is being prepared. `fulfilled`: the line is handed over. `cancelled`: the pre-order ended with no line. You canceled it, its first month was not paid within 23 hours of the confirmation, or its subscription was canceled before the first payment. A pre-order whose build has started never becomes `cancelled`."
       },
       "DeviceFulfillmentStatus": {
         "type": "string",
@@ -1690,7 +1716,7 @@
           "deployed",
           null
         ],
-        "description": "Progress of the line. `awaiting_hardware`: the line is not ready; also the value of a draft and of a canceled draft. `ready`: the line is prepared. `deployed`: the line is handed over. `received` and `setup_in_progress` are declared and never returned. Always present on a pre-order, and never `null`."
+        "description": "Progress of the line. `awaiting_hardware`: the line is not ready; also the value of a pre-order that has no line: a draft, a pre-order in `awaiting_payment`, a canceled pre-order. `ready`: the line is prepared. `deployed`: the line is handed over. `received` and `setup_in_progress` are declared and never returned. Always present on a pre-order, and never `null`."
       },
       "PreOrderList": {
         "type": "object",
@@ -1945,7 +1971,11 @@
           },
           "reply_lane": {
             "type": "boolean",
-            "description": "`true` when the message was accepted in the reply lane: it answers a contact who wrote to the line in the last 24 hours, within the limits of the reply lane. Such a message is not held by the hourly limit, by the three 24-hour limits or by quiet hours. Set when the message is accepted and never changed after that."
+            "description": "`true` when the message is in the reply lane: it answers a contact who wrote to the line in the last 24 hours, within the limits of the reply lane. Such a message is not held by the hourly limit, by the three 24-hour limits or by quiet hours. Set when the message is accepted. A held message enters the reply lane when its contact writes to the line while it waits, whatever held it, oldest first and within the same limits: the value then changes from `false` to `true`, once and never back, and the message is released without waiting for its `scheduled_for`, still after the earlier messages to the same recipient and within the per-minute limit and the spacing of the line."
+          },
+          "ignore_quiet_hours": {
+            "type": "boolean",
+            "description": "`true` when the message was sent with `ignore_quiet_hours: true` on a line that is not a shared line: quiet hours do not hold it. `false` otherwise, on a shared line, on an inbound message and on a message typed on the device of the line. Set when the message is accepted and never changed after that."
           },
           "queue_info": {
             "type": "object",
@@ -2118,6 +2148,7 @@
           "scheduled_for",
           "schedule_reason",
           "reply_lane",
+          "ignore_quiet_hours",
           "queue_info",
           "created_at",
           "queued_at",
@@ -5547,7 +5578,7 @@
     "/v1/lines/{id}/reserve": {
       "post": {
         "summary": "Reserve a line",
-        "description": "Reserves one `available` line for your account for 15 minutes, and returns it with `status: reserved`, `expires_at` set and its full phone number. Accepts an API key; any account can reserve. A reserved line is not billed and cannot send.\n\nWithin the 15 minutes, a wholesale partner activates it with `POST /v1/lines/{id}/activate`. For any other account, no operation that an API key can call activates it. After `expires_at`, the line returns to `available` with no owner.\n\nA reservation cannot be extended: reserving a line that you have already reserved returns `409 conflict`. The API sets no limit on the number of lines that an account has reserved at the same time. The `metadata` of the line is left as it is. This operation sends no event, and neither does the end of a reservation.",
+        "description": "Reserves one `available` line for your account for 15 minutes, and returns it with `status: reserved`, `expires_at` set and its full phone number. Accepts an API key; any account can reserve. A reserved line is not billed and cannot send.\n\nWithin the 15 minutes, a wholesale partner activates it with `POST /v1/lines/{id}/activate`. For any other account, no operation that an API key can call activates the line or pays for it. Once a payment of the line has started, `expires_at` is 24 hours after the start of that payment, and the line becomes `active` when the payment succeeds. The line returns to `available` with no owner after `expires_at`, or earlier when a started payment has not succeeded after 23 hours.\n\nReserving a line that you have already reserved returns `409 conflict` and does not extend the reservation. The API sets no limit on the number of lines that an account has reserved at the same time. The `metadata` of the line is left as it is. This operation sends no event, and neither does the end of a reservation.",
         "security": [
           {
             "bearerAuth": []
@@ -7041,7 +7072,7 @@
     "/v1/lines/{id}/release": {
       "post": {
         "summary": "Release a reserved line",
-        "description": "Gives back a line that you have reserved: it returns to `available` immediately and no longer belongs to your account. Accepts an API key. Any other line returns `404 not_found`, an `active` line included: to end a line you use, call `POST /v1/lines/{id}/terminate` or `POST /v1/lines/{id}/cancel`. A release changes no billing and leaves the `metadata` of the line as it is. This operation sends no event.",
+        "description": "Gives back a line that you have reserved: it returns to `available` immediately and no longer belongs to your account. Accepts an API key. Any other line returns `404 not_found`, an `active` line included: to end a line you use, call `POST /v1/lines/{id}/terminate` or `POST /v1/lines/{id}/cancel`. When a payment was started for the line, the release first cancels its unpaid subscription, which can no longer be paid. While the first payment of a subscription of yours for the line has been submitted, or has succeeded within the last hour, and the line is not `active` yet, the call returns `409 purchase_payment_in_progress` and releases nothing: the line stays reserved for your account. Read it with `GET /v1/lines/{id}` until it is `active` or no longer `reserved`. One hour after a payment that succeeded and did not activate the line, the release goes through: the subscription of that payment is canceled, and the payment is recorded as a refund owed to the account. When the payments of the line cannot be checked, the call fails and releases nothing. A release changes no other billing and leaves the `metadata` of the line as it is. This operation sends no event.",
         "security": [
           {
             "bearerAuth": []
@@ -7129,6 +7160,16 @@
           },
           "404": {
             "description": "Not found. `not_found`: the line is not reserved by your account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. `error.code` is `purchase_payment_in_progress` when the first payment of a subscription of yours for the line has been submitted, or has succeeded within the last hour, and the line is not `active` yet: the line is not released, and stays reserved for your account. Read the line with `GET /v1/lines/{id}` until it is `active` or no longer `reserved`. It is `purchase_in_progress` when the request has waited 10 seconds for another payment or release request of the same account: resend the request.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7489,7 +7530,7 @@
     "/v1/lines/{id}/config": {
       "get": {
         "summary": "Get the configuration of a line",
-        "description": "Returns the sending configuration of a line you own, of any kind. Accepts an API key. `config` holds the value in force for every key, `overridden_keys` lists the keys that have an override on this line, and `knobs` gives, for eight limits, the value in force (`current`), the `default`, and the bounds `min` and `max`. A value above `default` is accepted only for the five message limits of a BYOD line, up to `max`: for the three reply limits, and for the five message limits of any other line, `PATCH /v1/lines/{id}/config` returns `403 cannot_increase_limit`. A value above `max` is refused first, on every line, with `422 limit_out_of_bounds` or `400 validation_failed`. Default values depend on whether the line is an iMessage line or an Android line, and iSnap can change them: read them here instead of storing them.",
+        "description": "Returns the sending configuration of a line you own, of any kind. Accepts an API key. `config` holds the value in force for every key, `overridden_keys` lists the keys that have an override on this line, `default_activity_curve` is the sending curve the line has without an override, and `knobs` gives, for eight limits, the value in force (`current`), the `default`, and the bounds `min` and `max`. A value above `default` is accepted only for the five message limits of a BYOD line, up to `max`: for the three reply limits, and for the five message limits of any other line, `PATCH /v1/lines/{id}/config` returns `403 cannot_increase_limit`. A value above `max` is refused first, on every line, with `422 limit_out_of_bounds` or `400 validation_failed`. Default values depend on whether the line is an iMessage line or an Android line, and iSnap can change them: read them here instead of storing them.",
         "security": [
           {
             "bearerAuth": []
@@ -7583,7 +7624,7 @@
       },
       "patch": {
         "summary": "Update the configuration of a line",
-        "description": "Sets overrides of the sending configuration on a line you own, and returns the resulting configuration. Accepts an API key. Send only the keys to change. To remove an override, send the key with its default value: `null` is not accepted.\n\nA limit can only be lowered below its default, and the two delays, `min_inter_message_seconds` and `min_inter_new_contact_seconds`, can only be raised above theirs. On a BYOD line, the five message limits (`daily_new_contact_limit`, `daily_known_contact_limit`, `daily_total_message_limit`, `hourly_message_limit` and `minute_message_limit`) can also be raised above their default, up to `knobs.<key>.max`.\n\nBesides the declared responses, this operation returns `422 limit_out_of_bounds` for one of those five limits outside `knobs.<key>.min` to `knobs.<key>.max`, on any line, with the range in `error.issues[0].min` and `error.issues[0].max`. That check runs before the two rules above: a value above `knobs.<key>.max` returns this `422`, not `403 cannot_increase_limit`. It also returns `422 invalid_activity_curve` for an `activity_curve` that is empty, repeats an hour or has a total weight of 0. This operation sends no event.",
+        "description": "Sets overrides of the sending configuration on a line you own, and returns the resulting configuration. Accepts an API key. Send only the keys to change. To remove an override, send the key with its default value: `null` is not accepted. For `activity_curve`, the default value is `default_activity_curve`.\n\nA limit can only be lowered below its default, and the two delays, `min_inter_message_seconds` and `min_inter_new_contact_seconds`, can only be raised above theirs. On a BYOD line, the five message limits (`daily_new_contact_limit`, `daily_known_contact_limit`, `daily_total_message_limit`, `hourly_message_limit` and `minute_message_limit`) can also be raised above their default, up to `knobs.<key>.max`.\n\nBesides the declared responses, this operation returns `422 limit_out_of_bounds` for one of those five limits outside `knobs.<key>.min` to `knobs.<key>.max`, on any line, with the range in `error.issues[0].min` and `error.issues[0].max`. That check runs before the two rules above: a value above `knobs.<key>.max` returns this `422`, not `403 cannot_increase_limit`. It also returns `422 invalid_activity_curve` for an `activity_curve` that is empty, repeats an hour or has a total weight of 0. This operation sends no event.",
         "security": [
           {
             "bearerAuth": []
@@ -7688,7 +7729,7 @@
     "/v1/pre-orders": {
       "post": {
         "summary": "Create a pre-order",
-        "description": "Creates a draft pre-order for one rented iMessage line. Accepts an API key. A line-scoped key is not limited to its list on this operation. A draft has no effect: it creates no line, takes no payment, and never expires. Call `POST /v1/pre-orders/{id}/confirm` to commit it. There is no limit on the number of drafts. `Idempotency-Key` is ignored: a repeated call creates another draft. Creating a draft sends no event.\n\n`preferred_area_codes` lists up to 5 area codes in order of preference, and `inbound_only` chooses between an inbound-only line and a two-way line. `billing_tier`, when sent, must be `rental_iphone`: `rental_android` returns `400 android_rental_not_purchasable`, and the four other values return `400 tier_not_pre_orderable`. `billing_anchor_at` is stored on the pre-order and carried onto the line at confirmation: a value more than 31 days after the call returns `400 billing_anchor_too_far`, and the confirmation does not check it again. A key that is not listed, `quantity` included, returns `400 validation_failed`: one pre-order is one line.",
+        "description": "Creates a draft pre-order for one rented iMessage line. Accepts an API key. A line-scoped key is not limited to its list on this operation. A draft has no effect: it creates no line, takes no payment, and never expires. Call `POST /v1/pre-orders/{id}/confirm` to commit it. There is no limit on the number of drafts. `Idempotency-Key` is ignored: a repeated call creates another draft. Creating a draft sends no event.\n\n`preferred_area_codes` lists up to 5 area codes in order of preference, and `inbound_only` chooses between an inbound-only line and a two-way line. `billing_tier`, when sent, must be `rental_iphone`: `rental_android` returns `400 android_rental_not_purchasable`, and the four other values return `400 tier_not_pre_orderable`. `billing_anchor_at` is stored on the pre-order and carried onto the line when the line is created: a value more than 31 days after the call returns `400 billing_anchor_too_far`, and it is not checked again. A key that is not listed, `quantity` included, returns `400 validation_failed`: one pre-order is one line.",
         "security": [
           {
             "bearerAuth": []
@@ -7848,6 +7889,7 @@
               "type": "string",
               "enum": [
                 "draft",
+                "awaiting_payment",
                 "provisioning",
                 "fulfilled",
                 "cancelled"
@@ -7940,7 +7982,7 @@
     "/v1/pre-orders/{id}/confirm": {
       "post": {
         "summary": "Confirm a pre-order",
-        "description": "Commits a draft pre-order. Accepts an API key. A line-scoped key is not limited to its list on this operation: it can confirm any draft of the account. The call sets `status` to `provisioning` and `estimated_fulfillment` to the time of the call plus 72 hours, and creates on your account a rented iMessage line with `status: provisioning`, with the `inbound_only` and the `billing_anchor_at` of the pre-order. When a number in one of your area codes is in stock, it is assigned to the line immediately. The confirmation sends no event: iSnap sends `pre_order.fulfilled`, which carries the `line_id`, when the line is handed over.\n\nA wholesale partner pays nothing at confirmation: `stripe_client_secret` is `null`, and the line is billed on the monthly invoice from the day it is handed over. For a direct account, confirm starts a monthly subscription and returns `stripe_client_secret`, a client secret that your payment page passes to the payment form of Stripe to collect the first month. The line is created whether or not that payment completes. The secret is returned in this response only and confirm cannot be repeated: store the secret before anything else.\n\nOnly a draft can be confirmed: any other pre-order returns `400 pre_order_not_draft`, and a confirmation that runs at the same time as another confirmation or as a cancellation returns `409 pre_order_not_draft`. A confirmed pre-order cannot be canceled through the API.",
+        "description": "Commits a draft pre-order. Accepts an API key. A line-scoped key is not limited to its list on this operation: it can confirm any draft of the account. The confirmation sends no event: iSnap sends `pre_order.fulfilled`, which carries the `line_id`, when the line is handed over.\n\nThe build of a pre-order sets `status` to `provisioning` and `estimated_fulfillment` to the time the build starts plus 72 hours, and creates on your account a rented iMessage line with `status: provisioning`, with the `inbound_only` and the `billing_anchor_at` of the pre-order. When a number is in stock in one of your area codes, in their order of preference, it is assigned to the line when the build starts. A pre-order with no `preferred_area_codes` takes any number in stock.\n\nFor a wholesale partner the build starts with the confirmation. A wholesale partner pays nothing at confirmation: `stripe_client_secret` is `null`, and the line is billed on the monthly invoice from the day it is handed over.\n\nFor a direct account the build starts when the first month is paid. Confirm starts a monthly subscription, sets `status` to `awaiting_payment` and returns `stripe_client_secret`, a client secret that your payment page passes to the payment form of Stripe to collect the first month. Only card payments are accepted. Until that payment succeeds, no line is created and `estimated_fulfillment` is `null`. After paying, read the pre-order with `GET /v1/pre-orders/{id}` until `status` is `provisioning`. When the first month is not paid within 23 hours of the confirmation, `status` becomes `cancelled` and iSnap sends `pre_order.cancelled`. When a credit balance of the account at Stripe covers the first month, there is nothing to pay: the build starts with the confirmation and `stripe_client_secret` is `null`. The first month starts at the confirmation, not when the line is handed over, and the next invoice is issued one month after the confirmation. The hand-over of the line takes no payment and does not change when the subscription is invoiced.\n\nConfirm can be repeated while `status` is `awaiting_payment`: it returns the same client secret and starts no second subscription. Repeated after the payment succeeded, it returns the pre-order in `provisioning`.\n\nAny other pre-order returns `400 pre_order_not_draft`, including one that was canceled because its first month was not paid in time. A confirmation that runs at the same time as a cancellation, or for a wholesale partner as another confirmation, returns `409 pre_order_not_draft`. When Stripe cannot be reached, the call returns `503 payment_provider_unavailable`: nothing changed, and the call can be repeated. When Stripe refuses the request for the account, the call returns `409 payment_setup_failed`: nothing changed, and repeating the call does not help. Once its build has started, a pre-order cannot be canceled through the API.",
         "security": [
           {
             "bearerAuth": []
@@ -7962,7 +8004,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The pre-order, in status `provisioning`.",
+            "description": "The pre-order: in status `awaiting_payment` with its `stripe_client_secret` for a direct account whose first month is due, in status `provisioning` otherwise.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7998,7 +8040,7 @@
             }
           },
           "400": {
-            "description": "Invalid request. `error.code` is `validation_failed` when a parameter, a header or the body does not match its schema: `error.issues` then lists each problem. It is `pre_order_not_draft` when the pre-order is not a draft.",
+            "description": "Invalid request. `error.code` is `validation_failed` when a parameter, a header or the body does not match its schema: `error.issues` then lists each problem. It is `pre_order_not_draft` when the pre-order is neither a draft nor in `awaiting_payment`, except a pre-order in `provisioning` whose first month was paid, which a repeated confirm returns.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8027,6 +8069,16 @@
               }
             }
           },
+          "409": {
+            "description": "Conflict. `error.code` is `pre_order_not_draft` when a cancellation, or for a wholesale partner another confirmation, ran at the same time and won. It is `payment_setup_failed` when Stripe refused the request for the account: repeating the call does not help.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Too many requests. `error.code` is `rate_limit_exceeded` when more than 100 requests came from the same network address in 60 seconds, whatever their API key or account: wait `error.retry_after` seconds.",
             "content": {
@@ -8046,6 +8098,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Service unavailable. `error.code` is `payment_provider_unavailable`: Stripe could not be reached. Nothing changed, and the call can be repeated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
@@ -8053,7 +8115,7 @@
     "/v1/pre-orders/{id}": {
       "get": {
         "summary": "Get a pre-order",
-        "description": "Returns one pre-order of the account. Accepts an API key. A line-scoped key is not limited to its list on this operation. A pre-order carries no line id: the line it produces is announced by `pre_order.fulfilled`, which carries the `line_id`. `stripe_client_secret` is `null` here. A pre-order of another account, or an unknown id, returns `404 not_found`.",
+        "description": "Returns one pre-order of the account. Accepts an API key. A line-scoped key is not limited to its list on this operation. A pre-order carries no line id: the line it produces is announced by `pre_order.fulfilled`, which carries the `line_id`. `stripe_client_secret` is `null` here. Reading a pre-order in status `awaiting_payment` checks its first-month payment with Stripe: when that payment has succeeded, the build starts and the pre-order is returned in `provisioning`. When Stripe cannot be reached, the read still answers, with the pre-order in `awaiting_payment`. A pre-order of another account, or an unknown id, returns `404 not_found`.",
         "security": [
           {
             "bearerAuth": []
@@ -8287,7 +8349,7 @@
     "/v1/pre-orders/{id}/cancel": {
       "post": {
         "summary": "Cancel a pre-order",
-        "description": "Cancels a draft pre-order: nothing was created and nothing was charged. Accepts an API key. A line-scoped key is not limited to its list on this operation. Sets `status` to `cancelled` and sends `pre_order.cancelled`. Only a draft can be canceled: a pre-order that is confirmed, fulfilled or already canceled returns `400 pre_order_already_confirmed`, and a cancellation that runs at the same time as a confirmation or as another cancellation returns `409 pre_order_already_confirmed`. A confirmed pre-order cannot be canceled through the API.",
+        "description": "Cancels a pre-order in status `draft` or `awaiting_payment`: nothing was created and nothing was charged. Accepts an API key. A line-scoped key is not limited to its list on this operation. Sets `status` to `cancelled` and sends `pre_order.cancelled`. For a pre-order in `awaiting_payment`, the first-month payment is canceled first: the client secret returned by confirm can no longer be used. When that first month is already paid, the call returns `409 pre_order_already_paid` and the build goes on. A pre-order that is `provisioning`, `fulfilled` or already `cancelled` returns `400 pre_order_already_confirmed`, and the cancellation of a draft that runs at the same time as another cancellation, or as the confirmation of a wholesale partner, returns `409 pre_order_already_confirmed`. When Stripe cannot be reached, the call returns `503 payment_provider_unavailable`: nothing changed, and the call can be repeated. When Stripe refuses the request for the account, the call returns `409 payment_setup_failed`: nothing changed, and repeating the call does not help. Once its build has started, a pre-order cannot be canceled through the API.",
         "security": [
           {
             "bearerAuth": []
@@ -8345,7 +8407,7 @@
             }
           },
           "400": {
-            "description": "Invalid request. `error.code` is `validation_failed` when a parameter, a header or the body does not match its schema: `error.issues` then lists each problem. It is `pre_order_already_confirmed` when the pre-order is not a draft: it is confirmed, fulfilled or already canceled.",
+            "description": "Invalid request. `error.code` is `validation_failed` when a parameter, a header or the body does not match its schema: `error.issues` then lists each problem. It is `pre_order_already_confirmed` when the pre-order is `provisioning`, `fulfilled` or already `cancelled`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8375,7 +8437,7 @@
             }
           },
           "409": {
-            "description": "Conflict. `error.code` is `pre_order_already_confirmed`: a confirmation or another cancellation of the same pre-order ran at the same time and won.",
+            "description": "Conflict. `error.code` is `pre_order_already_paid` when the first month is already paid. It is `pre_order_already_confirmed` when a confirmation or another cancellation of the same draft ran at the same time and won. It is `payment_setup_failed` when Stripe refused the request for the account: repeating the call does not help.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8396,6 +8458,16 @@
           },
           "500": {
             "description": "Unexpected failure. `error.code` is `internal_error`. An operation that takes a JSON body also returns it when the body, sent as `application/json`, is not valid JSON. Quote `trace_id` when you report it to iSnap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable. `error.code` is `payment_provider_unavailable`: Stripe could not be reached. Nothing changed, and the call can be repeated.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8529,6 +8601,10 @@
                   "use_typing_indicator": {
                     "type": "boolean",
                     "description": "Whether the line's device shows the typing indicator to the recipient before it sends this message. When omitted, the line's `default_use_typing_indicator` applies, which is `true` unless you changed it. Always `false` on a line that is not an iMessage line. The response returns the value in effect."
+                  },
+                  "ignore_quiet_hours": {
+                    "type": "boolean",
+                    "description": "`true` to let this message leave during the quiet hours of the line: the hours whose weight is 0 in the line's `activity_curve`, counted in the recipient's local time. Use it for a recipient of your own, such as an alert to your own phone number. The default is `false`. The message still waits for the sending limits of the line, for the spacing between messages and behind an earlier message to the same recipient that iSnap holds. No effect on a shared line. The response returns the value in effect."
                   },
                   "metadata": {
                     "type": "object",
@@ -10967,6 +11043,10 @@
                     "type": "string",
                     "maxLength": 2000,
                     "description": "Free text on the card, at most 2,000 characters."
+                  },
+                  "ignore_quiet_hours": {
+                    "type": "boolean",
+                    "description": "`true` to let the message that carries the card leave during the quiet hours of the line, as `ignore_quiet_hours` of `POST /v1/messages`. The default is `false`. No effect on a shared line."
                   }
                 },
                 "required": [

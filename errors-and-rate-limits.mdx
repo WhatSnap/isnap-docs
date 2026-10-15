@@ -68,13 +68,15 @@ The retry rules, in two sentences:
 - Retry a `429` after `Retry-After` seconds. Retry a `500` or a `503` up to 2 times, with exponential backoff. Do not retry any other `4xx`: fix the request.
 - Retry a write only on an operation that honors `Idempotency-Key`, with the key of the first attempt.
 
+One `4xx` changed nothing and can be sent again once: `409 purchase_in_progress` from [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line).
+
 [Idempotency](/idempotency#retrying-safely) tells you what to do with a write whose response you did not receive. The [helpers](/authentication#helpers) apply these rules.
 
 When a `500` persists, report it. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
 
 ### Service unavailable
 
-A `503` in the error format carries one of five codes, and its `error.retry_after` is `null`.
+A `503` in the error format carries one of six codes, and its `error.retry_after` is `null`.
 
 | `error.code` | Operations | Meaning | Retry? |
 | --- | --- | --- | --- |
@@ -83,8 +85,9 @@ A `503` in the error format carries one of five codes, and its `error.retry_afte
 | `line_pool_exhausted` | The same two operations on a shared line, and `POST /v1/trial/init` | No number can serve a new contact of the shared line, or no line can carry a new trial. | Yes, up to 2 times. Then report it. |
 | `pairing_code_unavailable` | `POST /v1/trial/init` | iSnap could not issue a pairing code. | Yes, up to 2 times. |
 | `replay_enqueue_failed` | `POST /v1/webhooks/{id}/deliveries/{delivery_id}/replay` | iSnap could not queue the replay. The new delivery exists, with the status `failed`. | Yes: call the operation again. |
+| `payment_provider_unavailable` | `POST /v1/pre-orders/{id}/confirm`, `POST /v1/pre-orders/{id}/cancel` | iSnap could not reach its payment provider. Nothing changed. | Yes, up to 2 times. |
 
-None of these refusals sends a message, delivers an event or starts a trial: retry it up to 2 times, even on `POST /v1/trial/init` and the replay operation, which ignore `Idempotency-Key`. A refused replay leaves a delivery record with the status `failed`, and each retry adds one.
+None of these refusals sends a message, delivers an event, starts a trial or changes a pre-order: retry it up to 2 times, even on `POST /v1/trial/init`, the replay operation and the two pre-order operations, which ignore `Idempotency-Key`. A refused replay leaves a delivery record with the status `failed`, and each retry adds one.
 
 ### Codes of each domain
 
@@ -97,9 +100,9 @@ Each operation adds its own codes. The reference page of an operation lists them
 | Reactions, typing indicators, read receipts, contact cards | `422 sms_reactions_not_supported`, `422 multi_attachment_reaction`, `422 parent_not_yet_acked`, `422 reaction_recipient_unsupported`, `422 sms_typing_not_supported`, `422 sms_read_receipt_not_supported`, `422 unsupported_handle`, `502 avatar_fetch_failed` | [Chat features](/guides/conversations) |
 | Attachments | `413 attachment_exceeds_storage_limit`, `410 attachment_expired` | [Attachments](/guides/attachments) |
 | Recipient lookup | `429 lookup_rate_limit_exceeded` | [Recipient lookup](/guides/lookup) |
-| Getting a line | `402 checkout_required`, `402 payment_required`, `409 conflict`, `409 no_matching_line`, `409 line_not_reserved`, and the `line_` codes that say why an available line cannot be taken now | [Getting a line](/guides/getting-a-line) |
+| Getting a line | `402 checkout_required`, `402 payment_required`, `409 conflict`, `409 no_matching_line`, `409 line_not_reserved`, `409 purchase_payment_in_progress`, `409 purchase_in_progress`, and the `line_` codes that say why an available line cannot be taken now | [Getting a line](/guides/getting-a-line) |
 | Managing a line | The codes of the metadata, configuration, health, terminate, cancel, variant, test line and transfer operations | [Managing lines](/guides/managing-lines) |
-| Pre-orders | `400 tier_not_pre_orderable`, `400 android_rental_not_purchasable`, `400 billing_anchor_too_far`, `pre_order_not_draft`, `pre_order_already_confirmed` | [Pre-orders](/guides/pre-orders) |
+| Pre-orders | `400 tier_not_pre_orderable`, `400 android_rental_not_purchasable`, `400 billing_anchor_too_far`, `pre_order_not_draft`, `pre_order_already_confirmed`, `409 pre_order_already_paid`, `409 payment_setup_failed`, `503 payment_provider_unavailable` | [Pre-orders](/guides/pre-orders) |
 | BYOD | `402 payment_required`, `404 no_slot_available` | [BYOD lines](/guides/byod) |
 | Hosted macOS sessions | `403 not_a_wholesale_partner`, `409 no_macos_session_in_stock`, `404 macos_session_not_found`, `409 macos_session_cancellation_already_due` | [Hosted macOS sessions](/guides/hosted-macos-sessions) |
 | Trials | `409 trial_already_active`, `404 trial_not_found`, `410 pairing_expired`, `402 trial_needs_inbound`, `403 trial_scope_violation`, `422 trial_attachments_unsupported`, `403 rebind_not_allowed`, `429 rebind_cap_reached`, `422 admin_reason_forbidden` | [Trials](/guides/trials) |

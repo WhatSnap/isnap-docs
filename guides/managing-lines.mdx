@@ -172,8 +172,9 @@ Each line has a send configuration: its [sending limits](/guides/sending-limits#
 | `config` | The value in force for every key. |
 | `overridden_keys` | The keys that have a value of their own on this line. |
 | `knobs` | For eight limits, the value in force (`current`), the `default`, and the bounds `min` and `max`. A value outside `min` to `max` is refused on every line. Inside the bounds, a value above `default` is accepted only for the five message limits of a BYOD line: elsewhere it returns `403 cannot_increase_limit`. The eight are the five message limits and the three reply limits of the next table. |
+| `default_activity_curve` | The sending hours the line has without an `activity_curve` override of its own. Never empty. |
 
-Default values depend on the kind of device the line runs on, and iSnap can change them. Do not hardcode them: read `knobs.<key>.default`, or the value of `config` for a key that is not in `overridden_keys`.
+Default values depend on the kind of device the line runs on, and iSnap can change them. Do not hardcode them: read `knobs.<key>.default`, `default_activity_curve`, or the value of `config` for a key that is not in `overridden_keys`.
 
 [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) sets the keys you send and keeps the others. One rule governs the numbers: a limit can only be lowered below its default, and a delay can only be raised above its default.
 
@@ -202,12 +203,12 @@ The refusals:
 - `min_inter_message_seconds` or `min_inter_new_contact_seconds` below its default returns `403 cannot_decrease_delay`.
 - `null` is not accepted for any key, and an unknown key is refused: both return `400 validation_failed`.
 
-To return a key to its default, send the key with its default value: the override is removed and the key leaves `overridden_keys`.
+To return a key to its default, send the key with its default value: the override is removed and the key leaves `overridden_keys`. For `activity_curve`, the default value is `default_activity_curve`.
 
 Three keys have rules of their own:
 
 - **`timezone`** must be a valid IANA time zone name: `400 validation_failed` otherwise. Once set, it stays in `overridden_keys`: this operation can replace it, not remove it. With no override, the time zone in force comes from the line's US area code, else from its country when the country has a single time zone, else it is `Europe/London` for a `+44` number, else `America/Chicago`. See [Quiet hours](/guides/sending-limits#quiet-hours).
-- **`activity_curve`** holds at least one entry. A curve that is empty, names an hour twice or has a total weight of 0 returns `422 invalid_activity_curve`. An `hour` outside 0 to 23, or a `weight` that is negative or not an integer, returns `400 validation_failed`.
+- **`activity_curve`** holds at least one entry. A curve that is empty, names an hour twice or has a total weight of 0 returns `422 invalid_activity_curve`. An `hour` outside 0 to 23, or a `weight` that is negative or not an integer, returns `400 validation_failed`. In a response, `config.activity_curve` is the curve of the line, never empty: its override, or `default_activity_curve`. On a shared line, the curve of the number that serves the contact applies to the sends instead: see [Quiet hours](/guides/sending-limits#quiet-hours). A curve that you send and that is the same as `default_activity_curve` removes the override instead of setting one. Two curves are the same when every hour from 0 to 23 has the same weight in both, an hour with no entry counting as 0: the order of the entries does not matter. A `PATCH` that does not send `activity_curve` leaves its override in place.
 - **`default_use_typing_indicator`** is `true` unless you override it. A message that does not state `use_typing_indicator` takes the line's value.
 
 A change of configuration sends no event. A [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` on both operations for a line outside its list.
@@ -928,7 +929,7 @@ The effect on billing depends on the line and on the receiving account:
 
 | Transfer | Effect |
 | --- | --- |
-| An `active` rented line to a direct account | The receiving account must have a payment method on file: `409 recipient_no_payment_method` otherwise. It adds one by writing to [support@isnap.ai](mailto:support@isnap.ai). A per-line subscription is created for it and charged immediately. When that charge is declined, the call returns `409 payment_failed` and nothing moves. |
+| An `active` rented line to a direct account | The receiving account must have a payment method on file: `409 recipient_no_payment_method` otherwise. It saves a card in the [iSnap dashboard](https://platform.isnap.ai): see [Accounts](/concepts#accounts). A per-line subscription is created for it and charged immediately. When that charge is declined, the call returns `409 payment_failed` and nothing moves. |
 | An `active` `rental_android` line to a direct account | Refused: `409 android_rental_not_purchasable`. |
 | A shared line, a test line or a dedicated pool line to a direct account | Refused: `409 line_recipient_not_wholesale`. These lines can only go to a wholesale partner. |
 | A BYOD line, or a line that is not `active`, to a direct account | No charge. |

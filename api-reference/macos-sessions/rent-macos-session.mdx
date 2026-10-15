@@ -5,7 +5,7 @@ openapi: "POST /v1/macos-sessions/rent"
 ---
 
 - **Credential:** an API key.
-- **Account:** wholesale partners only: any other account receives `403 not_a_wholesale_partner`. A direct account rents a session by writing to [support@isnap.ai](mailto:support@isnap.ai). See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
+- **Account:** wholesale partners only: any other account receives `403 not_a_wholesale_partner`. A direct account buys sessions in the iSnap dashboard. See [Who can rent through the API](/guides/hosted-macos-sessions#who-can-rent-through-the-api).
 - **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
 - **Test keys:** a rent sent with an `isnap_test_` account key rents a billable session: see [Test keys](/authentication#test-keys).
 - **`Idempotency-Key`:** honored, and remembered for 24 hours. Send it with every rent. Without a key, every call rents one more billable session. See [Renting a session](/guides/hosted-macos-sessions#renting-a-session) and [Lines and hosted macOS sessions](/idempotency#lines-and-hosted-macos-sessions).

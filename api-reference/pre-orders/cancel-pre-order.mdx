@@ -1,6 +1,6 @@
 ---
 title: "Cancel a pre-order"
-description: "Cancels a draft pre-order."
+description: "Cancels a pre-order whose build has not started: a draft, or a pre-order whose first month is not paid."
 openapi: "POST /v1/pre-orders/{id}/cancel"
 ---
 
@@ -8,7 +8,7 @@ openapi: "POST /v1/pre-orders/{id}/cancel"
 - **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
 - **`Idempotency-Key`:** not honored. A second cancel returns `400 pre_order_already_confirmed`.
 - **Events:** sends `pre_order.cancelled`, which only a subscription without a line filter receives: see [Events](/guides/pre-orders#events).
-- **Drafts only:** a confirmed pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
+- **Statuses:** a pre-order in `draft` or `awaiting_payment` can be canceled. For a pre-order in `awaiting_payment`, the payment of the first month is canceled first: the `stripe_client_secret` of the confirmation can no longer be used. Once its build has started, a pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
 - **Caching:** the response carries `Cache-Control: no-store`, whatever its status.
 
 ## Errors
@@ -16,8 +16,11 @@ openapi: "POST /v1/pre-orders/{id}/cancel"
 | Status | `error.code` | When |
 | --- | --- | --- |
 | 400 | `validation_failed` | `id` is not a UUID. |
-| 400 | `pre_order_already_confirmed` | The pre-order is confirmed, fulfilled or already canceled. |
+| 400 | `pre_order_already_confirmed` | The pre-order is `provisioning`, `fulfilled` or already `cancelled`. |
 | 404 | `not_found` | The id is unknown, or the pre-order belongs to another account. |
-| 409 | `pre_order_already_confirmed` | A confirmation or another cancel of the same draft ran at the same time and won. |
+| 409 | `pre_order_already_paid` | The first month is already paid: the build goes on. Read the pre-order. |
+| 409 | `pre_order_already_confirmed` | A confirmation of a wholesale partner, or another cancel, of the same draft ran at the same time and won. |
+| 409 | `payment_setup_failed` | The payment provider refused the request for your account. Nothing changed, and resending the call does not help: write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 503 | `payment_provider_unavailable` | iSnap could not reach its payment provider. Nothing changed: resend the cancel. |
 
 The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

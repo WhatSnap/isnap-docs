@@ -19,6 +19,7 @@ description: "Send a message from a line, follow it to a final status, know when
 | `effect` | An effect for the message. See [Effects](#effects). |
 | `reply_to_message_id` | The id of a message on the same line, inbound or outbound, that this message answers. See [Replies](#replies). |
 | `use_typing_indicator` | `true` shows the typing indicator to the contact before this message. See [Typing indicators](/guides/conversations#typing-indicators). |
+| `ignore_quiet_hours` | `true` lets the message leave during the quiet hours of the line. Use it for a recipient of your own, such as your own phone number: the API does not check the recipient. The default is `false`. See [Sending during quiet hours](/guides/sending-limits#sending-during-quiet-hours). |
 | `metadata` | An object of your own keys and values. See [Metadata](#metadata). |
 
 A request carries a non-empty `body`, at least one attachment, or both. With neither, it returns `400 validation_failed`.
@@ -211,6 +212,7 @@ else:
     "scheduled_for": "2026-10-08T14:22:57.392Z",
     "schedule_reason": null,
     "reply_lane": false,
+    "ignore_quiet_hours": false,
     "queue_info": {
       "queue_position": 0,
       "is_new_contact": true,
@@ -239,7 +241,7 @@ else:
 }
 ```
 
-`use_typing_indicator` holds the value in force for this message: the one you sent, or the line's `default_use_typing_indicator`. On a line that is not an iMessage line it is always `false`. `reply_lane` is `true` when the message qualified for the [reply lane](/guides/sending-limits#reply-lane), and never changes after the send.
+`use_typing_indicator` holds the value in force for this message: the one you sent, or the line's `default_use_typing_indicator`. On a line that is not an iMessage line it is always `false`. `reply_lane` is `true` when the message is in the [reply lane](/guides/sending-limits#reply-lane): a held message enters the lane, and `reply_lane` changes from `false` to `true`, when its contact writes to the line. `ignore_quiet_hours` holds the value in force for this message, and never changes after the send: see [Sending during quiet hours](/guides/sending-limits#sending-during-quiet-hours).
 
 `queue_info` is filled only in this response. It is `null` when you read the message, in a repeated request with the same idempotency key, and in events.
 
@@ -474,7 +476,7 @@ A send produces these events:
 | Event | Sent when |
 | --- | --- |
 | [`message.queued`](/webhooks/events/message#message-queued) | iSnap accepts the message to leave now, or releases a held message. |
-| [`message.scheduled`](/webhooks/events/message#message-scheduled) | iSnap accepts the message and holds it, and again when it moves the departure by more than 15 minutes. |
+| [`message.scheduled`](/webhooks/events/message#message-scheduled) | iSnap accepts the message and holds it, and again when it moves the departure by more than 15 minutes, except when the message enters the reply lane. |
 | [`message.sent`](/webhooks/events/message#message-sent) | The line's device reports that it sent the message. `origin` is `"api"`. |
 | [`message.delivered`](/webhooks/events/message#message-delivered) | The device reports a delivery receipt, the first time. |
 | [`message.read`](/webhooks/events/message#message-read) | The device reports a read receipt. |

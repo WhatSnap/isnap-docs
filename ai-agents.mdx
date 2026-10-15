@@ -39,6 +39,7 @@ What to do with an error:
 | A code with the status `503` | Retry up to 2 times: a `503` refusal sends no message, delivers no event and starts no trial, even on `POST /v1/trial/init` and the replay operation. Then report it. |
 | `idempotency_conflict`, `idempotency_key_collision` | The key was already used for another request. Do not retry with this key. |
 | `too_late_to_cancel` | Read the message with `GET /v1/messages/{id}`. `status: cancelled` means that an earlier call canceled it, and `failed` that the message failed and iSnap will not resend it. Any other status means that the line's device has taken the message: report it. |
+| `purchase_in_progress` | Another payment or release request of the account was running, and nothing changed. Resend the same request, once. |
 | `delivery_not_terminal` | The delivery is still `pending`: before its first attempt, waiting for a retry at `next_retry_at`, or waiting while the subscription is suspended. Report its `status` and `next_retry_at`. |
 | Any other code | A rule of the operation refused the request. Report `error.code` and `error.message` to your user. Do not retry. |
 
@@ -50,10 +51,11 @@ What to do with an error:
 | --- | --- |
 | `POST /v1/lines/assign`, `POST /v1/lines/shared`, `POST /v1/lines/{id}/activate` | A line is added to the monthly wholesale invoice. |
 | `POST /v1/macos-sessions/rent` | A hosted macOS session is rented from today, until a cancellation ends it at an anniversary. |
-| `POST /v1/pre-orders/{id}/confirm` | A line is ordered: a direct account's monthly billing starts now, and a wholesale partner is billed from the hand-over. It cannot be canceled through the API. |
+| `POST /v1/pre-orders/{id}/confirm` | A line is ordered. For a direct account, the monthly billing starts now and the first month is due in the iSnap dashboard. A wholesale partner is billed from the hand-over. Once the build of the line has started, the pre-order cannot be canceled through the API. |
 | `POST /v1/lines/{id}/variant` to two-way | Applied now, it adds a prorated charge to the monthly wholesale invoice. Scheduled, the line is billed at the two-way rate from its billing anchor. |
 | `POST /v1/lines/{id}/uncancel`, `POST /v1/macos-sessions/{id}/uncancel` | The line or the session continues past the scheduled end. |
 | `POST /v1/lines/{id}/transfer-ownership` | The line leaves your account immediately, without the acceptance of the other account, and a direct account that receives an `active` rented line is charged. The other account then lists the line's chats, receives in `message.read`, for each chat it marks read, your inbound messages that you had not marked read, and receives the events about your earlier messages: export what you need first. |
+| `POST /v1/lines/{id}/release` | The line returns to the marketplace immediately, where any account can take it. When a payment for the line succeeded in the iSnap dashboard more than one hour ago and the line is not `active`, the release ends the billing of that payment, and iSnap refunds it to the account. |
 | `POST /v1/lines/{id}/terminate` | The line ends immediately and for good. |
 | `POST /v1/byod/pair` | The code can create a line: a wholesale partner pays for it on the monthly invoice, and a direct account uses one of its BYOD slots. |
 | `POST /v1/webhooks/{id}/rotate-secret` | Your receiver rejects deliveries until it holds the new secret. |

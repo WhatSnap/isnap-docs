@@ -9,6 +9,7 @@ openapi: "GET /v1/pre-orders/{id}"
 - **Events:** none.
 - **Line:** the pre-order carries no line id. `pre_order.fulfilled` gives it: see [How a pre-order works](/guides/pre-orders#how-a-pre-order-works).
 - **Secret:** `stripe_client_secret` is `null` here: only the `confirm` response returns it.
+- **Payment:** reading a pre-order in `awaiting_payment` checks the payment of its first month. When that payment has succeeded, the build starts and the response is in `provisioning`. When the check cannot be made, the response is still `200`, in `awaiting_payment`. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
 - **Statuses:** `status` and `device_status` are described in [Statuses](/guides/pre-orders#statuses).
 - **Caching:** the response carries `Cache-Control: no-store`, whatever its status.
 

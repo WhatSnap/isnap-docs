@@ -1,25 +1,28 @@
 ---
 title: "Confirm a pre-order"
-description: "Commits a draft pre-order and creates the line that iSnap prepares; for a direct account it opens the monthly billing of that line."
+description: "Commits a draft pre-order: the build of the line starts immediately for a wholesale partner, and once the first month is paid for a direct account."
 openapi: "POST /v1/pre-orders/{id}/confirm"
 ---
 
 - **Credential:** an API key of the account that owns the pre-order.
 - **Line-scoped keys:** the list of lines of a [line-scoped key](/authentication#line-scoped-keys) is not applied.
 - **Test keys:** a confirmation sent with an `isnap_test_` account key is a real order: see [Test keys](/authentication#test-keys).
-- **`Idempotency-Key`:** not honored, and a confirmation cannot be repeated. A second call returns `400 pre_order_not_draft`. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
-- **Events:** none. The response is the only signal. `pre_order.fulfilled` is sent later, when iSnap hands the line over: see [Events](/guides/pre-orders#events).
-- **Secret:** `stripe_client_secret` is returned by this response only, to a direct account: it is the secret of the first monthly payment. iSnap provides no way to pay with it through the API: to pay, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order within 23 hours of the confirmation. After 23 hours, that first payment can no longer be completed. It is `null` for a wholesale partner. The response carries `Cache-Control: no-store`, whatever its status.
-- **No way back:** a confirmed pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
+- **`Idempotency-Key`:** not honored. A direct account can repeat the confirmation: while the pre-order is `awaiting_payment`, a repeat returns the same `stripe_client_secret` and starts no second billing, and after the payment it returns the pre-order in `provisioning`. A wholesale partner's repeat returns `400 pre_order_not_draft`. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
+- **Events:** none. The response is the only signal. `pre_order.fulfilled` is sent later, when iSnap hands the line over, and `pre_order.cancelled` when the first month is not paid within 23 hours: see [Events](/guides/pre-orders#events).
+- **Response:** a wholesale partner receives the pre-order in `provisioning`, with `stripe_client_secret: null`. A direct account receives it in `awaiting_payment`, with no line yet: the build starts once the first month is paid. When that first month is already paid, the response is in `provisioning`.
+- **Secret:** `stripe_client_secret` is the secret of the first monthly payment, returned only by this response, while the pre-order is `awaiting_payment`. No operation that an API key can call pays it: pay the first month in the iSnap dashboard, by card, within 23 hours of the confirmation. See [Accounts](/concepts#accounts). The response carries `Cache-Control: no-store`, whatever its status.
+- **No way back:** once its build has started, a pre-order cannot be canceled through the API. See [Canceling](/guides/pre-orders#canceling).
 
 ## Errors
 
 | Status | `error.code` | When |
 | --- | --- | --- |
 | 400 | `validation_failed` | `id` is not a UUID. |
-| 400 | `pre_order_not_draft` | The pre-order is not a draft. |
+| 400 | `pre_order_not_draft` | The pre-order is neither a draft nor `awaiting_payment`: it is `fulfilled`, `cancelled`, or `provisioning` after the confirmation of a wholesale partner. A pre-order canceled because its first month was not paid within 23 hours returns it too: create a new draft. |
 | 404 | `not_found` | The id is unknown, or the pre-order belongs to another account. |
-| 409 | `pre_order_not_draft` | Another confirmation or a cancel of the same draft ran at the same time and won. |
-| 500 | `internal_error` | An unexpected failure, which includes a line whose price is missing at iSnap. Read the pre-order before you resend the confirmation: see [Confirm and payment](/guides/pre-orders#confirm-and-payment). If the `500` repeats, write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 409 | `pre_order_not_draft` | A cancellation, or for a wholesale partner another confirmation, of the same draft ran at the same time and won. Read the pre-order. |
+| 409 | `payment_setup_failed` | The payment provider refused the request for your account. Nothing changed, and resending the call does not help: write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 500 | `internal_error` | An unexpected failure. Read the pre-order before you resend the confirmation: see [Confirm and payment](/guides/pre-orders#confirm-and-payment). If the `500` repeats, write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response. |
+| 503 | `payment_provider_unavailable` | iSnap could not reach its payment provider. Nothing changed: resend the confirmation. |
 
 The errors that every operation shares are in [Errors](/errors-and-rate-limits#errors).

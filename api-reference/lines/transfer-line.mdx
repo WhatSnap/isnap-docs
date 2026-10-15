@@ -21,7 +21,7 @@ openapi: "POST /v1/lines/{id}/transfer-ownership"
 | 404 | `not_found` | No line has this id, or you do not own the line. |
 | 409 | `line_recipient_not_wholesale` | The line is a shared line, a test line or a dedicated pool line, and the receiving account is not a wholesale partner. |
 | 409 | `android_rental_not_purchasable` | The line is an `active` `rental_android` line, and the receiving account is not a wholesale partner. |
-| 409 | `recipient_no_payment_method` | The receiving account has no payment method on file. It adds one by writing to [support@isnap.ai](mailto:support@isnap.ai). |
+| 409 | `recipient_no_payment_method` | The receiving account has no payment method on file. It saves a card in the iSnap dashboard: see [Accounts](/concepts#accounts). |
 | 409 | `payment_failed` | The payment method of the receiving account was declined. Nothing moved. |
 | 409 | `subscription_cancel_failed` | Your per-line subscription of the line could not be canceled, and the line did not move. A direct receiving account can already have been charged: see [Transfer](/guides/managing-lines#transfer). |
 | 409 | `transfer_conflict` | The line left your account during the call, and it did not move. A direct receiving account can already have been charged, and your per-line subscription of the line, when it had one, is already canceled, with a prorated credit. See [Transfer](/guides/managing-lines#transfer). |

@@ -3,8 +3,8 @@ title: "Pre-order events"
 description: "Gives the data of pre_order.fulfilled and pre_order.cancelled, with an example of each and the personal data they carry."
 ---
 
-The `pre_order.*` events announce the two ends of a pre-order: its line is handed over, or you
-cancel the draft. This page says when each of the two event types is sent and when it is not, lists
+The `pre_order.*` events announce the two ends of a pre-order: its line is handed over, or the
+pre-order is canceled before its build. This page says when each of the two event types is sent and when it is not, lists
 the fields of `data`, and shows a full event. See [Pre-orders](/guides/pre-orders) for the flow.
 
 ## Common fields
@@ -15,8 +15,9 @@ the fields of `data`, and shows a full event. See [Pre-orders](/guides/pre-order
 | `metadata` | object | Yes | The `metadata` of the pre-order. |
 | `line_metadata` | object | Yes | The `metadata` of the line the event is tied to, when it belongs to your account. See [`metadata` and `line_metadata`](/webhooks/event-catalog#metadata-and-line_metadata). |
 
-No event announces that a pre-order is created or confirmed, that iSnap cancels the order behind a
-confirmed pre-order, or that the estimated fulfillment time has passed: read the pre-order with
+No event announces that a pre-order is created or confirmed, that its first month is paid and its
+build starts, that iSnap cancels the order behind a pre-order whose build has started, or that the
+estimated fulfillment time has passed: read the pre-order with
 [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order).
 
 ## `pre_order.fulfilled`
@@ -59,8 +60,14 @@ Personal data: `phone_number` is the number of your line.
 
 ## `pre_order.cancelled`
 
-Sent when you cancel a draft pre-order with
-[`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order).
+Sent once when a pre-order ends before its build, in three cases:
+
+- you cancel a pre-order in `draft` or `awaiting_payment` with
+  [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order);
+- the first month of a direct account's pre-order is not paid within 23 hours of the confirmation;
+- the payment of that first month is canceled before it is made.
+
+The pre-order becomes `cancelled` in the same step. A pre-order whose build has started never sends it.
 
 The event is tied to no line: a subscription with a line filter never receives it.
 

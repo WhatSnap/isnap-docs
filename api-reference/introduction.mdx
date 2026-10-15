@@ -129,7 +129,7 @@ A line-scoped key is limited to its lines on some of these operations only: see 
 | [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) | Returns one pre-order. | API key | | No |
 | [`PATCH /v1/pre-orders/{id}`](/api-reference/pre-orders/update-pre-order) | Changes the metadata of a pre-order. | API key | | No |
 | [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) | Confirms a pre-order draft. | API key | | No |
-| [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) | Cancels a pre-order draft. | API key | | No |
+| [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) | Cancels a pre-order whose build has not started. | API key | | No |
 | [`GET /v1/area-codes`](/api-reference/pre-orders/list-area-codes) | Lists the area codes that a pre-order can request. | None | | No |
 
 ### Hosted macOS sessions
@@ -209,7 +209,7 @@ Two request headers are optional:
 
 ## Versioning and compatibility
 
-The version of the API is a `MAJOR.MINOR.PATCH` number. It is the `info.version` of the OpenAPI document, and [`GET /v1/version`](/api-reference/service/get-version) returns it in `data.version`. These pages describe version 2.39.0.
+The version of the API is a `MAJOR.MINOR.PATCH` number. It is the `info.version` of the OpenAPI document, and [`GET /v1/version`](/api-reference/service/get-version) returns it in `data.version`. These pages describe version 2.45.0.
 
 | Part | What a new one means |
 | --- | --- |
@@ -250,4 +250,4 @@ The [changelog](/changelog) lists the versions, newest first.
 curl -sS https://api.isnap.ai/openapi.json -o isnap-openapi.json
 ```
 
-That document also describes 14 operations under `/v1/api-keys` and `/v1/billing`. They accept only a dashboard session and return `401` to an API key: they are not part of this reference. API keys are created and revoked in the [iSnap dashboard](https://platform.isnap.ai). The document does not list a server: send its operations to `https://api.isnap.ai`.
+That document also describes 17 operations under `/v1/api-keys` and `/v1/billing`. They accept only a dashboard session and return `401` to an API key: they are not part of this reference. API keys are created and revoked in the [iSnap dashboard](https://platform.isnap.ai), where a direct account also pays: see [Accounts](/concepts#accounts). The document does not list a server: send its operations to `https://api.isnap.ai`.

@@ -9,12 +9,13 @@ A [line](/concepts#lines) is what sends and receives messages. This page lists t
 
 | Way | Who can use it | Where payment happens |
 | --- | --- | --- |
-| Reserve a marketplace line | Every account | Nothing is paid at the reservation. A direct account cannot activate the line through the API: it buys a line by writing to [support@isnap.ai](mailto:support@isnap.ai), or orders one with a [pre-order](/guides/pre-orders). See [Accounts](/concepts#accounts). |
+| Buy a marketplace line in the [iSnap dashboard](https://platform.isnap.ai) | Direct accounts | By card, in the dashboard. The line becomes `active` once iSnap has recorded the first payment. See [A line paid in the dashboard](#a-line-paid-in-the-dashboard). |
+| Reserve a marketplace line with [`POST /v1/lines/{id}/reserve`](/api-reference/lines/reserve-line) | Every account | Nothing is paid at the reservation. No operation that an API key can call activates the reserved line of a direct account or pays for it: a direct account buys a line in the dashboard, or orders one with a [pre-order](/guides/pre-orders). See [Accounts](/concepts#accounts). |
 | Reserve a marketplace line, then activate it with [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
 | Take a marketplace line in one call with [`POST /v1/lines/assign`](/api-reference/lines/assign-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
 | Create a shared line with [`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) | Wholesale partners only | On the monthly invoice of the wholesale partner. |
 
-The operations that acquire a line take no payment. Two other operations can charge an account: [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) charges a direct account that receives an `active` rented line, and [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) opens the monthly billing of the line that a direct account ordered.
+The operations that acquire a line take no payment. Two other operations can charge an account: [`POST /v1/lines/{id}/transfer-ownership`](/api-reference/lines/transfer-line) charges a direct account that receives an `active` rented line, and [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) starts the monthly billing of the line that a direct account ordered, whose first month the account pays in the dashboard.
 
 iSnap grants the status of [wholesale partner](/concepts#accounts), and no field of any response says whether your account has it. An account without it receives `402 checkout_required` from `activate` and `assign`, and `402 payment_required` from `POST /v1/lines/shared`. To ask for the status, write to [support@isnap.ai](mailto:support@isnap.ai).
 
@@ -97,22 +98,40 @@ A `reserved` line is not billed and cannot send. What you do next depends on you
 
 | Account | Next step, before `expires_at` |
 | --- | --- |
-| Direct account | `POST /v1/lines/{id}/activate` returns `402 checkout_required`. To buy a line, write to [support@isnap.ai](mailto:support@isnap.ai): see [Accounts](/concepts#accounts). When nothing activates the line before `expires_at`, it returns to the marketplace. |
+| Direct account | `POST /v1/lines/{id}/activate` returns `402 checkout_required`, and no operation that an API key can call pays for the line. A direct account buys a line in the iSnap dashboard: see [A line paid in the dashboard](#a-line-paid-in-the-dashboard). When nothing activates the line before `expires_at`, it returns to the marketplace. |
 | Wholesale partner | Call [`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line). See [Activation](#activation). |
 
 The rules of a reservation:
 
-- A reservation cannot be extended. Reserving a line that you have already reserved returns `409 conflict`.
+- `reserve` does not extend a reservation: reserving a line that you have already reserved returns `409 conflict`.
 - The API does not limit the number of lines that one account has reserved at the same time.
 - `reserve` returns `409` whenever the line cannot be taken. The code is `conflict` when the line is not `available` or does not exist. It is a code that starts with `line_`, such as `line_apple_id_flagged`, when the line is `available` but cannot be acquired now. The set of `line_` codes is open: treat any `409` as "choose another line", except after a request whose response you did not receive (see [Retries](#retries)). `reserve` never returns `404`.
 - After `expires_at`, the line returns to `available` with no owner, and `activate` returns `409 line_not_reserved`. No event is sent.
 - `expires_at` has a meaning only while `status` is `reserved`. Do not read it on a line in another status.
 
-To give a reserved line back before it expires, call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line). The line returns to `available` immediately and has no owner. The call changes no billing and sends no event. It returns `404 not_found` for any line that you have not reserved, an `active` line included: to end a line that you use, see [Ending a line](/guides/managing-lines#ending-a-line).
+To give a reserved line back before it expires, call [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line). The line returns to `available` immediately and has no owner. The call sends no event. It returns `404 not_found` for any line that you have not reserved, an `active` line included: to end a line that you use, see [Ending a line](/guides/managing-lines#ending-a-line). The release of a line whose payment was started in the dashboard follows the rules of [A line paid in the dashboard](#a-line-paid-in-the-dashboard).
+
+### A line paid in the dashboard
+
+A direct account buys a marketplace line in the [iSnap dashboard](https://platform.isnap.ai), by card: it reserves the line and pays for it there. Until iSnap has recorded the payment, the line is `reserved` for the account, and the API shows it as any other reservation, with three differences:
+
+- Once the payment has started, `expires_at` is 24 hours after the start of the payment.
+- The line becomes `active` once iSnap has recorded the successful payment, with the id of its [per-line subscription](/concepts#accounts) in `stripe_subscription_id`. The API does not bound the delay between the payment and the activation. A payment that iSnap records after the reservation has ended activates no line: its billing ends, and iSnap refunds the payment to your account. No event announces the activation: read the line with [`GET /v1/lines/{id}`](/api-reference/lines/get-line).
+- When the payment has not succeeded 23 hours after it started, the line returns to `available` with no owner.
+
+A release of such a line depends on its payment. A payment is submitted once the card payment is being processed. A payment that waits for the cardholder's authentication is not submitted.
+
+| Payment of the line | What [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) does |
+| --- | --- |
+| Started, and not submitted | Cancels the payment, which can then no longer be made, and releases the line. |
+| Submitted, or succeeded less than one hour ago, while the line is not `active` | Returns `409 purchase_payment_in_progress` and releases nothing: the line stays reserved for your account. Read it with `GET /v1/lines/{id}` until it is `active` or no longer `reserved`. |
+| Succeeded more than one hour ago, while the line is not `active` | Releases the line and ends the billing that the payment started. iSnap refunds the payment to your account; no operation of the API makes or reports that refund. |
+
+A release that waits 10 seconds for another payment or release request of your account returns `409 purchase_in_progress`: resend it. When iSnap cannot check the payments of the line, the release returns `500 internal_error` and releases nothing. A release changes no other billing.
 
 ## Activation
 
-[`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) turns a line that you reserved, within its 15 minutes, into an `active` line. Wholesale partners only: any other account receives `402 checkout_required`. A direct account buys a line by writing to [support@isnap.ai](mailto:support@isnap.ai): see [Accounts](/concepts#accounts).
+[`POST /v1/lines/{id}/activate`](/api-reference/lines/activate-line) turns a line that you reserved, within its 15 minutes, into an `active` line. Wholesale partners only: any other account receives `402 checkout_required`. A direct account buys a line in the iSnap dashboard: see [A line paid in the dashboard](#a-line-paid-in-the-dashboard).
 
 The activated line has no per-line subscription: it is billed on the monthly invoice of the wholesale partner. The response has `expires_at: null` and `anniversary_at` set. The body is optional:
 

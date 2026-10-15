@@ -1,9 +1,33 @@
 ---
 title: "Changelog"
-description: "Lists the versions of the iSnap API from the first version these docs describe, newest first."
+description: "Lists what each version of the iSnap API changed in the contract, newest first, from the first version these docs covered."
 ---
 
-This changelog starts at version 2.39.0, the version these docs describe: earlier versions are not listed. Each version has one entry, newest first. [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) says what each part of a version number means and how a deprecation is announced, and [`GET /v1/version`](/api-reference/service/get-version) returns the version the API runs.
+This changelog starts at version 2.39.0: earlier versions are not listed. These pages describe version 2.45.0, the newest entry. Each version has one entry, newest first. [Versioning and compatibility](/api-reference/introduction#versioning-and-compatibility) says what each part of a version number means and how a deprecation is announced, and [`GET /v1/version`](/api-reference/service/get-version) returns the version the API runs.
+
+<Update label="2.45.0" description="2026-10-14">
+  When a contact writes to a line, the messages that iSnap holds for that contact on that line enter the reply lane, oldest first, within the limits of the reply lane. `reply_lane` on such a message changes from `false` to `true`, and the message leaves without waiting for its `scheduled_for`, still within the per-minute limit, the spacing and the order of messages to the recipient. No event announces the change: `message.queued` follows when iSnap releases the message. A per-minute or per-hour hold of a message in the reply lane now ends at the end of the window, even in quiet hours. See [Held messages that enter the reply lane](/guides/sending-limits#held-messages-that-enter-the-reply-lane).
+</Update>
+
+<Update label="2.44.0" description="2026-10-14">
+  New optional request field `ignore_quiet_hours` on [`POST /v1/messages`](/api-reference/messages/send-message) and [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card). `true` lets the message leave during the quiet hours of the line; the sending limits, the spacing and the order of messages to the recipient still apply, and a shared line ignores it. The message object returns `ignore_quiet_hours`. See [Sending during quiet hours](/guides/sending-limits#sending-during-quiet-hours).
+</Update>
+
+<Update label="2.43.0" description="2026-10-14">
+  [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) and [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) return a new field, `default_activity_curve`: the sending hours of the line without an override of its own. `config.activity_curve` returns the curve of the line, never empty: its override, or `default_activity_curve`, where it returned an empty list for a line without an override. On a shared line, the curve of the number that serves the contact applies to the sends instead. A `PATCH` whose `activity_curve` gives every hour the same weight as `default_activity_curve` removes the override. See [Configuration](/guides/managing-lines#configuration).
+</Update>
+
+<Update label="2.42.0" description="2026-10-14">
+  [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) cancels an unpaid payment of the line, started in the iSnap dashboard, before it releases the line. While a payment of the line by your account has been submitted, or has succeeded within the last hour, and the line is not `active` yet, it returns `409 purchase_payment_in_progress` and releases nothing. It returns `409 purchase_in_progress` when it waited 10 seconds for another payment or release request of your account. See [A line paid in the dashboard](/guides/getting-a-line#a-line-paid-in-the-dashboard).
+</Update>
+
+<Update label="2.41.0" description="2026-10-14">
+  A direct account's pre-order is paid before iSnap builds its line. [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order) returns the pre-order of a direct account in the new status `awaiting_payment`, with `stripe_client_secret`, and creates no line. The build starts, and the pre-order becomes `provisioning`, once the first month is paid in the iSnap dashboard. A first month not paid within 23 hours of the confirmation cancels the pre-order and sends `pre_order.cancelled`. The hand-over of the line takes no payment. A direct account can repeat the confirmation while the pre-order is `awaiting_payment`. [`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) also cancels a pre-order in `awaiting_payment`. [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) checks the first-month payment of a pre-order in `awaiting_payment`, and returns it in `provisioning` once that payment has succeeded. `GET /v1/pre-orders` does not check it. `status` takes the value `awaiting_payment`, in responses and in the `status` filter of [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders). New error codes: `409 pre_order_already_paid`, `409 payment_setup_failed` and `503 payment_provider_unavailable`. See [Confirm and payment](/guides/pre-orders#confirm-and-payment).
+</Update>
+
+<Update label="2.40.0" description="2026-10-14">
+  A direct account pays in the iSnap dashboard, by card, for a marketplace line, BYOD slots and hosted macOS sessions. Once the payment of a reserved line has started, the `expires_at` of the line is 24 hours after the start of the payment, and the line becomes `active` once iSnap has recorded the first payment. [`POST /v1/lines/{id}/release`](/api-reference/lines/release-line) cancels a payment of the line started in the dashboard and not submitted, and a payment that succeeds after the release activates no line. The operations that take these payments accept a dashboard session only, and are not part of this reference. See [A line paid in the dashboard](/guides/getting-a-line#a-line-paid-in-the-dashboard).
+</Update>
 
 <Update label="2.39.0" description="2026-10-09">
   The changelog starts at this version: earlier versions are not listed. The `monthly_price` field of a line is deprecated: no removal date is set.

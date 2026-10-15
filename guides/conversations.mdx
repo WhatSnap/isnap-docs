@@ -301,6 +301,7 @@ The typing and read operations do not apply the list of a [line-scoped key](/aut
 | `organization` | Up to 255 characters. |
 | `note` | Up to 2,000 characters. |
 | `avatar_url` | The URL of a photo. See the rules below. |
+| `ignore_quiet_hours` | `true` lets the card leave during the quiet hours of the line, as on `POST /v1/messages`. The default is `false`. See [Sending during quiet hours](/guides/sending-limits#sending-during-quiet-hours). |
 
 The request needs at least one of `phone_numbers`, `emails` or a non-empty `organization`: `400 validation_failed` otherwise.
 

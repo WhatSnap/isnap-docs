@@ -5,7 +5,7 @@ openapi: "POST /v1/lines/{id}/activate"
 ---
 
 - **Credential:** an API key. See [Activation](/guides/getting-a-line#activation).
-- **Account:** wholesale partners only: any other account receives `402 checkout_required`. A direct account buys a line by writing to [support@isnap.ai](mailto:support@isnap.ai): see [Accounts](/concepts#accounts).
+- **Account:** wholesale partners only: any other account receives `402 checkout_required`. A direct account buys a line in the iSnap dashboard: see [Accounts](/concepts#accounts).
 - **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
 - **Test keys:** an activation sent with an `isnap_test_` account key activates a real line, billed like any other: see [Test keys](/authentication#test-keys).
 - **`Idempotency-Key`:** not honored. After a lost response, read [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) before you call again: see [Retries](/guides/getting-a-line#retries).

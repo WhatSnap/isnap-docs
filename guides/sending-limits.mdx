@@ -78,7 +78,7 @@ Ignore response fields, enum values and event types you do not know.
 | Spacing | The end of the spacing. |
 | Quiet hours | The next hour in which the line sends, in the recipient's local time. |
 
-When the end of a per-minute or per-hour hold falls in quiet hours, the message is held until the next hour in which the line sends. This applies to reply-lane messages too.
+When the end of a per-minute or per-hour hold falls in quiet hours, the message is held until the next hour in which the line sends. A message in the [reply lane](#reply-lane), and a message sent with [`ignore_quiet_hours: true`](#sending-during-quiet-hours), are held until the end of the window instead.
 
 A held message that has not left 48 hours after iSnap accepted it fails with `error_code: carrier_unavailable`, even when its `scheduled_for` is later. It fails at least 48 hours after its acceptance, and the API does not bound the delay beyond that. A `202` whose `scheduled_for` is more than 48 hours after `created_at` describes a message that can fail before it leaves: cancel it, and resend it when the limit frees room. See [Failures](/guides/sending-messages#failures).
 
@@ -87,7 +87,7 @@ A held message that has not left 48 hours after iSnap accepted it fails with `er
 iSnap looks at the held messages every 5 seconds. When the `scheduled_for` of a message arrives, iSnap checks it again against the limits, the spacing, quiet hours and the order of messages to the recipient. Then it either releases the message, which becomes `queued` and sends [`message.queued`](/webhooks/events/message#message-queued), or holds it again with a new `scheduled_for` and `schedule_reason`.
 
 - A held send produces [`message.scheduled`](/webhooks/events/message#message-scheduled), with `schedule_reason` and `scheduled_for`, instead of `message.queued`.
-- When iSnap moves the departure of a held message by more than 15 minutes, it sends another `message.scheduled`. A smaller move sends nothing: read the message for the current `scheduled_for`.
+- When iSnap moves the departure of a held message by more than 15 minutes, it sends another `message.scheduled`. A smaller move sends nothing: read the message for the current `scheduled_for`. A held message that enters the [reply lane](#reply-lane) because its contact wrote sends no `message.scheduled` either: `message.queued` follows when iSnap releases it.
 - Once released, the message has `schedule_reason: null`, and `scheduled_for` equals `queued_at`: it no longer shows when the message left. `sent_at` gives the time the line's device sent it.
 
 A held message can be canceled with [`DELETE /v1/messages/{id}`](/api-reference/messages/cancel-message): see [Canceling a message](/guides/sending-messages#canceling-a-message).
@@ -98,9 +98,9 @@ A line holds at most `max_queue_depth` messages: 500 on an iMessage line and 1,0
 
 ## Quiet hours
 
-By default, a line sends only between 08:00 and 20:59 in the recipient's local time. A message accepted outside those hours is held with `schedule_reason: quiet_hours` until the next allowed time, in every overflow mode. An answer that qualifies for the [reply lane](#reply-lane) is not held by quiet hours.
+By default, a line sends only between 08:00 and 20:59 in the recipient's local time. A message accepted outside those hours is held with `schedule_reason: quiet_hours` until the next allowed time, in every overflow mode. Two kinds of message are not held by quiet hours: a message in the [reply lane](#reply-lane), and a message sent with [`ignore_quiet_hours: true`](#sending-during-quiet-hours).
 
-The hours come from the line's `activity_curve`: an hour to which the curve gives a weight of 0, or that the curve does not list, is a quiet hour. The default curve gives a weight of 0 to every hour from 21:00 to 07:59. Change it with `PATCH /v1/lines/{id}/config`: see [Configuration](/guides/managing-lines#configuration).
+The hours come from the line's `activity_curve`: an hour to which the curve gives a weight of 0, or that the curve does not list, is a quiet hour. [`GET /v1/lines/{id}/config`](/api-reference/lines/get-line-config) returns the curve in force on the line in `config.activity_curve`, and the curve the line has without an override of its own in `default_activity_curve`. The default curve gives a weight of 0 to every hour from 21:00 to 07:59. It is a setting of iSnap, which can change it: read it instead of storing it. Change the curve of a line with `PATCH /v1/lines/{id}/config`: see [Configuration](/guides/managing-lines#configuration).
 
 Which clock iSnap reads:
 
@@ -110,6 +110,16 @@ Which clock iSnap reads:
 | Any other number, Canadian and non-geographic `+1` numbers included | The time zone of the line: its `timezone` setting, or the zone that iSnap derives from the line's number. See [Configuration](/guides/managing-lines#configuration). |
 
 On a [shared line](/guides/sending-messages#shared-lines), the time zone of the line, the `activity_curve` and the spacing are those of the number that serves the contact: the `timezone`, `activity_curve` and spacing settings of the shared line do not apply.
+
+### Sending during quiet hours
+
+`ignore_quiet_hours: true` on [`POST /v1/messages`](/api-reference/messages/send-message) or on [`POST /v1/chats/{chat_id}/share-contact-card`](/api-reference/chats/share-contact-card) lets a message leave during the quiet hours of the line. Use it for a recipient of your own, such as an alert to your own phone number. The default is `false`.
+
+- Quiet hours never hold such a message, neither when iSnap accepts it nor when iSnap releases it.
+- The message still waits for the sending limits of the line, for the spacing, and behind an earlier message to the same recipient that iSnap holds, whatever holds that earlier message. It then takes the `schedule_reason` of that earlier message, `quiet_hours` included. It counts against `max_queue_depth` like any held message.
+- A hold for the per-minute or per-hour limit ends at the end of the window, even in quiet hours. A hold for a 24-hour limit still ends in an hour in which the line sends.
+- On a shared line, the option has no effect.
+- The message returns the value in force in `ignore_quiet_hours`, set when iSnap accepts it and never changed: `false` on a shared line, on an inbound message and on a message typed on the line's device.
 
 ## Spacing
 
@@ -132,7 +142,17 @@ An answer to a contact who wrote to the line in the last 24 hours is not stopped
 | `reply_max_per_inbound` | How many messages can use the reply lane after each message from the contact. | 8 |
 | `daily_reply_limit` | How many messages of the line can use the reply lane over a rolling 24 hours. | 150 |
 
-`reply_lane` on the message is `true` when the message qualified. A message uses the `daily_reply_limit` budget only when the reply lane let it pass the per-hour limit or a 24-hour limit. Passing quiet hours uses no budget. Reactions never use the reply lane. The three settings can only be lowered below their defaults.
+`reply_lane` on the message is `true` when the message is in the reply lane. A message uses the `daily_reply_limit` budget only when the reply lane let it pass the per-hour limit or a 24-hour limit. Passing quiet hours uses no budget. Reactions never use the reply lane. The three settings can only be lowered below their defaults.
+
+### Held messages that enter the reply lane
+
+When a contact writes to a line, the messages that iSnap holds for that contact on that line enter the reply lane, whatever held them:
+
+- They enter oldest first. As many enter as `reply_max_per_inbound` allows for that message of the contact, counting the answers that follow it, and no more than the room left in `daily_reply_limit`. The first held message that does not fit keeps its `scheduled_for`, and so do the later ones.
+- A message that enters the lane changes `reply_lane` from `false` to `true`, once and never back.
+- It leaves without waiting for its `scheduled_for`, still after the earlier messages to the same recipient, and within the per-minute limit and the spacing of the line. On a shared line, it also waits until the number that serves the contact can take it.
+- iSnap sends no `message.scheduled` for this change: `message.queued` follows when iSnap releases the message.
+- When iSnap cannot move them, the held messages wait for their `scheduled_for`.
 
 ## Order
 

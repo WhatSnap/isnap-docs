@@ -83,6 +83,7 @@ Sent when:
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -105,8 +106,9 @@ Personal data: `data.message`.
 ## `message.scheduled`
 
 Sent when a message is accepted but held, and again each time its planned send time moves by more
-than 15 minutes. A smaller move sends nothing. `message.queued` follows when the message is
-released. See [Held messages](/guides/sending-limits#held-messages).
+than 15 minutes. A smaller move sends nothing, and so does the move of a held message that enters
+the reply lane because its contact wrote. `message.queued` follows when the message is released.
+See [Held messages](/guides/sending-limits#held-messages).
 
 | Field | Type | Nullable | Meaning |
 | --- | --- | --- | --- |
@@ -142,6 +144,7 @@ released. See [Held messages](/guides/sending-limits#held-messages).
       "scheduled_for": "2026-10-08T13:00:00.000Z",
       "schedule_reason": "quiet_hours",
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T02:41:10.118Z",
       "queued_at": "2026-10-08T02:41:10.118Z",
@@ -209,6 +212,7 @@ device used, when the device reports one.
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -270,6 +274,7 @@ created through the API.
       "scheduled_for": null,
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T15:04:12.640Z",
       "queued_at": null,
@@ -335,6 +340,7 @@ no `message.delivered` and with `delivered_at` still `null`.
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -411,6 +417,7 @@ always adds them.
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -471,6 +478,7 @@ inbound messages that account had not marked read: see
       "scheduled_for": null,
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.101Z",
       "queued_at": null,
@@ -544,6 +552,7 @@ The line's device reports that it could not send the message. `data` adds:
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -602,6 +611,7 @@ The line's device reports the status `failed` for a message it had sent. `data` 
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -662,6 +672,7 @@ took it and never reported an outcome. `data` adds:
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",
@@ -731,6 +742,7 @@ The event is not sent:
       "scheduled_for": null,
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.101Z",
       "queued_at": null,
@@ -790,6 +802,7 @@ set.
       "scheduled_for": "2026-10-08T13:00:00.000Z",
       "schedule_reason": "quiet_hours",
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T02:41:10.118Z",
       "queued_at": "2026-10-08T02:41:10.118Z",
@@ -851,6 +864,7 @@ because it already knew the recipient is not on iMessage. The same report also p
       "scheduled_for": "2026-10-08T14:22:57.392Z",
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.392Z",
       "queued_at": "2026-10-08T14:22:57.392Z",

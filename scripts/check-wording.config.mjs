@@ -33,8 +33,8 @@ export const PROJECT_FORBIDDEN = [
   [/\+1555555\d{4}\b/, 'use the sample numbers +14155550123 and +14155550124 (these fail phone validation)'],
   // The API version these docs describe is written in the first entry of changelog.mdx and in the
   // versioning section of api-reference/introduction.mdx, and nowhere else. The sample response of
-  // GET /v1/version in quickstart.mdx shows "2.39.0".
-  [/(?<!starts at version |pages describe version |<Update label=")\b2\.[3-9]\d\.\d+\b(?<!"version": "2\.39\.0)/, 'an explicit API version: it is written only in the first entry of changelog.mdx and in the versioning section of api-reference/introduction.mdx'],
+  // GET /v1/version in quickstart.mdx shows "2.45.0".
+  [/(?<!starts at version |pages describe version |<Update label=")\b2\.[3-9]\d\.\d+\b(?<!"version": "2\.45\.0)/, 'an explicit API version: it is written only in the first entry of changelog.mdx and in the versioning section of api-reference/introduction.mdx'],
   [/new ISnapClient\(\{ apiKey: process\.env\.ISNAP_\w+ \?\? '' \}\)/, 'sample clients pass maxRetries: 2'],
   [/new ISnapClient\(\{(?![^}]*maxRetries)[^}]*\}\)/, 'sample clients pass maxRetries: 2'],
   // The title of a fenced block joins its first line: "```bash curl curl -sS ...".
@@ -86,7 +86,7 @@ export const PROJECT_PROSE = [
   [/\bfit to (acquire|be)\b|\bthe possibility to\b|\bof its stock\b|\bthe one of\b|\b(can meet|you meet|where you meet)\b/i, 'calque'],
   [/\btrial lines?\b/i, 'term: "pool line"'],
   [/\bdelivery semantics\b/i, 'title: "Delivery guarantees"'],
-  [/\b(pay|pays|paid|payments?|buy|buys|bought)\b[^.]{0,60}\bdashboard\b/i, 'payment in the dashboard: a direct account buys by writing to support@isnap.ai (concepts.mdx, Accounts)'],
+  [/\b(pay|pays|paid|payments?|buy|buys|bought|rents?|adds? one)\b[^.]{0,80}\bsupport@isnap\.ai\b/i, 'payment by email: a direct account pays in the iSnap dashboard (concepts.mdx, Accounts)'],
   [/\b(no|any) operation that an API key can call takes a payment\b/i, 'false: a transfer and a pre-order confirmation charge']
 ]
 

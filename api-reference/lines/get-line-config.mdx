@@ -7,7 +7,8 @@ openapi: "GET /v1/lines/{id}/config"
 - **Credential:** an API key of the owner of the line. The operation works on any line you own. See [Configuration](/guides/managing-lines#configuration).
 - **Line-scoped keys:** a [line-scoped key](/authentication#line-scoped-keys) gets `403 forbidden` unless the line is in its list.
 - **Events:** none.
-- **Defaults:** read them from `knobs` and from `config`. They depend on the line, and iSnap can change them. What each setting does is in [Sending limits](/guides/sending-limits).
+- **Defaults:** read them from `knobs`, from `default_activity_curve` and from `config`. They depend on the line, and iSnap can change them. What each setting does is in [Sending limits](/guides/sending-limits).
+- **Sending hours:** `config.activity_curve` is the curve of the line, never empty: its override, or `default_activity_curve`. On a shared line, the curve of the number that serves the contact applies to the sends instead: see [Quiet hours](/guides/sending-limits#quiet-hours).
 - **Bounds:** of the eight limits in `knobs`, only the five message limits of a BYOD line accept a value above `default`, up to `knobs.<key>.max`. For the three reply limits, and for the five message limits of a line that is not a BYOD line, [`PATCH /v1/lines/{id}/config`](/api-reference/lines/update-line-config) returns `403 cannot_increase_limit` for a value above `default` and up to `max`. For each key, a value outside `min` to `max` is refused before that check, on every line: with `422 limit_out_of_bounds` or `400 validation_failed`. The two spacing settings can only be raised: a value below `default` returns `403 cannot_decrease_delay`.
 
 ## Errors

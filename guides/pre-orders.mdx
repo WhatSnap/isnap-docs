@@ -1,9 +1,9 @@
 ---
 title: "Pre-orders"
-description: "Order one rented iMessage line in the area codes you prefer, confirm the order, and receive the line when iSnap hands it over."
+description: "Order one rented iMessage line in the area codes you prefer, confirm the order, pay its first month as a direct account, and receive the line when iSnap hands it over."
 ---
 
-A pre-order asks iSnap to prepare one rented iMessage line (`billing_tier: rental_iphone`) for your account, preferably with a number in one of up to 5 area codes that you choose. It has two steps: a draft, which has no effect, then a confirmation, which commits the order. Read this page when you order a line instead of taking one from the [marketplace](/guides/getting-a-line).
+A pre-order asks iSnap to prepare one rented iMessage line (`billing_tier: rental_iphone`) for your account, preferably with a number in one of up to 5 area codes that you choose. It has two steps: a draft, which has no effect, then a confirmation, which commits the order. A direct account then pays the first month in the iSnap dashboard before iSnap builds the line. Read this page when you order a line instead of taking one from the [marketplace](/guides/getting-a-line).
 
 One pre-order is one line. To order several lines, create several pre-orders.
 
@@ -32,7 +32,7 @@ Call [`POST /v1/pre-orders`](/api-reference/pre-orders/create-pre-order). Every 
 | --- | --- |
 | `preferred_area_codes` | 0 to 5 area codes, in your order of preference. Each is a string of 1 to 10 characters. The default is `[]`: any area code. The API does not check the values against `GET /v1/area-codes`. |
 | `inbound_only` | `false`, the default, orders a two-way line. `true` orders an inbound-only line. See [Line kinds](/concepts#line-kinds). |
-| `billing_anchor_at` | The [billing anchor](/guides/managing-lines#anniversary-and-billing-anchor) to give the line. A timestamp more than 31 days after the call returns `400 billing_anchor_too_far`. The pre-order returns it, and the line receives it at confirmation. |
+| `billing_anchor_at` | The [billing anchor](/guides/managing-lines#anniversary-and-billing-anchor) to give the line. A timestamp more than 31 days after the call returns `400 billing_anchor_too_far`. The pre-order returns it, and the line receives it when the build starts. |
 | `billing_tier` | Leave it out. The only accepted value is `rental_iphone`, and the pre-order neither stores nor returns it. |
 | `metadata` | Your own keys and values: at most 20 keys and 8,192 bytes once serialized. |
 
@@ -44,13 +44,11 @@ The response is `201` with the pre-order, `status: draft`. A draft creates no li
 
 <Step title="Confirm">
 
-Call [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order). Only a draft can be confirmed. The confirmation does three things:
+Call [`POST /v1/pre-orders/{id}/confirm`](/api-reference/pre-orders/confirm-pre-order). Only a draft can be confirmed, and a direct account can repeat the confirmation while the first month is due. The build of the line starts with the confirmation for a wholesale partner, and once the first month is paid for a direct account: see [Confirm and payment](#confirm-and-payment). When the build starts:
 
 - The pre-order gets `status: provisioning`.
-- `estimated_fulfillment` is set to the time of the confirmation plus 72 hours.
-- iSnap creates a line on your account with `status: provisioning`: a rented iMessage line (`billing_tier: rental_iphone`), with the `inbound_only` that you ordered and your `billing_anchor_at`. When a number is in stock in one of your area codes, in their order of preference, the line receives it at confirmation. A pre-order with no `preferred_area_codes` takes any number in stock.
-
-What the confirmation opens depends on your [account](/concepts#accounts): see [Confirm and payment](#confirm-and-payment).
+- `estimated_fulfillment` is set to the time the build starts plus 72 hours.
+- iSnap creates a line on your account with `status: provisioning`: a rented iMessage line (`billing_tier: rental_iphone`), with the `inbound_only` that you ordered and your `billing_anchor_at`. When a number is in stock in one of your area codes, in their order of preference, the line receives it when the build starts. A pre-order with no `preferred_area_codes` takes any number in stock.
 
 </Step>
 
@@ -66,20 +64,32 @@ A direct account also receives an email that says the line is ready. A wholesale
 
 ## Confirm and payment
 
-**Direct account.** The confirmation creates the line and opens its monthly billing: the first month must be paid. The line is created whether or not that payment completes. The response carries `stripe_client_secret`, the secret of that first payment: do not log it. iSnap provides no way to pay with it through the API: to pay the first month, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order within 23 hours of the confirmation. After 23 hours, that first payment can no longer be completed.
+**Wholesale partner.** The build starts with the confirmation: the response has `status: provisioning`, and `stripe_client_secret` is `null`. Nothing is paid at confirmation. The line is counted on your monthly invoice from the day it goes live.
 
-**Wholesale partner.** Nothing is paid at confirmation, and `stripe_client_secret` is `null`. The line is counted on your monthly invoice from the day it goes live.
+**Direct account.** The build starts once the first month is paid. The confirmation starts the monthly billing of the line and returns the pre-order with `status: awaiting_payment` and `stripe_client_secret`, the secret of the first monthly payment: do not log it. No line exists yet, and `estimated_fulfillment` is `null`.
+
+- Pay the first month in the [iSnap dashboard](https://platform.isnap.ai), by card, within 23 hours of the confirmation. No operation that an API key can call pays it. See [Accounts](/concepts#accounts).
+- Once iSnap has recorded the payment, the build starts. Read the pre-order with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) until `status` is `provisioning`: that read checks the payment, and starts the build when the payment has succeeded. [`GET /v1/pre-orders`](/api-reference/pre-orders/list-pre-orders) does not check it: see [Listing](#listing).
+- When the first month is not paid within 23 hours of the confirmation, it can no longer be paid: the pre-order becomes `cancelled`, no line is built, and iSnap sends `pre_order.cancelled`. The API does not bound the delay between the end of the 23 hours and that change. To order the line again, create a new draft.
+- The first month starts at the confirmation, not at the hand-over. The hand-over takes no payment.
+- The confirmation can also return `status: provisioning` and `stripe_client_secret: null` to a direct account: its first month was already paid, and the build has started.
+
+A direct account can repeat the confirmation while the pre-order is `awaiting_payment`: it returns the same `stripe_client_secret` and starts no second billing. Repeated after the payment succeeded, it returns the pre-order in `provisioning`, with `stripe_client_secret: null`. A wholesale partner cannot repeat a confirmation: `400 pre_order_not_draft`.
 
 <Warning>
-`stripe_client_secret` is returned by the `confirm` response only: every other read of the pre-order returns `null`. A confirmation cannot be repeated, and `confirm` does not honor `Idempotency-Key`.
+`stripe_client_secret` is returned only by the `confirm` response of a pre-order in `awaiting_payment`: every other response returns `null`. `confirm` does not honor `Idempotency-Key`.
 
-A confirmed pre-order cannot be canceled through the API. Confirm only when the order is final.
+Once its build has started, a pre-order cannot be canceled through the API. Confirm only when the order is final.
 </Warning>
 
-When the response to a confirmation is lost, or the call returns a `500`, do not resend the confirmation blindly. Read the pre-order with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order):
+When the response to a confirmation is lost, or the call returns a `500` or a `503`, read the pre-order with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) before you do anything else:
 
 - `status: draft`: the confirmation did not happen. Resend it.
-- `status: provisioning`: the confirmation happened, and no operation returns the secret again. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order.
+- `status: awaiting_payment`: the confirmation happened, and the first month is due. Pay it in the dashboard. Resending the confirmation returns the same `stripe_client_secret`.
+- `status: provisioning`: the build has started, and nothing is due.
+- `status: cancelled`: the pre-order was canceled, or its first month was not paid within 23 hours. Create a new draft to order the line again.
+
+Two refusals concern the payment of the first month, on the confirmation and on the cancellation. `503 payment_provider_unavailable`: iSnap could not reach its payment provider, nothing changed, and the call can be resent. `409 payment_setup_failed`: the payment provider refused the request for your account, nothing changed, and resending the call does not help. Write to [support@isnap.ai](mailto:support@isnap.ai) with the `trace_id` and `request_id` of the response.
 
 A confirmation acts the same way with every API key:
 
@@ -99,8 +109,8 @@ curl -sS -X POST "https://api.isnap.ai/v1/pre-orders" \
   -H "Content-Type: application/json" \
   -d '{"preferred_area_codes":["415","628"],"inbound_only":false,"metadata":{"crm_account_id":"acct_1042"}}'
 
-# Confirm once: a confirmation cannot be repeated. The response is saved before you read it.
-# For a direct account it contains stripe_client_secret: keep the file out of logs, and delete it once read.
+# The response is saved before you read it. For a direct account it has status awaiting_payment and
+# contains stripe_client_secret: keep the file out of logs, and delete it once read.
 curl -sS -X POST "https://api.isnap.ai/v1/pre-orders/7f3c9a52-1d4e-4b8a-9c6f-2e5d8a1b4c7d/confirm" \
   -H "Authorization: Bearer $ISNAP_API_KEY" \
   -o confirm-response.json
@@ -126,12 +136,16 @@ console.log(draft.id, draft.status)
 
 try {
   const confirmed = await client.preOrders.confirm(draft.id, once)
-  // For a direct account, confirmed.stripe_client_secret is the secret of the first
-  // monthly payment: do not log it.
-  console.log(confirmed.status, confirmed.estimated_fulfillment)
+  // For a direct account whose first month is due, confirmed.stripe_client_secret is the
+  // secret of the first monthly payment: do not log it.
+  if (confirmed.stripe_client_secret !== null) {
+    console.log('Pay the first month in the iSnap dashboard within 23 hours.')
+  } else {
+    console.log(confirmed.status, confirmed.estimated_fulfillment)
+  }
 } catch (err) {
   if (err instanceof APIError && err.code === 'pre_order_not_draft') {
-    // Already confirmed or canceled: read it with preOrders.get, do not resend the confirmation.
+    // Already confirmed or canceled: read it with preOrders.get.
     console.error('This pre-order is not a draft.')
   } else {
     throw err
@@ -167,11 +181,14 @@ payload = confirmed.json()
 
 if confirmed.status_code == 200:
     pre_order = payload["data"]
-    # For a direct account, pre_order["stripe_client_secret"] is the secret of the first
-    # monthly payment: do not log it.
-    print(pre_order["status"], pre_order["estimated_fulfillment"])
+    # For a direct account whose first month is due, pre_order["stripe_client_secret"] is the
+    # secret of the first monthly payment: do not log it.
+    if pre_order["stripe_client_secret"] is not None:
+        print("Pay the first month in the iSnap dashboard within 23 hours.")
+    else:
+        print(pre_order["status"], pre_order["estimated_fulfillment"])
 elif payload["error"]["code"] == "pre_order_not_draft":
-    # Already confirmed or canceled: read it, do not resend the confirmation.
+    # Already confirmed or canceled: read it with GET /v1/pre-orders/{id}.
     print("This pre-order is not a draft.")
 else:
     confirmed.raise_for_status()
@@ -204,24 +221,25 @@ The `id` of a pre-order is a UUID, with no prefix.
 
 ## Estimated date
 
-`estimated_fulfillment` is `null` on a draft. The confirmation sets it once, to the time of the confirmation plus 72 hours, and nothing revises it afterward. The 72 hours are a setting of iSnap, the same for every pre-order. No field and no event tells you that the date has passed without a hand-over.
+`estimated_fulfillment` is `null` until the build starts: on a draft, on a pre-order in `awaiting_payment`, and on a pre-order canceled before its build started. The start of the build sets it once, to that time plus 72 hours, and nothing revises it afterward. The 72 hours are a setting of iSnap, the same for every pre-order. No field and no event tells you that the date has passed without a hand-over.
 
 ## Statuses
 
 | `status` | Meaning | Set by |
 | --- | --- | --- |
 | `draft` | The pre-order has no effect. | `POST /v1/pre-orders` |
-| `provisioning` | The pre-order is confirmed and iSnap prepares the line. | `POST /v1/pre-orders/{id}/confirm` |
+| `awaiting_payment` | A direct account confirmed the pre-order, and its first month is due. Nothing is built until it is paid. | `POST /v1/pre-orders/{id}/confirm`, for a direct account. |
+| `provisioning` | The build has started, and iSnap prepares the line. | The confirmation of a wholesale partner, or the payment of the first month of a direct account. |
 | `fulfilled` | iSnap handed the line over to you. | iSnap, at the hand-over. |
-| `cancelled` | You canceled the draft. | `POST /v1/pre-orders/{id}/cancel` |
+| `cancelled` | The pre-order ended with no line: you canceled it, its first month was not paid within 23 hours of the confirmation, or the payment of its first month was canceled before it was made. | `POST /v1/pre-orders/{id}/cancel`, or iSnap. |
 
-A confirmed pre-order never becomes `cancelled`. If iSnap withdraws the line before the hand-over, the pre-order stays `provisioning` and no event is sent.
+A pre-order whose build has started never becomes `cancelled`. If iSnap withdraws the line before the hand-over, the pre-order stays `provisioning` and no event is sent.
 
 `device_status` tells how far the line is. It is always present and never `null`:
 
 | `device_status` | Meaning |
 | --- | --- |
-| `awaiting_hardware` | The pre-order is a draft or a canceled draft, or the line is not finished. |
+| `awaiting_hardware` | The pre-order has no line: it is a draft, in `awaiting_payment` or canceled. Or the line is not finished. |
 | `ready` | The line is built. |
 | `deployed` | The line is handed over. |
 
@@ -229,11 +247,14 @@ The schema also lists `received` and `setup_in_progress`. The API does not retur
 
 ## Canceling
 
-[`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) cancels a draft: the pre-order gets `status: cancelled`, nothing was charged, and iSnap sends `pre_order.cancelled`. The event is sent after the cancel is recorded: if it cannot be sent, the cancel stands.
+[`POST /v1/pre-orders/{id}/cancel`](/api-reference/pre-orders/cancel-pre-order) cancels a pre-order in `draft` or `awaiting_payment`: the pre-order gets `status: cancelled`, nothing was charged, and iSnap sends `pre_order.cancelled`. The event is sent after the cancel is recorded: if it cannot be sent, the cancel stands.
 
-Only a draft can be canceled. A pre-order that is confirmed, fulfilled or already canceled returns `400 pre_order_already_confirmed`.
+- For a pre-order in `awaiting_payment`, the payment of the first month is canceled first: the `stripe_client_secret` of the confirmation can no longer be used.
+- When the first month is already paid, the call returns `409 pre_order_already_paid` and the build goes on.
+- A pre-order in `provisioning`, `fulfilled` or `cancelled` returns `400 pre_order_already_confirmed`.
+- `503 payment_provider_unavailable` and `409 payment_setup_failed` mean what they mean for the confirmation: see [Confirm and payment](#confirm-and-payment).
 
-No operation ends a confirmed pre-order. The message of the `400` above points to `POST /v1/lines/{id}/release`, but release only gives back a line that you have reserved: it returns `404` for a line that is being prepared. `POST /v1/lines/{id}/terminate` refuses that line too. To withdraw a confirmed pre-order, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order.
+No operation ends a pre-order whose build has started. The message of the `400` above points to `POST /v1/lines/{id}/release`, but release only gives back a line that you have reserved: it returns `404` for a line that is being prepared. `POST /v1/lines/{id}/terminate` refuses that line too. To withdraw such a pre-order, write to [support@isnap.ai](mailto:support@isnap.ai) with the `id` of the pre-order.
 
 ## Metadata
 
@@ -251,11 +272,13 @@ Set `metadata` when you create the draft, and change it with [`PATCH /v1/pre-ord
 
 | Parameter | Meaning |
 | --- | --- |
-| `status` | Keeps one status: `draft`, `provisioning`, `fulfilled` or `cancelled`. |
+| `status` | Keeps one status: `draft`, `awaiting_payment`, `provisioning`, `fulfilled` or `cancelled`. |
 | `limit` | 1 to 100. The default is 25. A value outside the range returns `400 validation_failed`. |
 | `cursor` | The `next_cursor` of the previous page. |
 
 The response has `data.items`, `data.has_more` and `data.next_cursor`. `next_cursor` is `null` on the last page.
+
+The list does not check payments: a pre-order whose first month was just paid can be listed as `awaiting_payment` until iSnap records the payment. [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order) checks it.
 
 Two rules of the cursor, described with the other lists in [Cursors](/pagination#cursors):
 
@@ -316,7 +339,7 @@ while True:
 | Event | Sent when | Line filter |
 | --- | --- | --- |
 | [`pre_order.fulfilled`](/webhooks/events/pre-order#pre_order-fulfilled) | The line of a pre-order is handed over. | Tied to the new line: a subscription with a line filter receives it only when the filter lists that line. |
-| [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | You cancel a draft. | Tied to no line: a subscription with a line filter never receives it. |
+| [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | You cancel a pre-order in `draft` or `awaiting_payment`, its first month is not paid within 23 hours of the confirmation, or the payment of its first month is canceled before it is made. | Tied to no line: a subscription with a line filter never receives it. |
 
 A pre-order does not give you its line id before the hand-over: receive pre-order events on a [webhook subscription](/webhooks/overview) without a line filter. When the line is handed over with its device already connected, iSnap also sends `line.connected` for it.
 
@@ -324,9 +347,10 @@ The pre-order events announce the two changes above, and no other. No event anno
 
 - a draft that is created;
 - a confirmation: its response is the only signal;
+- a first month that is paid, and the start of the build: read the pre-order;
 - a change of `metadata`;
 - an `estimated_fulfillment` that passes;
-- an order that iSnap withdraws behind a confirmed pre-order.
+- an order that iSnap withdraws behind a pre-order whose build has started.
 
 The full list is in [What events do not announce](/webhooks/event-catalog#what-events-do-not-announce). To know the state of a pre-order, read it with [`GET /v1/pre-orders/{id}`](/api-reference/pre-orders/get-pre-order). Deduplicate on `event_id`: see [Duplicates](/webhooks/delivery#duplicates).
 

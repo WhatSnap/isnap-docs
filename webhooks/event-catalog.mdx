@@ -41,6 +41,7 @@ the [events feed](/webhooks/pulling-events).
       "scheduled_for": null,
       "schedule_reason": null,
       "reply_lane": false,
+      "ignore_quiet_hours": false,
       "queue_info": null,
       "created_at": "2026-10-08T14:22:57.101Z",
       "queued_at": null,
@@ -85,7 +86,7 @@ you do not handle. See
 | Family | Event type | Sent when |
 | --- | --- | --- |
 | `message` | [`message.queued`](/webhooks/events/message#message-queued) | A message is accepted for immediate sending, or a held message is released for sending. |
-| `message` | [`message.scheduled`](/webhooks/events/message#message-scheduled) | A message is accepted and held, or the planned send time of a held message moves by more than 15 minutes. |
+| `message` | [`message.scheduled`](/webhooks/events/message#message-scheduled) | A message is accepted and held, or the planned send time of a held message moves by more than 15 minutes, except when it enters the reply lane. |
 | `message` | [`message.sent`](/webhooks/events/message#message-sent) | The line's device confirms it sent a message created through the API, or someone typed a message on the line's own device. |
 | `message` | [`message.delivered`](/webhooks/events/message#message-delivered) | The line's device reports for the first time that an outbound message was delivered. |
 | `message` | [`message.read`](/webhooks/events/message#message-read) | The recipient read a message you sent, or you marked a chat read. |
@@ -116,7 +117,7 @@ you do not handle. See
 | `trial` | [`trial.bind_conflict`](/webhooks/events/trial#trial-bind_conflict) | A prospect sends a valid pairing code, but their handle is already paired with this pool line, or with as many pool lines of the pool as its limit allows. |
 | `trial` | [`trial.revoked`](/webhooks/events/trial#trial-revoked) | You revoke a trial that is `active`, `dormant`, or still inside its pairing window. |
 | `pre_order` | [`pre_order.fulfilled`](/webhooks/events/pre-order#pre_order-fulfilled) | The line of a pre-order is handed over. |
-| `pre_order` | [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | You cancel a draft pre-order. |
+| `pre_order` | [`pre_order.cancelled`](/webhooks/events/pre-order#pre_order-cancelled) | A pre-order ends before its build: you cancel it, its first month is not paid within 23 hours, or the payment of its first month is canceled before it is made. |
 | `macos_session` | [`macos_session.rented`](/webhooks/events/macos-session#macos_session-rented) | iSnap assigns a hosted macOS session to your account outside your own rent call. |
 | `macos_session` | [`macos_session.released`](/webhooks/events/macos-session#macos_session-released) | The rental of a hosted macOS session ends. |
 | `binding` | [`binding.released`](/webhooks/events/binding#binding-released) | A binding between a shared line and one contact ends. |
@@ -265,8 +266,8 @@ Events also do not announce the following.
 
 **Pre-orders**
 
-- A pre-order that is created or confirmed.
-- An order that iSnap cancels behind a confirmed pre-order.
+- A pre-order that is created or confirmed, and a first month that is paid.
+- An order that iSnap cancels behind a pre-order whose build has started.
 - An estimated fulfillment time that passes.
 
 **Hosted macOS sessions**

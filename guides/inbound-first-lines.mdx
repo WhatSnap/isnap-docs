@@ -1,6 +1,6 @@
 ---
 title: "Inbound-first lines (private alpha)"
-description: "Explains inbound-first lines: one line per end client, an invite per visitor with a number and a code, the visitor's first text, the reply, and the rules on time, bindings and errors."
+description: "Gives the private alpha flow of inbound-first lines: POST /v1/lines/shared with inbound_first, POST /v1/lines/{id}/invites for a number and a code per visitor, the sms: link, message.received with invite_id, replies, the 30-day and 90-day rules, binding.released and the errors."
 noindex: true
 ---
 
@@ -8,31 +8,50 @@ An inbound-first line lets the people who visit your page text one of your end c
 
 <Warning>
 Inbound-first lines are a private alpha. iSnap enables them per account, on request: write to [support@isnap.ai](mailto:support@isnap.ai). The behavior that this page describes can change without notice.
+
+The API reference and the other pages of this site do not describe inbound-first lines. Where they differ from this page for an inbound-first line, this page applies: who can create the line, its `inbound_only`, how a binding starts and ends, the reasons of `binding.released`, and when the line can write. The [rate limits](#rate-limits) of this page apply to every request of your account that an API key authenticates.
 </Warning>
+
+Four rules decide whether your page works:
+
+- Show a number only with its code, in the same `sms:` link. See [Put the code in the text](#put-the-code-in-the-text).
+- Call the invite operation with a timeout of your own, and show a fallback of your own when it fails. See [Time out and fall back](#time-out-and-fall-back).
+- Store every invite you give, with the visitor, and pass the numbers of a visitor's other invites in `exclude`. See [Choose `exclude`](#choose-exclude).
+- Test in production: no other environment of iSnap has a number that can take an invite. See [Testing](#testing).
 
 ## How it works
 
 An inbound-first line is a [shared line](/guides/getting-a-line#shared-lines) that never writes first. It has no number of its own: each contact texts it on a number from iSnap's pool, and the line replies from the number that contact texted.
 
 1. You create the inbound-first line of an end client, once.
-2. When a visitor opens the client's page, your server asks for an invite: iSnap picks a number from its pool and issues a code for that number.
+2. When a visitor opens the client's page, your server creates an invite: iSnap picks one of your account's numbers and issues a code for that number.
 3. The page shows an `sms:` link with that number and a prefilled text that carries the code.
 4. The visitor sends the text. The code binds the visitor to your line on that number: from then on, the visitor is a contact of your line. You receive [`message.received`](#receive-the-first-text) on the line.
-5. You reply with [`POST /v1/messages`](#reply) and the line's id. The reply leaves from the number the contact texted.
+5. You reply with `POST /v1/messages` and the line's id, as in [Reply](#reply). The reply leaves from the number the contact texted.
 
-On this page, a **visitor** is a person on your page who has not texted yet, and a **contact** is a person who has. A **binding** ties one contact to your line on one number, as on any [shared line](/concepts#other-terms). On an inbound-first line, only a text from the contact creates a binding: a send never does.
+The terms of this page:
 
-Each number of the pool also carries chats with other contacts, which your line never sees. Your line receives only the contacts that your codes bound to it.
+| Term | Meaning |
+| --- | --- |
+| End client | One of your own customers. Each has one inbound-first line. |
+| Visitor | A person on your page who has not texted yet. |
+| Contact | A person whose text bound them to your line. |
+| Your account's numbers | The numbers of iSnap's pool that serve the inbound-first lines of your account. The API does not list them, and they can change. |
+| Binding | The tie between one contact and your line on one number. On an inbound-first line, only a text that carries a code creates a binding: a send never does. |
+
+Each of your account's numbers also carries chats with other contacts, which your line never sees. Your line receives only the contacts that your codes bound to it.
 
 ## Create an inbound-first line
 
-[`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) with `inbound_first: true` creates one inbound-first line and returns `201` with the line, already `active`. Create one per end client and keep its `id`.
+[`POST /v1/lines/shared`](/api-reference/lines/create-shared-line) with `inbound_first: true` creates one inbound-first line and returns `201` with the line, already `active`. Create one per end client and keep its `id`. Any account that iSnap enabled can create one, wholesale partner or not.
 
 - The body takes `inbound_first` and `metadata`. Put your own id of the end client in `metadata`: it comes back on the line and in the `line_metadata` of every event of the line. See [Metadata](/guides/managing-lines#metadata) for its limits.
-- The new line has `shared: true`, `inbound_only: true`, `phone_number: ""` and `capabilities: ["imessage"]`.
-- Send an `Idempotency-Key`: every call without one creates one more line. Reuse the key only to retry the same request. See [Retries](/guides/getting-a-line#retries).
-- An account that iSnap has not enabled receives `403 inbound_pool_required`. A line-scoped key receives `403 forbidden`.
-- [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) lists the line. [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns `404 not_found` for it, as for every shared line.
+- The new line has `shared: true`, `inbound_only: true`, `phone_number: ""` and `capabilities: ["imessage"]`. Check `inbound_only: true` before you store the line: a line created without `inbound_first: true` is not an inbound-first line. The send rule of [inbound-only lines](/guides/sending-messages#inbound-only-lines) does not apply to it: see [Reply](#reply).
+- Send an `Idempotency-Key`, stored with your record of the end client: every call without one creates one more line. The API remembers the key for 24 hours. See [Retries](/guides/getting-a-line#retries).
+- An account that iSnap has not enabled, or that no number serves now, receives `403 inbound_pool_required`. A line-scoped key receives `403 forbidden`.
+- [`GET /v1/lines/my`](/api-reference/lines/list-my-lines) lists the line while it is `active`. [`GET /v1/lines/{id}`](/api-reference/lines/get-line) returns `404 not_found` for it, as for every shared line.
+
+The SDK samples on this page need `@isnap/sdk` 2.3.0 or later.
 
 <CodeGroup>
 
@@ -59,7 +78,8 @@ try {
     { inbound_first: true, metadata: { crm_account_id: 'acct_1042' } },
     { idempotencyKey }
   )
-  console.log(line.id, line.status, line.inbound_only)
+  if (!line.inbound_only) throw new Error(`${line.id} is not an inbound-first line`)
+  console.log(line.id, line.status)
 } catch (err) {
   if (err instanceof APIError && err.code === 'inbound_pool_required') {
     console.error('Inbound-first lines are not enabled on this account.')
@@ -71,11 +91,11 @@ try {
 
 </CodeGroup>
 
-## Issue an invite
+## Create an invite
 
-`POST /v1/lines/{line_id}/invites` picks a number for one visitor of an inbound-first line and issues the code that the visitor's text must carry. Call it from your server when you render the page for a new visitor. It takes an API key, or a line-scoped key whose list holds the line.
+`POST /v1/lines/{id}/invites` picks one of your account's numbers for one visitor of an inbound-first line, and issues the code that the visitor's text must carry. The API reference does not list this operation: this section describes it. In the SDK, it is `lines.createInvite`. Call it from your server, for a visitor who has no invite for this line that you can show again: see [Reuse an invite](#reuse-an-invite). It takes an API key, or a line-scoped key whose list holds the line.
 
-The body is optional. When you send one, send it as `application/json`: a body of any other type returns `400 validation_failed`.
+The body is optional. When you send one, send it as JSON (`Content-Type: application/json`): a body of a type that is not JSON returns `400 validation_failed`.
 
 | Field | Rule |
 | --- | --- |
@@ -85,14 +105,14 @@ The response is `201` with the invite.
 
 | Field | Meaning |
 | --- | --- |
-| `id` | The id of the invite: `inv_` followed by 25 letters or digits. `message.received` carries it in `invite_id` when the code binds a contact. |
+| `id` | The id of the invite: `inv_` followed by 25 letters or digits. `message.received` carries it in `invite_id` when the code binds a contact. No operation returns an invite later: store it. |
 | `line_id` | The inbound-first line. |
 | `phone_number` | The number the visitor texts, in E.164. |
 | `code` | The code the text must carry: 7 uppercase letters and digits, at least 2 of them digits. It is valid only on `phone_number`, never expires and can be used more than once: a second person who texts the same code to the same number becomes a contact of the line too. |
 | `created_at` | When the invite was issued, in ISO 8601 UTC. |
 
 - Every call issues a new invite with a new code, even for the same visitor. The operation ignores `Idempotency-Key`: a call that you repeat after a lost response issues one more invite. An invite that nobody uses has no effect on your line.
-- iSnap spreads the invites over the numbers of the pool that can take one now. It never picks a number in `exclude`.
+- iSnap spreads the invites over your account's numbers that can take one now. It never picks a number in `exclude`.
 - No event announces an invite.
 
 <CodeGroup>
@@ -101,7 +121,7 @@ The response is `201` with the invite.
 curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/invites" \
   -H "Authorization: Bearer $ISNAP_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"exclude":["+14155550126"]}'
+  -d '{"exclude":[]}'
 ```
 
 ```json Response
@@ -121,19 +141,30 @@ curl -sS -X POST "https://api.isnap.ai/v1/lines/line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd/i
 
 </CodeGroup>
 
+### Store the invites
+
+Store each invite on your server under its `id`, with your own reference of the visitor and of the end client. `message.received` names the invite only by `invite_id`, and no operation returns an invite later. A cookie of your page can hold the invite ids of a visitor, so that your page finds them again.
+
 ### Choose `exclude`
 
-A contact has at most one binding on a given number. When a contact bound to one of your lines on a number texts the code of another of your lines to that same number, the binding moves to the other line: see [The code wins](#the-code-wins). To keep a visitor's lines apart, pass in `exclude` the numbers that this visitor already texts for your other inbound-first lines.
+A contact has at most one binding on a given number. When a contact bound to one of your lines on a number texts the code of another of your lines to that same number, the binding moves to the other line: see [The code wins](#the-code-wins). To keep a visitor's lines apart, pass in `exclude` the numbers of every invite that you gave this visitor for your other inbound-first lines, used or not.
 
-iSnap cannot know who a visitor is before their first text. Keep the visitor's numbers yourself, for example in a cookie of your page.
+iSnap cannot know who a visitor is before their first text: only your stored invites can tell.
 
-### Reuse a visitor's invite
+### Reuse an invite
 
-When a visitor comes back to the page of a line for which you already gave them an invite, show the same number and code again instead of issuing a new invite. The code never expires, and the visitor keeps one number for that line.
+When a visitor comes back to the page of a line for which you already gave them an invite:
+
+- If a `message.received` carried the `invite_id` of that invite, a message went either way with that contact in the last 90 days, and no `binding.released` has come since for that contact on that number, show the same number and code again: the visitor keeps one number for the line.
+- Otherwise, create a new invite, with the number of the earlier one in `exclude`. The earlier text may not have reached your line: see [Texts that do not reach your line](#texts-that-do-not-reach-your-line).
+
+A number can stop serving your account. Its codes then stop binding, and no event announces it.
 
 ## Put the code in the text
 
-Show the number and the code together, in an `sms:` link whose prefilled text carries the code. Build the link with the number and the URL-encoded text, as defined by RFC 5724, for example `sms:+14155550124?body=Hello.%20Ref%204821-K7P9R2Q`. Check on the phones your visitors use that the text arrives prefilled.
+Show the number and the code together, in an `sms:` link whose prefilled text carries the code. Build the link with the number and the URL-encoded text, as defined by RFC 5724, for example `sms:+14155550124?body=Hello.%20Ref%204821-K7P9R2Q`. Check on the phones your visitors use that the text arrives prefilled. Show the number and the code as text next to the link too, for a visitor whose phone does not prefill it.
+
+Render the link for each visitor. Keep the page that carries it out of any shared cache: a cached page shows one code to every visitor.
 
 iSnap finds the code this way:
 
@@ -141,29 +172,30 @@ iSnap finds the code this way:
 - Each word of exactly 7 characters is compared with the codes, without regard to case.
 - The code can stand anywhere in the text, among other words.
 
-So the code must be a word of its own. Glued to other letters or digits, it is not found.
+So the code must be a word of its own, with no ASCII letter or digit directly before or after it.
 
 | Prefilled text | Found? |
 | --- | --- |
 | `Hello. Ref 4821-K7P9R2Q` | Yes: the hyphen ends `4821`. |
 | `k7p9r2q` | Yes: case does not matter. |
-| `My code is #PRX9X4P-K7P9R2Q` | Yes: `PRX9X4P` and `K7P9R2Q` are two words. |
-| `Ref PRX9X4PK7P9R2Q` | No: one word of 14 characters. |
+| `My code is #PRX94-K7P9R2Q` | Yes: `PRX94` and `K7P9R2Q` are two words. |
+| `Ref PRX94K7P9R2Q` | No: one word of 12 characters. |
 
-The visitor can edit the text before sending it. The code is found as long as its 7 characters stay together.
+The visitor can edit the text before sending it. The code is found as long as its 7 characters stay together, as a word of its own.
 
-- Put one code in a text. When a text carries several codes, the first one in the text that can bind the sender wins.
+- Put one code of iSnap in a text. When a text carries several codes, the first one in the text that can bind the sender wins.
 - Never put a code in a text to another number. A code issued for another number does not bind, and the text does not reach your line.
+- A text that reaches the number by SMS binds like one sent by iMessage.
 
 <Warning>
-Never show a number from an invite without its code. Without the code, iSnap cannot tell that the text is for your line, and the text never reaches your line.
+Never show a number from an invite without its code. Without the code, iSnap cannot tell that the text is for your line: the text never reaches your line, and a code for that number can then fail to bind its sender. When that visitor comes back, create an invite with that number in `exclude`.
 </Warning>
 
 ## Time out and fall back
 
-The invite call sits inside the render of your page, and the API does not bound its response time. Call it with a short timeout of your own, for example 1 second. When the call fails, times out or returns an error, show a fallback of your own instead of the link, such as a form or a number that is yours. Never show a number from an earlier invite of another visitor.
+Your visitor waits for the invite call, and the API does not bound its response time. Call it with a short timeout of your own, for example 1 second. When the call fails, times out or returns an error, show a fallback of your own instead of the link, such as a form or a number that is yours. Never show the number of an invite that you gave to another visitor.
 
-Do not retry the call while the page waits. The SDK does not retry `lines.createInvite` by default, because a retry after a lost response issues one more invite.
+Do not retry the call while the page waits: show your fallback for this page view, and create an invite at the next page view. The SDK does not retry `lines.createInvite` by default, because a retry after a lost response issues one more invite.
 
 <CodeGroup>
 
@@ -173,16 +205,16 @@ import { APIError, ISnapClient } from '@isnap/sdk'
 const client = new ISnapClient({ apiKey: process.env.ISNAP_API_KEY ?? '', maxRetries: 2 })
 
 interface Invite {
+  id: string
   phone_number: string
   code: string
 }
 
-/** The invite to show, or null to show your fallback. */
-async function inviteFor(lineId: string, stored: Invite | undefined, exclude: string[]): Promise<Invite | null> {
-  if (stored) return stored // The visitor already has an invite for this line: reuse it.
+/** A new invite to store and show, or null to show your fallback. */
+async function createInvite(lineId: string, exclude: string[]): Promise<Invite | null> {
   try {
     const invite = await client.lines.createInvite(lineId, { exclude }, { signal: AbortSignal.timeout(1000) })
-    return { phone_number: invite.phone_number, code: invite.code }
+    return { id: invite.id, phone_number: invite.phone_number, code: invite.code }
   } catch (err) {
     // A refusal, a timeout or a network error: never show a number without its code.
     console.error('invite failed', err instanceof APIError ? err.code : err)
@@ -206,22 +238,21 @@ API = "https://api.isnap.ai"
 HEADERS = {"Authorization": f"Bearer {os.environ['ISNAP_API_KEY']}"}
 
 
-def invite_for(line_id, stored, exclude):
-    """The invite to show, as {"phone_number", "code"}, or None to show your fallback."""
-    if stored:
-        return stored  # The visitor already has an invite for this line: reuse it.
+def create_invite(line_id, exclude):
+    """A new invite to store and show, as {"id", "phone_number", "code"}, or None to show your fallback."""
     try:
+        # A 1-second budget for the connection and for each read.
         response = requests.post(
-            f"{API}/v1/lines/{line_id}/invites", headers=HEADERS, json={"exclude": exclude}, timeout=1
+            f"{API}/v1/lines/{line_id}/invites", headers=HEADERS, json={"exclude": exclude or []}, timeout=1
         )
-    except (requests.ConnectionError, requests.Timeout):
+    except requests.RequestException:
         return None
     if response.status_code != 201:
         # A refusal: never show a number without its code.
         print("invite failed:", response.status_code)
         return None
     invite = response.json()["data"]
-    return {"phone_number": invite["phone_number"], "code": invite["code"]}
+    return {"id": invite["id"], "phone_number": invite["phone_number"], "code": invite["code"]}
 
 
 def sms_link(invite, ref):
@@ -233,34 +264,35 @@ def sms_link(invite, ref):
 
 ## Receive the first text
 
-When the contact's text binds them to your line, iSnap stores the message on your line and sends [`message.received`](/webhooks/events/message#message-received) with the line's `line_id`.
+Before you create your first inbound-first line, subscribe a [webhook endpoint](/webhooks/overview) to `message.received`, `message.failed` and `binding.released`, with no line filter. An event that matches no subscription when it occurs is never delivered and never listed in the events feed, and a subscription with `line_ids` does not cover a line that you create later.
 
-- `data.message.from` is the contact's number in E.164, and `data.message.to` is the number they texted.
+When the contact's text binds them to your line, iSnap stores the message on your line and sends [`message.received`](/webhooks/events/message#message-received) with the line's `line_id` in `data.message.line_id`.
+
+- `data.message.from` is the contact's handle: a phone number in E.164, or an email address in lowercase when the visitor's phone sends from the email address of their Apple ID. `data.message.to` is the number they texted.
 - `data.message.body` is the text as sent, code included.
-- `data.invite_id` is the id of the invite whose code bound the contact with this message. It is `null` on a message that arrived on an existing binding without a code. It is in the event only: the message returned by [`GET /v1/messages`](/api-reference/messages/list-messages) does not carry it.
-- The [chat](/guides/receiving-messages#chats) of the contact is on your line. Its `outbound_number` is the number of the binding, or `null` once the binding has ended.
+- `data.invite_id` is the id of the invite whose code bound the contact with this message. It is `null` on a message that arrived on an existing binding without a code. Several contacts can bind with one invite, so several `message.received` can carry the same `invite_id`. It is in the event only: the message returned by [`GET /v1/messages`](/api-reference/messages/list-messages) does not carry it. The SDK's type of the event does not declare it: in TypeScript, read it with `(event.data as { invite_id?: string | null }).invite_id`.
+- The [chat](/guides/receiving-messages#chats) of the contact is on your line. Its `outbound_number` is the number of the binding, or `null` once the binding has ended. It stays set while a binding is idle or its number no longer serves your account: it does not tell you that your line can write.
 
-Later texts from the contact arrive on the same line, with or without the code, while the binding lasts: see [How long a binding lasts](#how-long-a-binding-lasts).
+While the binding is usable, the contact's later texts arrive on the same line when they carry no code or a code of this line for this number. A text that carries any other code follows the rules of that code. See [How long a binding lasts](#how-long-a-binding-lasts) and [The code wins](#the-code-wins).
 
 ### Texts that do not reach your line
 
-A text that does not reach your line is not stored on it, and no event announces it.
+A text that does not reach your line is not stored on it, and no event announces it. iSnap sends its sender no error, and your line cannot reply to it on the number it reached. Tell your visitors on the page what to do when no reply comes, for example a form of your own.
 
 | The text | Why |
 | --- | --- |
-| Carries no code, from a person with no binding to your line on that number | iSnap cannot tell that it is for your line. |
+| Carries no code, from a person with no binding to your line on that number, a contact whose binding has ended included | iSnap cannot tell that it is for your line. A code for that number can then fail to bind the person: when they come back to your page, create an invite with this number in `exclude`, as in [Reuse an invite](#reuse-an-invite). |
 | Carries a code issued for another number | A code binds only on its own number. |
 | Carries a code of a line that is `cancelled` | The line has ended. |
-| Carries a code for a number that has left iSnap's pool | The number no longer serves inbound-first lines. |
-| Comes from a person who already exchanges messages with that number outside your line | iSnap never moves such a person to your line: their code does not bind them. Give that visitor an invite with this number in `exclude`. |
+| Carries a code for a number that no longer serves your account | The number no longer serves your inbound-first lines. |
+| Comes from a person who already exchanges messages with that number outside your line | iSnap never moves such a person to your line: their code does not bind them. When the visitor comes back, create an invite with this number in `exclude`, as in [Reuse an invite](#reuse-an-invite). |
 | Carries no code, on a binding that has been silent for more than 30 days | See [How long a binding lasts](#how-long-a-binding-lasts). |
-| Carries no code, from a contact whose binding on that number has ended, when the last message of that binding is less than 90 days old | The contact must text a code again. |
 
-A line that is `suspended` still receives the texts of its contacts, and its codes still bind.
+A line that is `suspended` still receives the texts of its contacts, and its codes still bind. It cannot send: `POST /v1/messages` and reactions return `403 line_suspended`, and the invite operation returns `409 line_not_active`.
 
 ## Reply
 
-Reply with [`POST /v1/messages`](/api-reference/messages/send-message), with the line's `line_id` and the contact's number in `to`. The message leaves from the number of the contact's binding. Everything else follows [Sending messages](/guides/sending-messages).
+Reply with [`POST /v1/messages`](/api-reference/messages/send-message), with the line's `line_id` and the contact's handle from `data.message.from` in `to`. The message leaves from the number of the contact's binding. The rest of the send follows [Sending messages](/guides/sending-messages), except its rule for inbound-only lines.
 
 ```bash curl
 IDEMPOTENCY_KEY=$(uuidgen) # Store it with your record of the message: reuse it to retry.
@@ -272,42 +304,49 @@ curl -sS https://api.isnap.ai/v1/messages \
   -d '{"line_id":"line_8Xk2mQ4vTn7Bw9Rz3Lc6Yp1Hd","to":"+14155550123","body":"Thanks for your message. When can we call you?"}'
 ```
 
-- The line can write only to a contact whose binding is usable: it exists, a message went either way in the last 30 days, and its number is still in iSnap's pool. Any other send returns `403 outbound_first_forbidden`: nothing is stored, and no sending limit is used. The contact has to text a code again.
+- The line can write only to a contact whose binding is usable: it exists, a message went either way in the last 30 days, and its number still serves your account. Any other send returns `403 outbound_first_forbidden`: nothing is stored, and no sending limit is used. Only a text from the contact with a code can make the binding usable again.
+- `to` takes a phone number only: your line cannot reply to a contact whose handle is an email address (`400 bad_request`).
 - A message that iSnap holds, and whose binding stops being usable before it leaves, fails with `error_code: outbound_first_forbidden` and [`message.failed`](/webhooks/events/message#message-failed). It is never sent.
 - The [sending limits](/guides/sending-limits) of your line apply. When the number of the binding cannot take the message now, iSnap holds it with `schedule_reason: carrier_retry`, as on any shared line: see [Shared lines](/guides/sending-messages#shared-lines).
 - A reaction, with [`POST /v1/messages/{id}/reactions`](/api-reference/messages/add-reaction) or [`DELETE`](/api-reference/messages/remove-reaction), follows the same rule, on the number of the message it reacts to.
 
+No operation returns whether a binding is usable. Keep the time of the last message either way yourself, or send and handle `403 outbound_first_forbidden`.
+
 ## How long a binding lasts
 
-A binding lasts while messages go either way. Its age counts from the last message in either direction, or from its creation when no message crossed it since.
+A binding's silence is the time since the last message in either direction, or since its creation when no message has gone either way.
 
 | Silence | What happens |
 | --- | --- |
-| 30 days or less | The binding is usable: the contact's texts reach your line, with or without the code, and your line can reply. |
-| More than 30 days | The binding is idle. Your line cannot write to the contact (`403 outbound_first_forbidden`), and a text without a code does not reach your line. A text with a code of your line for that number makes the binding usable again. No event announces that a binding becomes idle. |
-| 90 days | The binding ends: iSnap sends [`binding.released`](/webhooks/events/binding#binding-released) with `reason: inactivity`. The API does not bound the delay between the 90 days and the event. The contact can still text the same code to the same number to create a new binding. |
+| 30 days or less | The binding is usable: the contact's texts reach your line, and your line can reply. |
+| More than 30 days, up to 90 days | The binding is idle. Your line cannot write to the contact (`403 outbound_first_forbidden`), and a text without a code does not reach your line. A text with a code of your line for that number makes the binding usable again. No event announces that a binding becomes idle. |
+| More than 90 days | The binding ends: iSnap sends [`binding.released`](/webhooks/events/binding#binding-released) with `reason: inactivity`. The API does not bound the delay between the 90 days and the event. A text with a code then creates a new binding. A text without a code does not reach your line, and a code for that number can then fail to bind the contact: when the contact comes back to your page, create an invite with the number of the binding in `exclude`. |
+
+Your line cannot tell an idle contact to text a code. While the binding is usable, you can give the contact their code in a reply, for example "If we lose touch, start your text with K7P9R2Q."
 
 ## When a binding ends
 
-[`binding.released`](/webhooks/events/binding#binding-released) announces the end of a binding, on the line that lost it. `contact_handle` is the contact, and `outbound_number` is the number of the binding that ended.
+[`binding.released`](/webhooks/events/binding#binding-released) announces the end of a binding, on the line that lost it. `contact_handle` is the contact's handle, and `outbound_number` is the number of the binding that ended.
 
 | `reason` | What happened | What to do |
 | --- | --- | --- |
-| `inactivity` | No message went either way for 90 days. | Nothing. The contact can text a code again. |
+| `inactivity` | No message went either way for more than 90 days. | Nothing on this line. When the contact comes back to your page, create an invite with `outbound_number` in `exclude`. |
 | `reclaimed` | The contact texted, on the same number, the code of another of your inbound-first lines, which now has the contact. | Nothing on this line: the other line receives the contact's texts. To avoid it, see [Choose `exclude`](#choose-exclude). |
 | `moved` | The contact texted a code of the same line on another number. The binding moved there, and `outbound_number` is the number it left. | Nothing: the line keeps the contact, on the new number. A contact has at most one binding per line. |
-| `owner_contact` | The number of the binding started to exchange messages with the contact outside your line. The contact's replies no longer reach your line, and codes for that number no longer bind this contact. | To reach the contact again, give them an invite with `outbound_number` in `exclude`. |
-| `carrier_terminated` | Your line was terminated, or the number of the binding was terminated. | For a terminated line, nothing. Otherwise, give the contact a new invite. |
+| `owner_contact` | The number of the binding wrote to the contact outside your line. The contact's replies no longer reach your line, and codes for that number no longer bind this contact. | When the contact comes back to your page, create an invite with `outbound_number` in `exclude`. |
+| `carrier_terminated` | Your line was terminated, or the number of the binding was terminated. | For a terminated line, nothing. Otherwise, when the contact comes back to your page, create a new invite. |
 
 New reasons can be added. Treat a reason you do not know as the end of the binding.
 
+A number can also stop serving your account without being terminated, and no event announces it. From then on, your line cannot write to the contacts bound on that number (`403 outbound_first_forbidden`), the messages it holds for them fail, and their texts no longer reach your line, with or without a code. Unless another reason ends it first, each of these bindings ends with `reason: inactivity` once it has been silent for more than 90 days.
+
 ### The code wins
 
-A code decides where its text goes. When a contact bound to line A on a number texts a code of line B for that number, the binding moves to line B, and line A receives `binding.released` with `reason: reclaimed`. When the contact texts a code of line A for another number, the binding moves to that number, with `reason: moved`. Both lines always belong to your account.
+A code decides where its text goes. When a contact bound to line A on a number texts a code of line B for that number, the binding moves to line B, and line A receives `binding.released` with `reason: reclaimed`. Line B is always a line of your account. When the contact texts a code of line A for another number, the binding moves to that number, with `reason: moved`.
 
 ## Ending a line
 
-End an inbound-first line with [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line). Each of its bindings ends with `binding.released` and `reason: carrier_terminated`, and texts that carry its codes no longer reach any of your lines.
+End an inbound-first line with [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line). Each of its bindings ends with `binding.released` and `reason: carrier_terminated`, each message it holds fails with `error_code: carrier_terminated` and `message.failed`, and the line sends `line.terminated` and `line.disconnected`. Texts that carry its codes no longer reach any of your lines.
 
 - An inbound-first line has no anniversary: [`cancel`](/api-reference/lines/cancel-line) and [`POST /v1/lines/{id}/anniversary`](/api-reference/lines/set-line-anniversary) return `409 inbound_first_line_has_no_anniversary`.
 - It cannot change owner: [`transfer-ownership`](/api-reference/lines/transfer-line) returns `409 inbound_first_line_not_transferable`.
@@ -321,7 +360,9 @@ A request authenticated by an API key counts against the limits of its account, 
 | Every operation | 100 requests per rolling 60 seconds |
 | `POST /v1/messages` and `GET /v1/messages`, together | 60 requests per rolling 60 seconds, in addition to the limit on every operation |
 
-Every invite is one request. Over a limit, the API returns `429 rate_limit_exceeded` with `Retry-After: 60`: show your fallback on the page instead of waiting. iSnap can give your account a limit of its own, from 1 to 10,000 requests per 60 seconds, which then replaces both numbers: write to [support@isnap.ai](mailto:support@isnap.ai).
+Every invite is one request, and it shares the limits with your replies and every other call of the account. Over a limit, the API returns `429 rate_limit_exceeded` with `Retry-After: 60`, and a refused request counts too: stop creating invites for `Retry-After` seconds, and show your fallback to every visitor in that time. To spend fewer requests, create the invite when the visitor taps your button rather than at every load of the page.
+
+iSnap can give your account a limit of its own, from 1 to 10,000 requests per 60 seconds, which then replaces both numbers. When your pages need more invites per 60 seconds than the limits leave after your other calls, ask before you go live: write to [support@isnap.ai](mailto:support@isnap.ai).
 
 ## Errors
 
@@ -329,19 +370,22 @@ The errors of the operations on this page, and what to do. The [error format](/e
 
 | Operation | Status and `error.code` | Meaning | What to do |
 | --- | --- | --- | --- |
-| `POST /v1/lines/shared` | `403 inbound_pool_required` | iSnap has not enabled inbound-first lines on your account. | Write to [support@isnap.ai](mailto:support@isnap.ai). |
+| `POST /v1/lines/shared` | `403 inbound_pool_required` | iSnap has not enabled inbound-first lines on your account, or no number serves your account now. | Write to [support@isnap.ai](mailto:support@isnap.ai). |
+| `POST /v1/lines/shared` | `402 payment_required` | The body did not carry `inbound_first: true`, and your account is not a wholesale partner. | Send `inbound_first: true`. |
+| `POST /v1/lines/shared` | `400 validation_failed`, `400 reserved_metadata_key` | The body is invalid, or `metadata` names a reserved key. | Fix the request. |
 | `POST /v1/lines/shared` | `403 forbidden` | The key is line-scoped. | Use a key with no list of lines. |
 | `POST /v1/lines/shared` | `409 idempotency_key_collision`, `503 idempotency_in_flight` | See [Idempotency](/idempotency). | Follow the rule of the code. |
-| Invite | `400 validation_failed` | An `exclude` entry is not in E.164, `exclude` has more than 50 entries, or the body is not `application/json`. | Fix the request. |
+| Invite | `400 validation_failed` | An `exclude` entry is not in E.164, `exclude` has more than 50 entries, or the body is not JSON. | Fix the request. |
 | Invite | `403 forbidden` | The key is line-scoped and this line is outside its list. | Use a key whose list holds the line. |
 | Invite | `404 not_found` | The line does not exist, or it is not yours. | Check the `line_id`. |
 | Invite | `409 not_inbound_first_line` | The line is not an inbound-first line. | Use the line created with `inbound_first: true`. |
-| Invite | `409 line_not_active` | The line is not `active`. | Show your fallback. Read the line's `status` with `GET /v1/lines/my`. |
+| Invite | `409 line_not_active` | The line is not `active`, for example `suspended` or `cancelled`. | Show your fallback. `GET /v1/lines/my` no longer lists the line: write to [support@isnap.ai](mailto:support@isnap.ai) with its `id`. |
 | Invite | `503 line_pool_exhausted` | No number can take an invite now: each one is in `exclude`, offline or at its sending limits. | Show your fallback. |
 | Invite | `503 quota_state_unavailable` | iSnap could not read the sending limits of the numbers. | Show your fallback. |
 | Invite | `503 invite_code_unavailable` | iSnap could not draw a free code. | Show your fallback. |
-| Invite | `429 rate_limit_exceeded` | See [Rate limits](#rate-limits). | Show your fallback. |
+| Invite | `429 rate_limit_exceeded` | See [Rate limits](#rate-limits). | Show your fallback for `Retry-After` seconds. |
 | `POST /v1/messages` | `403 outbound_first_forbidden` | The contact has no usable binding to the line. | Wait for the contact to text a code. |
+| `POST /v1/messages` | `400 bad_request` | `to` is not a phone number, for example a contact's email address. | None: the line cannot reply to that contact. |
 | `cancel`, `anniversary` | `409 inbound_first_line_has_no_anniversary` | An inbound-first line has no anniversary. | Use `terminate`. |
 | `transfer-ownership` | `409 inbound_first_line_not_transferable` | An inbound-first line cannot change owner. | None. |
 
@@ -349,8 +393,8 @@ No invite is issued when the invite operation returns an error.
 
 ## Testing
 
-iSnap's staging environment has no number that can take an invite: there, the invite operation returns `503 line_pool_exhausted`. A staging setup with simulated numbers and simulated texts is in preparation. Until iSnap announces it, test in production, with a phone of your own as the visitor.
+Outside production, no number can take an invite: `POST /v1/lines/shared` returns `403 inbound_pool_required`, or the invite operation returns `503 line_pool_exhausted`. An environment with simulated numbers and simulated texts is in preparation. Until iSnap announces it, test in production: create a line for testing, use a phone of your own as the visitor, and end the line with `POST /v1/lines/{id}/terminate` when you are done.
 
 ## Personal data
 
-`message.received` carries the contact's number and text in `data.message`, and their name in `contact_name`. `binding.released` carries the contact's number in `contact_handle`. The numbers in `phone_number`, `exclude` and `outbound_number` are numbers of iSnap. Do not copy a contact's number or text into logs, tickets or other tools. Refer to a contact by an id of your own.
+`message.received` carries the contact's handle and text in `data.message`, and can carry a display name in `contact_name`: do not show `contact_name` to your end client as the contact's name. `binding.released` carries the contact's handle in `contact_handle`. Your replies carry the contact's handle in `to`, in the request and the response of `POST /v1/messages` and in the message events of each reply. The prefilled text that your page builds stays in the contact's message. The numbers in `phone_number`, `exclude` and `outbound_number` are numbers of iSnap. Do not copy a contact's handle, name or text into logs, tickets or other tools. Refer to a contact by an id of your own.

@@ -39,7 +39,11 @@ export const PROJECT_FORBIDDEN = [
   [/new ISnapClient\(\{(?![^}]*maxRetries)[^}]*\}\)/, 'sample clients pass maxRetries: 2'],
   // The title of a fenced block joins its first line: "```bash curl curl -sS ...".
   [/(?<!```\w+ )\bcurl (?!-sS\b)/, 'samples use curl -sS'],
-  [/https:\/\/example\.com\b/, 'sample webhook URLs use https://hooks.your-domain.example/isnap']
+  [/https:\/\/example\.com\b/, 'sample webhook URLs use https://hooks.your-domain.example/isnap'],
+  // The sandbox, in any case and anywhere (prose, code, link targets): only on a page whose title ends with
+  // "(private alpha)". The gate joins title, sidebarTitle and description in frontmatter order, so ^\n[^\n]* is
+  // the first of them: keep title first in every page's frontmatter.
+  [/[Ss][Aa][Nn][Dd][Bb][Oo][Xx](?<!^\n[^\n]*\(private alpha\)\n[\s\S]*)/, 'the sandbox is named only on a page whose title ends with "(private alpha)"; a test key acts on the same account and billing']
 ]
 
 // Prose only: implementation words and the glossary's forbidden synonyms. Field, path, event and
@@ -55,7 +59,6 @@ export const PROJECT_PROSE = [
   // A word inside a path, such as an old URL that docs.json redirects, is not prose.
   [/(?<!\/[\w-]*)\bquotas?\b/i, 'term: "sending limit" in prose; the names that contain "quota" stay in code format'],
   [/(?<!\/[\w-]*)\bwarm(ing|-up| up)\b/i, 'a concept the API does not have'],
-  [/\bsandbox(es)?\b/i, 'a concept the API does not have: a test key acts on the same account and billing'],
   [/\btags?\b/i, 'term: "metadata"'],
   [/\binstants?\b/i, 'term: "timestamp"'],
   [/(?<!wholesale )\bpartners?\b/i, 'term: address the reader as "you"; "wholesale partner" is the only partner term'],

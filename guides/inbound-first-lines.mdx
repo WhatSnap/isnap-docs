@@ -9,7 +9,7 @@ An inbound-first line lets the people who visit your page text one of your end c
 <Warning>
 Inbound-first lines are a private alpha. iSnap enables them per account, on request: write to [support@isnap.ai](mailto:support@isnap.ai). The behavior that this page describes can change without notice.
 
-The API reference and the other pages of this site do not describe inbound-first lines. Where they differ from this page for an inbound-first line, this page applies: who can create the line, its `inbound_only`, how a binding starts and ends, the reasons of `binding.released`, and when the line can write. The [rate limits](#rate-limits) of this page apply to every request of your account that an API key authenticates.
+The API reference and the other pages of this site do not describe inbound-first lines. Where they differ from this page for an inbound-first line, this page applies: who can create the line, its `inbound_only`, how a binding starts and ends, the reasons of `binding.released`, when the line can write, and how you test it. The other pages say that iSnap has no test environment: for inbound-first lines, iSnap has a [sandbox](#testing). The [rate limits](#rate-limits) of this page apply to every request of your account that an API key authenticates.
 </Warning>
 
 Four rules decide whether your page works:
@@ -17,7 +17,7 @@ Four rules decide whether your page works:
 - Show a number only with its code, in the same `sms:` link. See [Put the code in the text](#put-the-code-in-the-text).
 - Call the invite operation with a timeout of your own, and show a fallback of your own when it fails. See [Time out and fall back](#time-out-and-fall-back).
 - Store every invite you give, with the visitor, and pass the numbers of a visitor's other invites in `exclude`. See [Choose `exclude`](#choose-exclude).
-- Test in production: no other environment of iSnap has a number that can take an invite. See [Testing](#testing).
+- Test in the sandbox first, then in production with phones of your own, before you go live. See [Testing](#testing).
 
 ## How it works
 
@@ -366,7 +366,7 @@ iSnap can give your account a limit of its own, from 1 to 10,000 requests per 60
 
 ## Errors
 
-The errors of the operations on this page, and what to do. The [error format](/errors-and-rate-limits#error-format) and the errors that every operation shares are in [Errors and rate limits](/errors-and-rate-limits).
+The errors of the operations on this page, and what to do. The errors of the sandbox are in [Sandbox errors](#sandbox-errors). The [error format](/errors-and-rate-limits#error-format) and the errors that every operation shares are in [Errors and rate limits](/errors-and-rate-limits).
 
 | Operation | Status and `error.code` | Meaning | What to do |
 | --- | --- | --- | --- |
@@ -393,7 +393,158 @@ No invite is issued when the invite operation returns an error.
 
 ## Testing
 
-Outside production, no number can take an invite: `POST /v1/lines/shared` returns `403 inbound_pool_required`, or the invite operation returns `503 line_pool_exhausted`. An environment with simulated numbers and simulated texts is in preparation. Until iSnap announces it, test in production: create a line for testing, use a phone of your own as the visitor, and end the line with `POST /v1/lines/{id}/terminate` when you are done.
+Use this section while you build your page and your server, and before you go live. The sandbox is a separate iSnap environment for testing inbound-first lines, with its own accounts, API keys, lines and webhook subscriptions: none of your production ones exist there. Its numbers are fictional: no phone can text them, and nothing sent from them reaches a phone. Two operations exist only in the sandbox: `POST /v1/sandbox/lines` [adds numbers to your account](#add-sandbox-numbers), and `POST /v1/sandbox/inbound` [sends a text as the visitor](#send-a-text-as-the-visitor). The API reference does not list them, and the SDK has no method for them: this section describes them. What the sandbox cannot test is in [Test in production](#test-in-production).
+
+To get a sandbox account, write to [support@isnap.ai](mailto:support@isnap.ai): iSnap gives you the sandbox's base URL and an API key of your sandbox account. The samples in this section read them from `ISNAP_SANDBOX_URL` and `ISNAP_SANDBOX_API_KEY`. The other operations of this page take the same requests in the sandbox. To run their samples there, use the sandbox's base URL in place of `https://api.isnap.ai`, and the API key of your sandbox account in place of your production key: in curl, `$ISNAP_SANDBOX_URL` and `$ISNAP_SANDBOX_API_KEY`; in Python, `os.environ['ISNAP_SANDBOX_URL']` and `os.environ['ISNAP_SANDBOX_API_KEY']`; in TypeScript, the client below. A production key does not exist in the sandbox, and gets `401 unauthorized` there. The sandbox can run a newer version of the API than production: [`GET /v1/version`](/api-reference/service/get-version) returns the version of each. The sandbox can also behave differently from production under the same version: test again in production each behavior that you test in the sandbox, as in [Test in production](#test-in-production).
+
+The SDK calls `https://api.isnap.ai` when you create a client without `baseUrl`, and the TypeScript samples of this page do not set it. In a test, create the client from the sandbox's variables, and stop when one is missing:
+
+```typescript TypeScript
+import { ISnapClient } from '@isnap/sdk'
+
+const baseUrl = process.env.ISNAP_SANDBOX_URL ?? ''
+const apiKey = process.env.ISNAP_SANDBOX_API_KEY ?? ''
+if (!baseUrl || !apiKey) throw new Error('Set ISNAP_SANDBOX_URL and ISNAP_SANDBOX_API_KEY.')
+
+const client = new ISnapClient({ apiKey, baseUrl, maxRetries: 2 })
+```
+
+To check that a base URL is the sandbox's before a test run, send `POST /v1/sandbox/lines` with the API key of your sandbox account and the body `{}`: the sandbox returns `400 validation_failed` and adds nothing, and production returns `404 not_found`. Without an API key, both return `403 forbidden`.
+
+To run a test in the sandbox:
+
+1. Subscribe a webhook endpoint in the sandbox to the events of [Receive the first text](#receive-the-first-text), with no line filter, and to `message.sent`, `message.delivered` and `reaction.added` to follow your replies. Verify its deliveries with the signing secret of that subscription.
+2. Add sandbox numbers to your account, once, and store them: see [Add sandbox numbers](#add-sandbox-numbers).
+3. Create an inbound-first line and an invite as in production: see [Create an inbound-first line](#create-an-inbound-first-line) and [Create an invite](#create-an-invite). The invite returns one of your sandbox numbers in `phone_number`, and the code in `code`. Create one line for all your tests and store its `id`, or end each line that a test creates with [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line).
+4. From a `from` that you have not used, send a text with the code to that number: see [Send a text as the visitor](#send-a-text-as-the-visitor). You receive `message.received` with the invite's `id` in `data.invite_id`.
+5. Reply with `POST /v1/messages`, with that `from` in `to`, as in [Reply](#reply). When the reply leaves the sandbox number, iSnap marks it sent and sends `message.sent`. At least 3 seconds later, iSnap marks it delivered and sends `message.delivered`. The API does not bound either delay, and a reply can stay `sent` with no `message.delivered`: wait with a deadline of your own. The two events can reach your endpoint in either order: order them by the timestamps inside `data`, as in [Order](/webhooks/delivery#order). For a reaction that you add, iSnap sends `reaction.added`, and never `message.delivered`.
+6. Before you go live, test on phones: see [Test in production](#test-in-production).
+
+To test your [fallback](#time-out-and-fall-back), pass every one of your sandbox numbers in `exclude`: the invite operation returns `503 line_pool_exhausted`.
+
+The API does not bound the delay between the response of `POST /v1/sandbox/inbound` and `message.received`. No event tells you that a text did not reach your line: to test that case, wait until a deadline of your own, then check that no `message.received` came from that `from`.
+
+### Add sandbox numbers
+
+`POST /v1/sandbox/lines` adds sandbox numbers to your account. In the sandbox, your sandbox numbers are your account's numbers: your invites pick among them. A call that succeeds also enables inbound-first lines on your account in the sandbox. While they are not enabled, `POST /v1/lines/shared` with `inbound_first: true` and the invite operation return `403 inbound_pool_not_enabled`. The operation takes an API key that is not line-scoped.
+
+| Field | Rule |
+| --- | --- |
+| `count` | Required. How many sandbox numbers to add: a whole number from 1 to 5. |
+
+- The numbers stay in your account. A call that would take your account over 5 sandbox numbers returns `409 sandbox_line_limit_reached`: the numbers that iSnap added to your account on request count too.
+- A call that returns an error adds nothing, and does not enable inbound-first lines.
+- Every call adds numbers: the operation ignores `Idempotency-Key`, so do not retry it after a lost response. It sends no event.
+
+The response is `201` with `data.lines`, one entry per number added.
+
+| Field | Meaning |
+| --- | --- |
+| `phone_number` | The sandbox number, in E.164: a fictional US number from `+12025550100` to `+12025550199`. |
+| `line_id` | The id of the line that holds the number: `line_` followed by 25 letters or digits. It is not a line of your account, and no operation of this page takes it. |
+
+Store the numbers: no operation lists them. To find them again, create invites on one of your inbound-first lines, each time with every number found so far in `exclude`, until the invite operation returns `503 line_pool_exhausted`. You then have every sandbox number of your account that can take an invite now. An invite that nobody uses has no effect on your line.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "$ISNAP_SANDBOX_URL/v1/sandbox/lines" \
+  -H "Authorization: Bearer $ISNAP_SANDBOX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"count":2}'
+```
+
+```json Response
+{
+  "success": true,
+  "data": {
+    "lines": [
+      { "line_id": "line_6vJCz2OkwMaJVNgciMaaPpiHq", "phone_number": "+12025550100" },
+      { "line_id": "line_T8YR7f67YxvsvsLyAKOfb8xHj", "phone_number": "+12025550101" }
+    ]
+  },
+  "trace_id": "74575f61f0968e44d71f9cbdaa39cf26",
+  "request_id": "req_k0I2AFBEQXNU03xwXZfYVjfj5"
+}
+```
+
+</CodeGroup>
+
+### Send a text as the visitor
+
+`POST /v1/sandbox/inbound` sends a text to one of your sandbox numbers, as the visitor's phone would. Put the code in the text as your page prefills it: see [Put the code in the text](#put-the-code-in-the-text). The operation takes an API key that is not line-scoped.
+
+| Field | Rule |
+| --- | --- |
+| `phone_number` | Required. One of your sandbox numbers, in E.164: the `phone_number` of the invite whose code the text carries. |
+| `from` | Required. The visitor's phone number, in E.164. Use a fictional number, new for each test: see [Use a new `from` for each test](#use-a-new-from-for-each-test). |
+| `body` | Required. The text, from 1 to 10,000 characters. |
+
+The response is `202` with `data.event_id` and `data.accepted_at`. `event_id` identifies this text in the sandbox only: no event and no other operation carries it, and it is not the `event_id` of a webhook event. `accepted_at` is the time the sandbox number received the text, in ISO 8601 UTC. A `202` tells you only that the number received the text. The text then follows the rules of production:
+
+- A text whose code binds the visitor reaches your line. You receive `message.received`, with the invite's `id` in `data.invite_id`, `from` in `data.message.from` and the sandbox number in `data.message.to`. Find the event of a test by `data.invite_id`. See [Receive the first text](#receive-the-first-text).
+- A text that would not reach your line in production does not reach it in the sandbox either, and no event announces it. See [Texts that do not reach your line](#texts-that-do-not-reach-your-line).
+
+The operation sends no event itself, and ignores `Idempotency-Key`: every call is a new text, so do not retry it after a lost response.
+
+In this sample, an invite in the sandbox returned `+12025550101` with the code `K7P9R2Q`.
+
+<CodeGroup>
+
+```bash curl
+curl -sS -X POST "$ISNAP_SANDBOX_URL/v1/sandbox/inbound" \
+  -H "Authorization: Bearer $ISNAP_SANDBOX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"phone_number":"+12025550101","from":"+14155550123","body":"Hello. Ref 4821-K7P9R2Q"}'
+```
+
+```json Response
+{
+  "success": true,
+  "data": {
+    "event_id": "dve_GnGfQvOOE1lYXycCK9VINED93",
+    "accepted_at": "2026-10-21T15:06:40.512Z"
+  },
+  "trace_id": "10a7a259e88765ab70e91194b54f5f84",
+  "request_id": "req_n3rANC1dtwlpHvYrpWZ8IkoXa"
+}
+```
+
+</CodeGroup>
+
+### Use a new `from` for each test
+
+Bindings persist in the sandbox between your tests, and a `from` that you used keeps its bindings. A `from` that texted a sandbox number without a code can then fail to bind on that number with a code: see [Texts that do not reach your line](#texts-that-do-not-reach-your-line). A text with a mistyped code counts as a text without a code, and so does any text to a sandbox number that no invite has returned yet. Use a new `from` for each test, so that one test does not change the next. Use only fictional numbers and texts of your own, never those of a real person: the numbers from 555-0100 to 555-0199 of every US area code are fictional, for example `+14155550100` to `+14155550199`.
+
+### Sandbox errors
+
+| Operation | Status and `error.code` | Meaning | What to do |
+| --- | --- | --- | --- |
+| `POST /v1/sandbox/lines` | `400 validation_failed` | `count` is missing or is not a whole number from 1 to 5, or the body has another field. | Fix the request. |
+| `POST /v1/sandbox/lines` | `409 sandbox_line_limit_reached` | Your account would hold more than 5 sandbox numbers. The operation adds none. | Pass a smaller `count`, or use the sandbox numbers your account holds. An account that holds 5 or more cannot add any. |
+| `POST /v1/sandbox/lines` | `409 sandbox_numbers_exhausted` | The sandbox has fewer numbers left than `count`. The operation adds none. | Pass a smaller `count`. When a `count` of 1 is refused, write to [support@isnap.ai](mailto:support@isnap.ai). |
+| `POST /v1/sandbox/inbound` | `400 validation_failed` | A field is missing, `phone_number` or `from` is not in E.164, `body` is empty or longer than 10,000 characters, or the body has another field. | Fix the request. |
+| `POST /v1/sandbox/inbound` | `404 sandbox_line_not_found` | `phone_number` is not a sandbox number of your account. | Use the `phone_number` of one of your invites. |
+| `POST /v1/lines/shared`, invite | `403 inbound_pool_not_enabled` | Inbound-first lines are not enabled on your account in the sandbox. | Call `POST /v1/sandbox/lines`: a call that succeeds enables them. When your account already holds 5 or more sandbox numbers, write to [support@isnap.ai](mailto:support@isnap.ai). |
+| Every operation that takes an API key | `401 unauthorized` | The key does not exist in the sandbox, for example a production key. | Use the API key of your sandbox account. |
+| Both sandbox operations | `403 forbidden` | The request carries no API key, or the key is line-scoped. | Send an API key of your sandbox account with no list of lines. |
+| Both sandbox operations | `404 not_found` | The request carries an API key and reached production, where these operations do not exist, or its method or path is wrong. | Check the base URL, the method and the path. |
+
+The errors that every operation shares, such as `429 rate_limit_exceeded`, are in [Errors and rate limits](/errors-and-rate-limits).
+
+### Test in production
+
+The sandbox does not test:
+
+- What happens on a phone: whether your `sms:` link opens with the code in the text, and whether your reply reaches the phone.
+- A text that arrives by SMS or from an email address: `from` takes a phone number only, and every text that `POST /v1/sandbox/inbound` sends is an iMessage.
+- A text with files: `POST /v1/sandbox/inbound` sends text only.
+- A read receipt or a reaction from the contact: the sandbox sends no `message.read` for a reply, and no `reaction.received` or `reaction.removed` from the contact.
+- A reply that the number refuses or reports failed: a sandbox number never does.
+- `binding.released` with `reason: owner_contact`: no sandbox number writes to a contact outside your inbound-first lines.
+- Idle and ended bindings: no operation makes a binding idle or ends it for inactivity, and bindings age in real time.
+
+Before you go live, test in production, with your production key and a subscription of your production account. Create an inbound-first line for the test, open your page on phones of your own, one of each kind your visitors use, send the text, and reply. End the line with [`POST /v1/lines/{id}/terminate`](/api-reference/lines/terminate-line) when you are done.
 
 ## Personal data
 
